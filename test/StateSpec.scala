@@ -8,6 +8,9 @@ class StateSpec extends munit.FunSuite:
   val b1 = book(1000, Seq("100" -> "1", "99" -> "2"), Seq("101" -> "3", "102" -> "4"))
   val s0 = Snapshot.initial("XMR", "5m", t0)
 
+  test("the initial snapshot seeds the feed six seconds stale so the screen starts honest") {
+    assertEquals(State.lastMsgAt(Snapshot.initial("X", "5m", t0).feed), t0 - 6000)
+  }
   test("a socket book marks the socket live and replaces the book") {
     val s = State.reduce(s0, Event.BookUpdate(b1, fromSocket = true), t0 + 10)
     assertEquals(s.book, Some(b1))
@@ -72,6 +75,14 @@ class StateSpec extends munit.FunSuite:
     assertEquals(s2.book, Some(b1))
     val s3 = State.reduce(s0, Event.BboUpdate(lv("50", "1"), lv("60", "1"), 500), t0 + 1)
     assertEquals(s3.book, Some(Book(Vector(lv("50", "1")), Vector(lv("60", "1")), 500)))
+  }
+  test("a bbo update on a book with an empty side does not throw") {
+    val thin = book(1000, Seq.empty, Seq("101" -> "3", "102" -> "4"))
+    val s1 = State.reduce(s0, Event.BookUpdate(thin, fromSocket = true), t0)
+    val s2 = State.reduce(s1, Event.BboUpdate(lv("100.5", "7"), lv("101.5", "8"), 2000), t0 + 1)
+    val b = s2.book.get
+    assertEquals(b.bids, Vector(lv("100.5", "7")))
+    assertEquals(b.asks, Vector(lv("101.5", "8"), lv("102", "4")))
   }
   test("trades go to the front newest first and the tape is capped at 200") {
     val batch = Vector(Trade(1, Side.Buy, "1", "1"), Trade(2, Side.Sell, "1", "1"))
@@ -170,4 +181,21 @@ class StateSpec extends munit.FunSuite:
     assertEquals(empty.coin, "XMR")
     assertEquals(empty.prompt, None)
     assertEquals(empty.book, full.book)
+  }
+  test("submitting the current coin only closes the prompt, changing nothing else") {
+    val withBook = State.reduce(s0, Event.BookUpdate(b1, fromSocket = true), t0)
+    val withTape = State.reduce(withBook, Event.Trades(Vector(Trade(1, Side.Buy, "1", "1"))), t0)
+    val full = State.reduce(withTape, Event.CtxUpdate(Ctx("1", "1", "0", "0", "0", "1", None)), t0)
+    val opened = State.reduce(full, Event.Key(Command.StartMarketPrompt), t0)
+    val typed =
+      "XMR".foldLeft(opened)((s, c) => State.reduce(s, Event.Key(Command.PromptChar(c)), t0))
+    assertEquals(typed.prompt, Some("XMR"))
+    val s = State.reduce(typed, Event.Key(Command.PromptSubmit), t0)
+    assertEquals(s.coin, "XMR")
+    assertEquals(s.prompt, None)
+    assertEquals(s.book, full.book)
+    assertEquals(s.tape, full.tape)
+    assertEquals(s.candles, full.candles)
+    assertEquals(s.ctx, full.ctx)
+    assertEquals(s.sizes, full.sizes)
   }

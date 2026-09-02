@@ -66,7 +66,7 @@ object Screen:
     if i < 0 then 0 else px.length - i - 1
 
   def rule(b: Book, now: Long): String =
-    val age = (now - b.time) / 1000.0
+    val age = (now - b.time).max(0L) / 1000.0
     val text = (b.asks.headOption, b.bids.headOption) match
       case (Some(a), Some(d)) =>
         val decs = decimals(a.px).max(decimals(d.px))
@@ -130,6 +130,13 @@ object Screen:
       if n == 0 then s"TAPE $emptyTrack n=0" else f"TAPE ${track(f)} F$f%+.2f 60s n=$n"
     Vector(bookLine.padTo(ladderW, ' ').take(ladderW), tapeLine.padTo(ladderW, ' ').take(ladderW))
 
+  private def digitsBeforePoint(x: Double): Int =
+    x.abs.toLong.toString.length
+
+  private def scaleLabel(x: Double, decimals: Int): String =
+    val formatted = s"%.${decimals}f".format(x)
+    formatted.reverse.padTo(scaleW, ' ').reverse.take(scaleW)
+
   def chart(s: Snapshot, width: Int): Vector[String] =
     val plotW = width - scaleW
     val cs = s.candles.takeRight(plotW)
@@ -138,7 +145,8 @@ object Screen:
       val hi = cs.map(_.h).max
       val lo = cs.map(_.l).min
       def rowOf(p: Double): Int =
-        if hi == lo then chartRows / 2 else round((hi - p) / (hi - lo) * (chartRows - 1)).toInt
+        if hi == lo then chartRows / 2
+        else round((hi - p) / (hi - lo) * (chartRows - 1)).toInt.max(0).min(chartRows - 1)
       val grid = Array.fill(chartRows, plotW)(' ')
       val start = plotW - cs.size
       cs.zipWithIndex.foreach { (c, i) =>
@@ -147,10 +155,11 @@ object Screen:
         val (top, bottom) = (rowOf(c.o).min(rowOf(c.c)), rowOf(c.o).max(rowOf(c.c)))
         (top to bottom).foreach(r => grid(r)(col) = '#')
       }
+      val chartDecimals = (5 - digitsBeforePoint(hi)).max(0).min(6)
       val scale = Map(
-        0 -> f"$hi%8.2f",
-        chartRows / 2 -> f"${(hi + lo) / 2}%8.2f",
-        chartRows - 1 -> f"$lo%8.2f"
+        0 -> scaleLabel(hi, chartDecimals),
+        chartRows / 2 -> scaleLabel((hi + lo) / 2, chartDecimals),
+        chartRows - 1 -> scaleLabel(lo, chartDecimals)
       )
       (0 until chartRows).toVector.map { r =>
         val line = new String(grid(r))
@@ -178,7 +187,10 @@ object Screen:
     lines ++ Vector.fill((rows - lines.size).max(0))(" " * width)
 
   def short(x: Double): String =
-    if x >= 1e6 then f"${x / 1e6}%.1fM" else if x >= 1e3 then f"${x / 1e3}%.1fk" else f"$x%.1f"
+    if x >= 1e9 then f"${x / 1e9}%.1fB"
+    else if x >= 1e6 then f"${x / 1e6}%.1fM"
+    else if x >= 1e3 then f"${x / 1e3}%.1fk"
+    else f"$x%.1f"
 
   private def midOf(b: Book): Option[String] =
     for
@@ -193,7 +205,7 @@ object Screen:
       case Some(p) => s"market: ${p}_"
       case None    =>
         val mid = s.ctx.flatMap(_.mid).orElse(s.book.flatMap(midOf))
-        val age = now - State.lastMsgAt(s.feed)
+        val age = (now - State.lastMsgAt(s.feed)).max(0L)
         val fresh = if age > 5000 then s"STALE ${age / 1000}s" else f"live ${age / 1000.0}%.1fs"
         val badPart = if s.bad > 0 then s"  bad ${s.bad}" else ""
         s.ctx match

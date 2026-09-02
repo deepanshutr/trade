@@ -62,7 +62,7 @@ object Snapshot:
       Vector.empty,
       Vector.empty,
       None,
-      Health.Down(now, now),
+      Health.Down(now, now - 6000),
       0,
       Vector.empty,
       None,
@@ -89,8 +89,8 @@ object State:
       s.book match
         case Some(b) if b.time >= time => fresh
         case Some(b)                   =>
-          val bids = bid +: b.bids.tail.filterNot(_.px.toDouble >= bid.px.toDouble)
-          val asks = ask +: b.asks.tail.filterNot(_.px.toDouble <= ask.px.toDouble)
+          val bids = bid +: b.bids.drop(1).filterNot(_.px.toDouble >= bid.px.toDouble)
+          val asks = ask +: b.asks.drop(1).filterNot(_.px.toDouble <= ask.px.toDouble)
           fresh.copy(book = Some(Book(bids, asks, time)))
         case None => fresh.copy(book = Some(Book(Vector(bid), Vector(ask), time)))
     case Event.Trades(ts) =>
@@ -128,7 +128,7 @@ object State:
     case Command.PromptCancel      => s.copy(prompt = None)
     case Command.PromptSubmit      =>
       s.prompt match
-        case Some(name) if name.nonEmpty =>
+        case Some(name) if name.nonEmpty && name != s.coin =>
           s.copy(
             coin = name,
             book = None,

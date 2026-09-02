@@ -91,6 +91,11 @@ class ScreenSpec extends munit.FunSuite:
     assertEquals(empty.length, 46)
     assert(empty.contains("spread n/a"))
   }
+  test("the book age on the rule never goes negative, even if the book time is ahead of now") {
+    val b = Book(Vector(lv("518.36", "1")), Vector(lv("518.40", "1")), t0 + 400)
+    val r = Screen.rule(b, t0)
+    assert(r.contains("book 0.0s"), r)
+  }
   test("ladder rows are 46 wide, asks above the rule highest first, bids below best first") {
     val b = Book(Vector(lv("100", "1"), lv("99", "2")), Vector(lv("101", "3"), lv("102", "4")), t0)
     val s = Snapshot.initial("X", "5m", t0).copy(book = Some(b))
@@ -170,9 +175,10 @@ class ScreenSpec extends munit.FunSuite:
     assertEquals(col1(12), '#')
     assertEquals(col1(0), ' ')
     assert(lines(4).contains(Screen.bold + "#" + Screen.reset), "newest column bold")
-    assert(plain(lines(0)).endsWith("   20.00"))
-    assert(plain(lines(8)).endsWith("   10.00"))
-    assert(plain(lines(16)).endsWith("    0.00"))
+    // hi 20 has two integer digits, so decimals = (5 - 2).max(0).min(6) = 3
+    assert(plain(lines(0)).endsWith("  20.000"))
+    assert(plain(lines(8)).endsWith("  10.000"))
+    assert(plain(lines(16)).endsWith("   0.000"))
   }
   test("a flat range draws every candle on the middle row and no candles says so") {
     val s = Snapshot.initial("X", "5m", t0).copy(candles = Vector(Candle(1, 5, 5, 5, 5, 1)))
@@ -180,6 +186,27 @@ class ScreenSpec extends munit.FunSuite:
     assertEquals(plain(lines(8)).charAt(45), '#')
     assert((0 until 17).filter(_ != 8).forall(r => plain(lines(r)).charAt(45) == ' '))
     assert(Screen.chart(Snapshot.initial("X", "5m", t0), 54).head.startsWith("no candles"))
+  }
+  test("the chart scale shortens decimals as the price magnitude grows, down to whole numbers") {
+    def c(o: Double, h: Double, l: Double, cl: Double, t: Long) = Candle(t, o, h, l, cl, 1)
+    val small = Snapshot
+      .initial("X", "5m", t0)
+      .copy(candles = Vector(c(0.0065, 0.0070, 0.0060, 0.0065, 1)))
+    val smallLines = Screen.chart(small, 54)
+    assert(plain(smallLines(0)).endsWith("  0.0070"), plain(smallLines(0)))
+    assert(plain(smallLines(16)).endsWith("  0.0060"), plain(smallLines(16)))
+    val big = Snapshot
+      .initial("X", "5m", t0)
+      .copy(candles = Vector(c(123_456.5, 123_457.0, 123_456.0, 123_456.5, 1)))
+    val bigLines = Screen.chart(big, 54)
+    assert(plain(bigLines(0)).endsWith("  123457"), plain(bigLines(0)))
+    assert(plain(bigLines(16)).endsWith("  123456"), plain(bigLines(16)))
+    assert(bigLines.forall(l => plain(l).length == 54), bigLines.map(plain).map(_.length))
+  }
+  test("a candle whose open or close lies outside its own high and low does not throw") {
+    val s = Snapshot.initial("X", "5m", t0).copy(candles = Vector(Candle(1, 30, 20, 0, 10, 1)))
+    val lines = Screen.chart(s, 54)
+    assert(lines.forall(l => plain(l).length == 54), lines.map(plain).map(_.length))
   }
   test("the tape lists newest first with the zone's time, bolds the unusual size, pads to width") {
     val tape = Vector(
@@ -219,6 +246,11 @@ class ScreenSpec extends munit.FunSuite:
     val line = Screen.stats(s, t0, 100)
     assert(line.contains("STALE"), line)
   }
+  test("the socket age never goes negative, even if the last message is ahead of now") {
+    val s = Snapshot.initial("X", "5m", t0).copy(feed = Health.Live(t0 + 400))
+    val line = Screen.stats(s, t0, 100)
+    assert(line.contains("live 0.0s"), line)
+  }
   test("a stats line never exceeds the terminal width") {
     val ctx =
       Ctx("522.28", "521.515", "0.0001302411", "210160.16", "31202156.16", "529.78", Some("522.26"))
@@ -229,10 +261,11 @@ class ScreenSpec extends munit.FunSuite:
     assertEquals(line.length, 100)
     assert(line.contains("STALE 12s"), line)
   }
-  test("short numbers use k and M with one decimal") {
+  test("short numbers use k, M and B with one decimal") {
     assertEquals(Screen.short(31_022_816.0), "31.0M")
     assertEquals(Screen.short(208_410.0), "208.4k")
     assertEquals(Screen.short(12.34), "12.3")
+    assertEquals(Screen.short(3_314_300_000.0), "3.3B")
   }
   test("render refuses a small terminal with one line") {
     val frame = Screen.render(Golden.snapshot, 80, 24, Golden.now, utc)

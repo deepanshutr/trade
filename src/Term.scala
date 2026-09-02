@@ -30,7 +30,7 @@ object Term:
     Try(stty("size")).toOption.flatMap(parseSize).getOrElse((0, 0))
 
   def frame(lines: Vector[String]): String =
-    esc + "[H" + lines.map(_ + esc + "[K").mkString("\r\n")
+    esc + "[H" + lines.map(_ + esc + "[K").mkString("\r\n") + esc + "[J"
 
   def write(lines: Vector[String]): Unit =
     print(frame(lines))

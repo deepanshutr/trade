@@ -91,7 +91,7 @@ object Main:
       var byte = System.in.read()
       while byte >= 0 do
         keyToCommand(byte, promptOpen).foreach { c =>
-          queue.add(Event.Key(c))
+          val _ = queue.add(Event.Key(c))
           promptOpen = nextPromptOpen(promptOpen, c)
         }
         byte = System.in.read()
