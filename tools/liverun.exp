@@ -1,0 +1,59 @@
+#!/usr/bin/expect -f
+
+if {$argc < 1} {
+    puts stderr "usage: liverun.exp <logfile>"
+    exit 2
+}
+set logfile [lindex $argv 0]
+log_file -noappend $logfile
+
+set esc \x1b
+set desk "$env(HOME)/.local/bin/desk"
+
+spawn $desk XMR
+exec stty rows 30 columns 100 < $spawn_out(slave,name)
+
+proc wait_for {pattern seconds label} {
+    global spawn_id timeout
+    set timeout $seconds
+    expect {
+        -ex $pattern { }
+        timeout {
+            puts stderr "BLOCKED: timed out after ${seconds}s waiting for: $label"
+            exit 2
+        }
+        eof {
+            puts stderr "BLOCKED: child exited early while waiting for: $label"
+            exit 2
+        }
+    }
+}
+
+set start [clock seconds]
+wait_for "book " 20 "book "
+set spent [expr {[clock seconds] - $start}]
+set remain [expr {20 - $spent}]
+if {$remain < 1} { set remain 1 }
+wait_for "live " $remain "live (after book)"
+
+send "i"
+wait_for " 15m " 10 " 15m "
+
+send "m"
+wait_for "market: " 5 "the market prompt to open before typing into it"
+send "BTC"
+send "\r"
+wait_for "${esc}\[HBTC " 15 "line starting with BTC "
+
+send "q"
+set timeout 10
+expect {
+    eof { }
+    timeout {
+        puts stderr "BLOCKED: timed out waiting for the process to exit after q"
+        exit 2
+    }
+}
+catch wait result
+set status [lindex $result 3]
+exit $status
