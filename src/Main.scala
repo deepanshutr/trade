@@ -39,6 +39,11 @@ object Main:
         case 109     => Some(Command.StartMarketPrompt)
         case _       => None
 
+  def nextPromptOpen(promptOpen: Boolean, command: Command): Boolean = command match
+    case Command.StartMarketPrompt                   => true
+    case Command.PromptSubmit | Command.PromptCancel => false
+    case _                                           => promptOpen
+
   def main(argv: Array[String]): Unit =
     parseArgs(argv.toSeq) match
       case Left(message) =>
@@ -82,9 +87,13 @@ object Main:
         Thread.sleep(500)
     }
     daemon("keys") {
+      var promptOpen = false
       var byte = System.in.read()
       while byte >= 0 do
-        keyToCommand(byte, state.get().prompt.isDefined).foreach(c => queue.add(Event.Key(c)))
+        keyToCommand(byte, promptOpen).foreach { c =>
+          queue.add(Event.Key(c))
+          promptOpen = nextPromptOpen(promptOpen, c)
+        }
         byte = System.in.read()
     }
     daemon("fold") {

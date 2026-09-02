@@ -33,3 +33,12 @@ class MainSpec extends munit.FunSuite:
     assertEquals(Main.keyToCommand(58, true), Some(Command.PromptChar(':')))
     assertEquals(Main.keyToCommand(200, true), None)
   }
+  test("the key thread's prompt mode follows the commands it emits") {
+    assertEquals(Main.nextPromptOpen(false, Command.StartMarketPrompt), true)
+    assertEquals(Main.nextPromptOpen(true, Command.PromptSubmit), false)
+    assertEquals(Main.nextPromptOpen(true, Command.PromptCancel), false)
+    assertEquals(Main.nextPromptOpen(true, Command.PromptChar('x')), true)
+    assertEquals(Main.nextPromptOpen(true, Command.PromptBackspace), true)
+    assertEquals(Main.nextPromptOpen(false, Command.Quit), false)
+    assertEquals(Main.nextPromptOpen(false, Command.NextInterval), false)
+  }

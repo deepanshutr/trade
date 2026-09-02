@@ -40,7 +40,6 @@ send "i"
 wait_for " 15m " 10 " 15m "
 
 send "m"
-wait_for "market: " 5 "the market prompt to open before typing into it"
 send "BTC"
 send "\r"
 wait_for "${esc}\[HBTC " 15 "line starting with BTC "
