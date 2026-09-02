@@ -27,6 +27,12 @@ class StateSpec extends munit.FunSuite:
     val s3 = State.reduce(s2, Event.BookUpdate(newer, fromSocket = false), t0 + 2)
     assertEquals(s3.book, Some(newer))
   }
+  test("a book at the same time as the current book is ignored, not just an older one") {
+    val s1 = State.reduce(s0, Event.BookUpdate(b1, fromSocket = true), t0)
+    val sameTime = b1.copy(bids = Vector(lv("999", "999")))
+    val s2 = State.reduce(s1, Event.BookUpdate(sameTime, fromSocket = false), t0 + 1)
+    assertEquals(s2.book, Some(b1))
+  }
   test("a book adds its sizes to the window, one sample per second, pruned at 60 seconds") {
     val s1 = State.reduce(s0, Event.BookUpdate(b1, fromSocket = true), t0)
     assertEquals(s1.sizes, Vector((t0, Vector(1.0, 2.0, 3.0, 4.0))))
@@ -46,6 +52,13 @@ class StateSpec extends munit.FunSuite:
     assertEquals(b.asks.map(_.px), Vector("101.5", "102"))
     assertEquals(b.time, 2000L)
     assertEquals(s2.feed, Health.Live(t0 + 1))
+  }
+  test("a bbo update drops old book levels crossed by the new best price") {
+    val s1 = State.reduce(s0, Event.BookUpdate(b1, fromSocket = true), t0)
+    val s2 = State.reduce(s1, Event.BboUpdate(lv("98", "5"), lv("103", "6"), 2000), t0 + 1)
+    val b = s2.book.get
+    assertEquals(b.bids.map(_.px), Vector("98"))
+    assertEquals(b.asks.map(_.px), Vector("103"))
   }
   test("a bbo at the same best prices replaces the sizes only") {
     val s1 = State.reduce(s0, Event.BookUpdate(b1, fromSocket = true), t0)

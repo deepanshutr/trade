@@ -214,6 +214,11 @@ class ScreenSpec extends munit.FunSuite:
     val bare = Snapshot.initial("XMR", "5m", t0).copy(feed = Health.Live(t0))
     assert(Screen.stats(bare, t0, 100).startsWith("XMR  -  5m  live 0.0s"))
   }
+  test("the feed is stale past five seconds, not six") {
+    val s = Snapshot.initial("XMR", "5m", t0).copy(feed = Health.Live(t0 - 5500))
+    val line = Screen.stats(s, t0, 100)
+    assert(line.contains("STALE"), line)
+  }
   test("a stats line never exceeds the terminal width") {
     val ctx =
       Ctx("522.28", "521.515", "0.0001302411", "210160.16", "31202156.16", "529.78", Some("522.26"))
