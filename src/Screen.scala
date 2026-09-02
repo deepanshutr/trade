@@ -98,7 +98,10 @@ object Screen:
           val clamped = len > barW
           val bar = "#" * len.min(barW).toInt
           val marker = if clamped then ">" else " "
-          (f"${l.px}%8s ${l.sz}%7s $cum%7.3f $bar%-20s" + marker, clamped)
+          val px = l.px.take(8)
+          val sz = l.sz.take(7)
+          val cumText = f"$cum%7.3f".take(7)
+          (f"$px%8s $sz%7s $cumText $bar%-20s" + marker, clamped)
         val askRows = asks.zip(cumulative(asks)).map(row).reverse
         val bidRows = bids.zip(cumulative(bids)).map(row)
         val askLines = Vector.fill(side - askRows.size)((blank, false)) ++ askRows
@@ -126,3 +129,86 @@ object Screen:
     val tapeLine =
       if n == 0 then s"TAPE $emptyTrack n=0" else f"TAPE ${track(f)} F$f%+.2f 60s n=$n"
     Vector(bookLine.padTo(ladderW, ' ').take(ladderW), tapeLine.padTo(ladderW, ' ').take(ladderW))
+
+  def chart(s: Snapshot, width: Int): Vector[String] =
+    val plotW = width - scaleW
+    val cs = s.candles.takeRight(plotW)
+    if cs.isEmpty then "no candles".padTo(width, ' ') +: Vector.fill(chartRows - 1)(" " * width)
+    else
+      val hi = cs.map(_.h).max
+      val lo = cs.map(_.l).min
+      def rowOf(p: Double): Int =
+        if hi == lo then chartRows / 2 else round((hi - p) / (hi - lo) * (chartRows - 1)).toInt
+      val grid = Array.fill(chartRows, plotW)(' ')
+      val start = plotW - cs.size
+      cs.zipWithIndex.foreach { (c, i) =>
+        val col = start + i
+        (rowOf(c.h) to rowOf(c.l)).foreach(r => grid(r)(col) = '|')
+        val (top, bottom) = (rowOf(c.o).min(rowOf(c.c)), rowOf(c.o).max(rowOf(c.c)))
+        (top to bottom).foreach(r => grid(r)(col) = '#')
+      }
+      val scale = Map(
+        0 -> f"$hi%8.2f",
+        chartRows / 2 -> f"${(hi + lo) / 2}%8.2f",
+        chartRows - 1 -> f"$lo%8.2f"
+      )
+      (0 until chartRows).toVector.map { r =>
+        val line = new String(grid(r))
+        val newest = line.charAt(plotW - 1)
+        val styledNewest = if newest == ' ' then " " else bold + newest + reset
+        line.substring(0, plotW - 1) + styledNewest + scale.getOrElse(r, " " * scaleW)
+      }
+
+  private def hms(ms: Long, zone: java.time.ZoneId): String =
+    java.time.Instant
+      .ofEpochMilli(ms)
+      .atZone(zone)
+      .toLocalTime
+      .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"))
+
+  def tape(s: Snapshot, rows: Int, width: Int, zone: java.time.ZoneId): Vector[String] =
+    val sizes = s.tape.map(_.sz.toDouble).sorted
+    val big =
+      if sizes.size < 2 then Double.MaxValue else sizes(floor(0.95 * (sizes.size - 1)).toInt)
+    val lines = s.tape.take(rows).map { t =>
+      val side = if t.side == Side.Buy then "buy" else "sell"
+      val text = f" ${hms(t.time, zone)}  $side%-4s  ${t.px}%7s  ${t.sz}%6s".padTo(width, ' ')
+      if t.sz.toDouble > big then bold + text.take(width) + reset else text.take(width)
+    }
+    lines ++ Vector.fill((rows - lines.size).max(0))(" " * width)
+
+  def short(x: Double): String =
+    if x >= 1e6 then f"${x / 1e6}%.1fM" else if x >= 1e3 then f"${x / 1e3}%.1fk" else f"$x%.1f"
+
+  private def midOf(b: Book): Option[String] =
+    for
+      a <- b.asks.headOption
+      d <- b.bids.headOption
+    yield ((BigDecimal(a.px) + BigDecimal(d.px)) / 2).bigDecimal
+      .stripTrailingZeros()
+      .toPlainString()
+
+  def stats(s: Snapshot, now: Long, cols: Int): String =
+    val text = s.prompt match
+      case Some(p) => s"market: ${p}_"
+      case None    =>
+        val mid = s.ctx.flatMap(_.mid).orElse(s.book.flatMap(midOf))
+        val age = now - State.lastMsgAt(s.feed)
+        val fresh = if age > 5000 then s"STALE ${age / 1000}s" else f"live ${age / 1000.0}%.1fs"
+        val badPart = if s.bad > 0 then s"  bad ${s.bad}" else ""
+        s.ctx match
+          case Some(c) =>
+            val pct = mid.map(m => (m.toDouble / c.prevDayPx.toDouble - 1) * 100).getOrElse(0.0)
+            f"${s.coin}  ${mid.getOrElse("-")}  mark ${c.mark}  orc ${c.oracle}  24h $pct%+.1f%%  " +
+              f"fund ${c.funding.toDouble * 100}%.4f%%  OI ${short(c.openInterest.toDouble)}  " +
+              f"vol ${short(c.dayVolume.toDouble)}  ${s.interval}  $fresh$badPart"
+          case None => s"${s.coin}  ${mid.getOrElse("-")}  ${s.interval}  $fresh$badPart"
+    text.padTo(cols, ' ')
+
+  def render(s: Snapshot, cols: Int, rows: Int, now: Long, zone: java.time.ZoneId): Vector[String] =
+    if cols < minCols || rows < minRows then Vector(s"need ${minCols}x$minRows, have ${cols}x$rows")
+    else
+      val right = cols - ladderW
+      val left = ladder(s, rows - 3, now) ++ gauges(s, now)
+      val rightLines = chart(s, right) ++ tape(s, rows - 1 - chartRows, right, zone)
+      stats(s, now, cols) +: left.zip(rightLines).map((l, r) => l + r)

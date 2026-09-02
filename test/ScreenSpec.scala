@@ -141,3 +141,98 @@ class ScreenSpec extends munit.FunSuite:
     assert(none(0).startsWith("BOOK ..........|.........."), none(0))
     assert(none(1).startsWith("TAPE ..........|.......... n=0"), none(1))
   }
+
+  val utc = java.time.ZoneId.of("UTC")
+
+  test("wide sizes never push a ladder row past 46 columns") {
+    val b = Book(
+      Vector(lv("76984.0", "123456.789")),
+      Vector(lv("76984.0", "16.10381")),
+      t0
+    )
+    val s = Snapshot.initial("X", "5m", t0).copy(book = Some(b))
+    val rows = Screen.ladder(s, 27, t0)
+    assert(rows.forall(r => plain(r).length == 46), rows.map(plain).map(_.length))
+  }
+  test("the chart maps prices to rows, draws bodies over wicks, and bolds the newest column") {
+    def c(o: Double, h: Double, l: Double, cl: Double, t: Long) = Candle(t, o, h, l, cl, 1)
+    val candles = Vector(c(10, 20, 0, 10, 1), c(5, 15, 5, 15, 2))
+    val s = Snapshot.initial("X", "5m", t0).copy(candles = candles)
+    val lines = Screen.chart(s, 54)
+    assertEquals(lines.size, 17)
+    assert(lines.forall(l => plain(l).length == 54), lines.map(plain).map(_.length))
+    val col0 = lines.map(l => plain(l).charAt(44))
+    val col1 = lines.map(l => plain(l).charAt(45))
+    assertEquals(col0(0), '|')
+    assertEquals(col0(8), '#')
+    assertEquals(col0(16), '|')
+    assertEquals(col1(4), '#')
+    assertEquals(col1(12), '#')
+    assertEquals(col1(0), ' ')
+    assert(lines(4).contains(Screen.bold + "#" + Screen.reset), "newest column bold")
+    assert(plain(lines(0)).endsWith("   20.00"))
+    assert(plain(lines(8)).endsWith("   10.00"))
+    assert(plain(lines(16)).endsWith("    0.00"))
+  }
+  test("a flat range draws every candle on the middle row and no candles says so") {
+    val s = Snapshot.initial("X", "5m", t0).copy(candles = Vector(Candle(1, 5, 5, 5, 5, 1)))
+    val lines = Screen.chart(s, 54)
+    assertEquals(plain(lines(8)).charAt(45), '#')
+    assert((0 until 17).filter(_ != 8).forall(r => plain(lines(r)).charAt(45) == ' '))
+    assert(Screen.chart(Snapshot.initial("X", "5m", t0), 54).head.startsWith("no candles"))
+  }
+  test("the tape lists newest first with the zone's time, bolds the unusual size, pads to width") {
+    val tape = Vector(
+      Trade(t0, Side.Buy, "518.40", "1.650"),
+      Trade(t0 - 1000, Side.Sell, "518.36", "0.400"),
+      Trade(t0 - 2000, Side.Buy, "518.40", "0.300")
+    )
+    val s = Snapshot.initial("X", "5m", t0).copy(tape = tape)
+    val lines = Screen.tape(s, 5, 54, utc)
+    assertEquals(lines.size, 5)
+    assert(lines.forall(l => plain(l).length == 54))
+    assertEquals(plain(lines(0)), " 22:13:20  buy    518.40   1.650".padTo(54, ' '))
+    assert(lines(0).startsWith(Screen.bold), "largest trade bold")
+    assert(!lines(1).startsWith(Screen.bold))
+    assert(plain(lines(3)).trim.isEmpty)
+  }
+  test("the stats line shows the figures, the age, stale, bad and the prompt") {
+    val ctx =
+      Ctx("522.28", "521.515", "0.0001302411", "210160.16", "31202156.16", "529.78", Some("522.26"))
+    val s = Snapshot.initial("XMR", "5m", t0).copy(ctx = Some(ctx), feed = Health.Live(t0 - 300))
+    val line = Screen.stats(s, t0, 100)
+    assertEquals(line.length, 100)
+    val expected = "XMR  522.26  mark 522.28  orc 521.515  24h -1.4%  fund 0.0130%  " +
+      "OI 210.2k  vol 31.2M  5m  live 0.3s"
+    assert(line.startsWith(expected), line)
+    val down = s.copy(feed = Health.Down(t0 - 12_000, t0 - 12_300), bad = 3)
+    assert(Screen.stats(down, t0, 100).contains("STALE 12s  bad 3"))
+    assert(Screen.stats(s.copy(prompt = Some("BT")), t0, 100).startsWith("market: BT_"))
+    val bare = Snapshot.initial("XMR", "5m", t0).copy(feed = Health.Live(t0))
+    assert(Screen.stats(bare, t0, 100).startsWith("XMR  -  5m  live 0.0s"))
+  }
+  test("short numbers use k and M with one decimal") {
+    assertEquals(Screen.short(31_022_816.0), "31.0M")
+    assertEquals(Screen.short(208_410.0), "208.4k")
+    assertEquals(Screen.short(12.34), "12.3")
+  }
+  test("render refuses a small terminal with one line") {
+    val frame = Screen.render(Golden.snapshot, 80, 24, Golden.now, utc)
+    assertEquals(frame, Vector("need 100x30, have 80x24"))
+  }
+  test("write the golden frames when asked") {
+    assume(sys.env.contains("WRITE_GOLDEN"), "set WRITE_GOLDEN=1 to regenerate the frames")
+    java.nio.file.Files.createDirectories(java.nio.file.Paths.get("golden"))
+    for (cols, rows) <- Seq((100, 30), (120, 40)) do
+      val frame = Screen.render(Golden.snapshot, cols, rows, Golden.now, utc)
+      val path = java.nio.file.Paths.get("golden", s"frame_${cols}x$rows.txt")
+      java.nio.file.Files.writeString(path, frame.mkString("\n") + "\n")
+  }
+  test("render matches the golden frames at 100 by 30 and 120 by 40") {
+    for (cols, rows) <- Seq((100, 30), (120, 40)) do
+      val frame = Screen.render(Golden.snapshot, cols, rows, Golden.now, utc)
+      assertEquals(frame.size, rows)
+      assert(frame.forall(l => plain(l).length == cols), frame.map(plain).map(_.length))
+      val path = java.nio.file.Paths.get("golden", s"frame_${cols}x$rows.txt")
+      assertEquals(frame.mkString("\n") + "\n", java.nio.file.Files.readString(path))
+  }
