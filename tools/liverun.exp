@@ -1,11 +1,14 @@
 #!/usr/bin/expect -f
 
 if {$argc < 1} {
-    puts stderr "usage: liverun.exp <logfile>"
+    puts stderr "usage: liverun.exp <logfile> \[soak-seconds\]"
     exit 2
 }
 set logfile [lindex $argv 0]
+set soak 0
+if {$argc >= 2} { set soak [lindex $argv 1] }
 log_file -noappend $logfile
+match_max 1000000
 
 set esc \x1b
 set desk "$env(HOME)/.local/bin/desk"
@@ -43,6 +46,50 @@ send "m"
 send "BTC"
 send "\r"
 wait_for "${esc}\[HBTC " 15 "line starting with BTC "
+
+if {$soak > 0} {
+    set deadline [expr {[clock seconds] + $soak}]
+    while {[clock seconds] < $deadline} {
+        set remain [expr {$deadline - [clock seconds]}]
+        if {$remain < 1} { set remain 1 }
+        set timeout $remain
+        expect {
+            -ex "STALE" {
+                puts stderr "BLOCKED: STALE appeared during the soak window"
+                exit 3
+            }
+            timeout { }
+            eof {
+                puts stderr "BLOCKED: child exited early during the soak window"
+                exit 2
+            }
+        }
+    }
+    log_file
+    log_file -a $logfile
+    set fh [open $logfile r]
+    set full [read $fh]
+    close $fh
+    set hmark "${esc}\[H"
+    set kmark "${esc}\[K"
+    set lastH [string last $hmark $full]
+    if {$lastH < 0} {
+        puts stderr "BLOCKED: no frame found in the log after the soak window"
+        exit 3
+    }
+    set afterH [expr {$lastH + [string length $hmark]}]
+    set kIdx [string first $kmark $full $afterH]
+    if {$kIdx < 0} {
+        puts stderr "BLOCKED: could not find the end of the last stats line"
+        exit 3
+    }
+    set lastStats [string range $full $afterH [expr {$kIdx - 1}]]
+    if {[string first "bad" $lastStats] >= 0} {
+        puts stderr "BLOCKED: last stats line after the soak contains bad: $lastStats"
+        exit 3
+    }
+    puts "last stats line after soak: $lastStats"
+}
 
 send "q"
 set timeout 10
