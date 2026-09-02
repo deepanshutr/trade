@@ -5,6 +5,9 @@ import java.nio.file.{Files, Paths}
 class EventsSpec extends munit.FunSuite:
   def fixture(name: String): String = Files.readString(Paths.get("fixtures", name))
 
+  test("a null input is bad, not an exception") {
+    assert(Events.parse(null).exists(_.isInstanceOf[Event.Bad]))
+  }
   test("l2Book parses to a socket book with 20 levels a side") {
     Events.parse(fixture("l2Book.json")) match
       case Some(Event.BookUpdate(b, true)) =>

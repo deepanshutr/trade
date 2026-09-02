@@ -4,7 +4,7 @@ import scala.util.Try
 
 object Events:
   def parse(text: String): Option[Event] =
-    Try(parseUnsafe(text)).getOrElse(Some(Event.Bad(text.take(80))))
+    Try(parseUnsafe(text)).getOrElse(Some(Event.Bad(Option(text).getOrElse("").take(80))))
 
   def parseRestBook(text: String): Option[Book] =
     Try(book(ujson.read(text))).toOption
