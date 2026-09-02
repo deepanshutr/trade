@@ -203,7 +203,8 @@ object Screen:
               f"fund ${c.funding.toDouble * 100}%.4f%%  OI ${short(c.openInterest.toDouble)}  " +
               f"vol ${short(c.dayVolume.toDouble)}  ${s.interval}  $fresh$badPart"
           case None => s"${s.coin}  ${mid.getOrElse("-")}  ${s.interval}  $fresh$badPart"
-    text.padTo(cols, ' ')
+    val fitted = if text.length > cols then text.replace("  ", " ") else text
+    fitted.padTo(cols, ' ').take(cols)
 
   def render(s: Snapshot, cols: Int, rows: Int, now: Long, zone: java.time.ZoneId): Vector[String] =
     if cols < minCols || rows < minRows then Vector(s"need ${minCols}x$minRows, have ${cols}x$rows")

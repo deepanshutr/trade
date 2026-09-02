@@ -206,10 +206,23 @@ class ScreenSpec extends munit.FunSuite:
       "OI 210.2k  vol 31.2M  5m  live 0.3s"
     assert(line.startsWith(expected), line)
     val down = s.copy(feed = Health.Down(t0 - 12_000, t0 - 12_300), bad = 3)
-    assert(Screen.stats(down, t0, 100).contains("STALE 12s  bad 3"))
+    val staleLine = Screen.stats(down, t0, 100)
+    assertEquals(staleLine.length, 100)
+    assert(staleLine.contains("STALE 12s"), staleLine)
+    assert(staleLine.contains("bad 3"), staleLine)
     assert(Screen.stats(s.copy(prompt = Some("BT")), t0, 100).startsWith("market: BT_"))
     val bare = Snapshot.initial("XMR", "5m", t0).copy(feed = Health.Live(t0))
     assert(Screen.stats(bare, t0, 100).startsWith("XMR  -  5m  live 0.0s"))
+  }
+  test("a stats line never exceeds the terminal width") {
+    val ctx =
+      Ctx("522.28", "521.515", "0.0001302411", "210160.16", "31202156.16", "529.78", Some("522.26"))
+    val s = Snapshot
+      .initial("flx:GOLD", "5m", t0)
+      .copy(ctx = Some(ctx), feed = Health.Down(t0 - 12_000, t0 - 12_300), bad = 3)
+    val line = Screen.stats(s, t0, 100)
+    assertEquals(line.length, 100)
+    assert(line.contains("STALE 12s"), line)
   }
   test("short numbers use k and M with one decimal") {
     assertEquals(Screen.short(31_022_816.0), "31.0M")
