@@ -118,8 +118,15 @@ class ScreenSpec extends munit.FunSuite:
     assert(!rows(7).startsWith(Screen.dim) && !rows(7).startsWith(Screen.bold), "middle ask plain")
   }
   test("an even ladder height leaves one blank row at the bottom") {
-    val rows = Screen.ladder(Snapshot.initial("X", "5m", t0), 28, t0)
+    val b = Book(Vector(lv("100", "1"), lv("99", "1")), Vector(lv("101", "1"), lv("102", "1")), t0)
+    val s = Snapshot.initial("X", "5m", t0).copy(book = Some(b))
+    val rows = Screen.ladder(s, 28, t0)
     assertEquals(rows.size, 28)
+    assert(rows(13).startsWith("--------"))
+    assert(plain(rows(12)).startsWith("     101"))
+    assert(plain(rows(14)).startsWith("     100"))
+    assert(plain(rows(27)).trim.isEmpty)
+    assert(plain(rows(26)).trim.isEmpty)
   }
   test("gauge lines are 46 wide and read the book and the tape") {
     val b = Book(Vector(lv("100", "3")), Vector(lv("101", "1")), t0)
