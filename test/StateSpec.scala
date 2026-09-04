@@ -215,6 +215,24 @@ class StateSpec extends munit.FunSuite:
     assertEquals(c.samples.map(_._1), Vector(t0 / 1000, later2 / 1000))
   }
 
+  test("an entry exactly at the retention boundary is kept, not just newer ones") {
+    val a = State.reduce(s0, Event.BookUpdate(bookAt("100", "102", t0 + 1), fromSocket = true), t0)
+    val boundary = t0 + State.samplesMs
+    val b = State.reduce(
+      a,
+      Event.BookUpdate(bookAt("100", "104", boundary + 1), fromSocket = true),
+      boundary
+    )
+    assertEquals(b.samples.map(_._1), Vector(t0 / 1000, boundary / 1000))
+  }
+
+  test("folding more than two hundred thousand trades in one batch keeps exactly the cap") {
+    val n = 200_010
+    val trades = Vector.tabulate(n)(i => Trade(t0 + i, Side.Buy, "1", "1"))
+    val a = State.reduce(s0, Event.Trades(trades), t0 + n)
+    assertEquals(a.tape.size, State.tapeCap)
+  }
+
   test("trades older than four hours are dropped and the cap is two hundred thousand") {
     val old = Trade(t0 - State.tapeMs - 1, Side.Buy, "1", "1")
     val fresh = Trade(t0, Side.Sell, "1", "1")

@@ -87,6 +87,12 @@ class GaugesSpec extends munit.FunSuite:
     )
   }
 
+  test("a lens label is bright, not dim, exactly when its window equals the time since since") {
+    val s = s0.copy(book = Some(book("1", "1")), since = now - 10_000)
+    val line = Gauges.bookRow(s, "10s", 10L, now, None, 13)
+    assert(!line.contains(Screen.dim), line)
+  }
+
   test("tape lens rows count the trades in the window and the big ones") {
     val s = s0.copy(
       tape = Vector(
@@ -114,6 +120,15 @@ class GaugesSpec extends munit.FunSuite:
     assertEquals(
       Gauges.tapeRow(s.copy(since = now - 100_000), "5m", 300L, now, t, 13),
       s"TAPE ${Screen.dim}  5m${Screen.reset} ${tr(Some(8.0 / 14))} F+0.57 n=3     big ${tr(Some(7.0 / 13))} F+0.54 n=2"
+    )
+  }
+
+  test("the tape window edge is exclusive: a trade exactly secs old is left out") {
+    val s = s0.copy(tape = Vector(trade(10_000L, Side.Buy, "100", "1")), since = now - 1_000_000L)
+    val tr = Gauges.track(_: Option[Double], 13)
+    assertEquals(
+      Gauges.tapeRow(s, "10s", 10L, now, None, 13),
+      s"TAPE  10s ${tr(None)} F -- n=0     big ${tr(None)} F -- n=0"
     )
   }
 

@@ -21,6 +21,13 @@ class ChartSpec extends munit.FunSuite:
     assertEquals(cv.lines, Vector(br(0xff)))
   }
 
+  test("dot bounds-checks x independently of y") {
+    val cv = Canvas(2, 1)
+    cv.dot(-1, 1)
+    cv.dot(4, 1)
+    assertEquals(cv.lines, Vector("  "))
+  }
+
   test("a run fills every dot between its ends in either order") {
     val cv = Canvas(1, 2)
     cv.run(0, 6, 1)
