@@ -51,7 +51,7 @@ class FeedSpec extends munit.FunSuite:
     val t = new Thread(() => { val _ = feed.connectOnce() })
     t.setDaemon(true)
     t.start()
-    Thread.sleep(150)
+    Thread.sleep(300)
     t
 
   test("a message split in pieces is joined and delivered once") {
@@ -62,28 +62,42 @@ class FeedSpec extends munit.FunSuite:
     assertEquals(j.append("x", last = true), Some("x"))
   }
   test(
-    "on open the five subscriptions go out in order, history is fetched, the queue sees SocketUp"
+    "on open the whole subscription set goes out in order, history is fetched, the queue sees SocketUp"
   ) {
     val c = new FakeConnector
     val rest = restAnswering()
     val (feed, queue) = newFeed(c, rest)
     val t = startConnected(feed)
     val sent = c.sockets.peek().sent.asScala.toVector
-    assertEquals(sent, feed.subscriptions("XMR"))
+    assertEquals(sent, Feed.subscriptions("XMR"))
     assert(
       sent(0).contains("\"l2Book\"") && sent(1).contains("\"bbo\"") && sent(2).contains(
         "\"trades\""
       )
     )
-    assert(sent(3).contains("\"candle\"") && sent(3).contains("\"interval\":\"1m\""))
-    assert(sent(4).contains("\"activeAssetCtx\""))
-    assert(rest.bodies.asScala.exists(_.contains("candleSnapshot")))
+    assert(sent(3).contains("\"activeAssetCtx\""))
+    assert(sent(4).contains("\"candle\"") && sent(4).contains("\"interval\":\"1m\""))
+    assertEquals(rest.bodies.asScala.count(_.contains("candleSnapshot")), 18)
     val events = queue.asScala.toVector
     assert(events.contains(Event.SocketUp))
-    assert(events.exists(_.isInstanceOf[Event.CandleHistory]))
+    assertEquals(events.count(_.isInstanceOf[Event.CandleHistory]), 18)
     c.onClose()
     t.join(1000)
     assertEquals(queue.asScala.toVector.last, Event.SocketDown)
+  }
+  test("subscriptions cover the main market, six series and both references without duplicates") {
+    val subs = Feed.subscriptions("XMR")
+    assertEquals(subs.size, 24)
+    assertEquals(subs.distinct.size, 24)
+    assert(subs.exists(_.contains("\"type\":\"l2Book\"")))
+    assertEquals(subs.count(_.contains("\"type\":\"candle\"")), 18)
+    assertEquals(subs.count(_.contains("\"coin\":\"PAXG\"")), 7)
+    assert(subs.exists(s => s.contains("\"interval\":\"1d\"") && s.contains("\"coin\":\"BTC\"")))
+    assertEquals(Feed.subscriptions("BTC").size, 17)
+    val unsubs = Feed.unsubscriptions("XMR")
+    assertEquals(unsubs.size, 24)
+    assert(unsubs.forall(_.contains("\"method\":\"unsubscribe\"")), unsubs)
+    assertEquals(unsubs.map(_.replace("unsubscribe", "subscribe")), subs)
   }
   test("socket text is parsed into the queue and ignored messages produce nothing") {
     val c = new FakeConnector
@@ -123,18 +137,67 @@ class FeedSpec extends munit.FunSuite:
     feed3.poll()
     assert(queue3.isEmpty)
   }
-  test("history asks for a thousand minutes ending now and a failure is reported") {
+  test("history bodies ask for five thousand candles ending now") {
+    val body = Feed.historyBody("BTC", "5m", 1_000_000_000L)
+    assert(body.contains("\"coin\":\"BTC\"") && body.contains("\"interval\":\"5m\""), body)
+    assert(body.contains("\"startTime\":" + (1_000_000_000L - 5000L * 300_000L)), body)
+    assert(body.contains("\"endTime\":1000000000"), body)
+    assertEquals(Feed.coarseBody("XMR", 3), """{"type":"l2Book","coin":"XMR","nSigFigs":3}""")
+  }
+  test("fetching history sends eighteen requests and tags every series") {
     val rest = restAnswering()
     val (feed, queue) = newFeed(new FakeConnector, rest, () => 10_000_000L)
     feed.fetchHistory()
-    val body = rest.bodies.asScala.last
-    assert(body.contains("\"startTime\":" + (10_000_000L - 60_000_000L)), body)
-    assert(body.contains("\"endTime\":10000000"), body)
-    assert(body.contains("\"interval\":\"1m\""), body)
-    assert(queue.asScala.toVector.head.isInstanceOf[Event.CandleHistory])
+    val bodies = rest.bodies.asScala.toVector
+    assertEquals(bodies.size, 18)
+    assert(bodies.forall(_.contains("candleSnapshot")), bodies)
+    for c <- Vector("XMR", "BTC", "PAXG") do
+      assertEquals(bodies.count(_.contains(s""""coin":"$c"""")), 6, c)
+    assertEquals(bodies.head, Feed.historyBody("XMR", "1m", 10_000_000L))
+    val tags = queue.asScala.toVector.collect { case Event.CandleHistory(c, i, _) => (c, i) }
+    assertEquals(tags.size, 18)
+    assertEquals(tags.distinct.size, 18)
+    assertEquals(tags.map(_._1).distinct, Vector("XMR", "BTC", "PAXG"))
+    assertEquals(tags.filter(_._1 == "PAXG").map(_._2), State.intervals)
     val (feed2, queue2) = newFeed(new FakeConnector, restAnswering(candles = false))
     feed2.fetchHistory()
-    assertEquals(queue2.asScala.toVector, Vector(Event.CandleHistoryFailed))
+    assertEquals(queue2.asScala.toVector, Vector.fill(18)(Event.CandleHistoryFailed))
+  }
+  test("history for a market already followed as a reference is fetched once") {
+    val rest = restAnswering()
+    val queue = new ConcurrentLinkedQueue[Event]()
+    val feed = new Feed(new FakeConnector, rest, queue, () => 10_000_000L, "BTC")
+    feed.fetchHistory()
+    assertEquals(rest.bodies.asScala.count(_.contains("\"coin\":\"BTC\"")), 6)
+    assertEquals(rest.bodies.asScala.size, 12)
+    val tags = queue.asScala.toVector.collect { case Event.CandleHistory(c, _, _) => c }
+    assertEquals(tags.distinct, Vector("BTC", "PAXG"))
+  }
+  test("polling the coarse books sends three requests and tags the resolution") {
+    val rest = restAnswering()
+    val (feed, queue) = newFeed(new FakeConnector, rest)
+    feed.pollCoarse()
+    assertEquals(
+      rest.bodies.asScala.toVector,
+      Vector(
+        """{"type":"l2Book","coin":"XMR","nSigFigs":4}""",
+        """{"type":"l2Book","coin":"XMR","nSigFigs":3}""",
+        """{"type":"l2Book","coin":"XMR","nSigFigs":2}"""
+      )
+    )
+    queue.asScala.toVector match
+      case Vector(
+            Event.CoarseBook("XMR", 4, b4),
+            Event.CoarseBook("XMR", 3, b3),
+            Event.CoarseBook("XMR", 2, b2)
+          ) =>
+        assertEquals(b4.time, 1788345727341L)
+        assertEquals(b3, b4)
+        assertEquals(b2, b4)
+      case other => fail(s"unexpected $other")
+    val (feed2, queue2) = newFeed(new FakeConnector, restAnswering(book = false))
+    feed2.pollCoarse()
+    assert(queue2.isEmpty)
   }
   test("backoff is 1, 2, 4 then 8 seconds forever") {
     assertEquals((1 to 6).map(Feed.backoffMs), Seq(1000L, 2000L, 4000L, 8000L, 8000L, 8000L))
@@ -156,45 +219,32 @@ class FeedSpec extends munit.FunSuite:
     Thread.sleep(300)
     assertEquals(waits.asScala.toVector.take(3), Vector(1000L, 2000L, 1000L))
   }
-  test(
-    "setMarket on a new coin unsubscribes the old five, subscribes the new five and refetches history; the same coin sends nothing"
-  ) {
+  test("a market switch resubscribes the whole set and refetches the main market's series") {
     val c = new FakeConnector
     val rest = restAnswering()
     val (feed, _) = newFeed(c, rest)
     val t = startConnected(feed)
     val s = c.sockets.peek()
-    val bodiesBefore = rest.bodies.asScala.size
     s.sent.clear()
-    feed.setMarket("BTC")
+    rest.bodies.clear()
+    feed.setMarket("ETH")
+    assertEquals(feed.coin, "ETH")
     val sent = s.sent.asScala.toVector
-    assertEquals(sent.size, 10)
-    assert(sent.take(5).forall(m => m.contains("\"unsubscribe\"") && m.contains("\"XMR\"")))
-    assert(sent.drop(5).forall(m => m.contains("\"subscribe\"") && m.contains("\"BTC\"")))
-    assert(sent(0).contains("\"l2Book\""))
-    assert(sent(1).contains("\"bbo\""))
-    assert(sent(2).contains("\"trades\""))
-    assert(sent(3).contains("\"candle\""))
-    assert(sent(4).contains("\"activeAssetCtx\""))
-    assert(sent(5).contains("\"l2Book\""))
-    assert(sent(6).contains("\"bbo\""))
-    assert(sent(7).contains("\"trades\""))
-    assert(sent(8).contains("\"candle\"") && sent(8).contains("\"interval\":\"1m\""))
-    assert(sent(9).contains("\"activeAssetCtx\""))
+    assertEquals(sent.size, 48)
+    assertEquals(sent.take(24), Feed.unsubscriptions("XMR"))
+    assertEquals(sent.drop(24), Feed.subscriptions("ETH"))
+    assert(sent.take(24).forall(m => m.contains("\"method\":\"unsubscribe\"")), sent.take(24))
+    val bodies = rest.bodies.asScala.toVector
+    assertEquals(bodies.size, 6)
     assert(
-      rest.bodies.asScala
-        .drop(bodiesBefore)
-        .exists(b => b.contains("candleSnapshot") && b.contains("\"coin\":\"BTC\""))
+      bodies.forall(b => b.contains("candleSnapshot") && b.contains("\"coin\":\"ETH\"")),
+      bodies
     )
-    val bodiesAfterCoin = rest.bodies.asScala.size
     s.sent.clear()
-    feed.setMarket("BTC")
+    rest.bodies.clear()
+    feed.setMarket("ETH")
     assert(s.sent.isEmpty)
-    assertEquals(rest.bodies.asScala.size, bodiesAfterCoin)
+    assert(rest.bodies.isEmpty)
     c.onClose()
     t.join(1000)
-  }
-  test("the candle stream is one minute and history is a thousand minutes") {
-    assertEquals(Feed.interval, "1m")
-    assertEquals(Feed.historyMs, 60_000_000L)
   }

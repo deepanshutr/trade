@@ -4,17 +4,21 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 
 object Main:
-  final case class Args(coin: String)
-  val usage = "usage: desk [COIN]"
+  final case class Args(coin: String, mono: Boolean)
+  val usage = "usage: desk [COIN] [--mono]"
 
   def parseArgs(args: Seq[String]): Either[String, Args] =
-    def loop(rest: List[String], coin: Option[String]): Either[String, Args] =
+    def loop(rest: List[String], coin: Option[String], mono: Boolean): Either[String, Args] =
       rest match
-        case Nil                                => Right(Args(coin.getOrElse("XMR")))
+        case Nil                                => Right(Args(coin.getOrElse("XMR"), mono))
+        case "--mono" :: tail                   => loop(tail, coin, true)
         case flag :: _ if flag.startsWith("--") => Left(s"unknown flag $flag")
-        case c :: tail if coin.isEmpty          => loop(tail, Some(c))
+        case c :: tail if coin.isEmpty          => loop(tail, Some(c), mono)
         case extra :: _                         => Left(s"unexpected argument $extra")
-    loop(args.toList, None)
+    loop(args.toList, None, false)
+
+  def style(args: Args, env: Map[String, String]): Style =
+    if args.mono || env.contains("NO_COLOR") then Style.mono else Style.colour
 
   def nextPromptOpen(promptOpen: Boolean, command: Command): Boolean = command match
     case Command.StartMarketPrompt                   => true
@@ -38,6 +42,7 @@ object Main:
     t.start()
 
   def run(args: Args): Unit =
+    val st = style(args, sys.env)
     val now = () => System.currentTimeMillis()
     val queue = new LinkedBlockingQueue[Event]()
     val state = new AtomicReference(Snapshot.initial(args.coin, now()))
@@ -65,6 +70,11 @@ object Main:
       while true do
         feed.poll()
         Thread.sleep(500)
+    }
+    daemon("coarse") {
+      while true do
+        feed.pollCoarse()
+        Thread.sleep(2000)
     }
     daemon("keys") {
       var pending = Vector.empty[Int]
@@ -103,7 +113,7 @@ object Main:
           sizeAt = t
         val s = state.get()
         if (s ne last) || t - lastFrameAt >= 1000 then
-          Term.write(Screen.render(s, size._1, size._2, t, zone, Style.colour))
+          Term.write(Screen.render(s, size._1, size._2, t, zone, st))
           last = s
           lastFrameAt = t
         Thread.sleep(100)

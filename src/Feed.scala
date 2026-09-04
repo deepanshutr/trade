@@ -36,8 +36,27 @@ object Feed:
     case 3 => 4000L
     case _ => 8000L
 
-  val interval = "1m"
-  val historyMs = 1000L * 60_000L
+  private def sub(kind: String, c: String, extra: String = ""): String =
+    s"""{"method":"subscribe","subscription":{"type":"$kind","coin":"$c"$extra}}"""
+
+  def subscriptions(c: String): Vector[String] =
+    val main =
+      Vector(sub("l2Book", c), sub("bbo", c), sub("trades", c), sub("activeAssetCtx", c)) ++
+        State.intervals.map(i => sub("candle", c, s""","interval":"$i""""))
+    val refs = State.refCoins.flatMap(r =>
+      sub("bbo", r) +: State.intervals.map(i => sub("candle", r, s""","interval":"$i""""))
+    )
+    (main ++ refs).distinct
+
+  def unsubscriptions(c: String): Vector[String] =
+    subscriptions(c).map(_.replace("\"method\":\"subscribe\"", "\"method\":\"unsubscribe\""))
+
+  def historyBody(coin: String, interval: String, now: Long): String =
+    val start = now - 5000L * State.intervalMs(interval)
+    s"""{"type":"candleSnapshot","req":{"coin":"$coin","interval":"$interval","startTime":$start,"endTime":$now}}"""
+
+  def coarseBody(coin: String, k: Int): String =
+    s"""{"type":"l2Book","coin":"$coin","nSigFigs":$k}"""
 
 final class Feed(
     connector: Connector,
@@ -53,20 +72,6 @@ final class Feed(
   private def push(e: Event): Unit =
     val _ = queue.add(e)
 
-  private def sub(kind: String, c: String, extra: String = ""): String =
-    s"""{"method":"subscribe","subscription":{"type":"$kind","coin":"$c"$extra}}"""
-
-  def subscriptions(c: String): Vector[String] = Vector(
-    sub("l2Book", c),
-    sub("bbo", c),
-    sub("trades", c),
-    sub("candle", c, s""","interval":"${Feed.interval}""""),
-    sub("activeAssetCtx", c)
-  )
-
-  def unsubscriptions(c: String): Vector[String] =
-    subscriptions(c).map(_.replace("\"method\":\"subscribe\"", "\"method\":\"unsubscribe\""))
-
   def send(text: String): Unit = sendLock.synchronized {
     socket.foreach(_.send(text))
   }
@@ -81,7 +86,7 @@ final class Feed(
       case None    => false
       case Some(s) =>
         socket = Some(s)
-        subscriptions(coin).foreach(send)
+        Feed.subscriptions(coin).foreach(send)
         push(Event.SocketUp)
         fetchHistory()
         closed.await()
@@ -105,22 +110,31 @@ final class Feed(
       .flatMap(Events.parseRestBook)
       .foreach(b => push(Event.BookUpdate(c, b, fromSocket = false)))
 
-  def fetchHistory(): Unit =
+  def pollCoarse(): Unit =
     val c = coin
-    val now = clock()
-    val start = now - Feed.historyMs
-    val body =
-      s"""{"type":"candleSnapshot","req":{"coin":"$c","interval":"${Feed.interval}","startTime":$start,"endTime":$now}}"""
-    rest.post(body).flatMap(Events.parseRestCandles) match
-      case Some(cs) => push(Event.CandleHistory(c, Feed.interval, cs))
-      case None     => push(Event.CandleHistoryFailed)
+    Vector(4, 3, 2).foreach { k =>
+      rest
+        .post(Feed.coarseBody(c, k))
+        .flatMap(Events.parseRestBook)
+        .foreach(b => push(Event.CoarseBook(c, k, b)))
+    }
+
+  def fetchHistoryFor(c: String): Unit =
+    State.intervals.foreach { i =>
+      rest.post(Feed.historyBody(c, i, clock())).flatMap(Events.parseRestCandles) match
+        case Some(cs) => push(Event.CandleHistory(c, i, cs))
+        case None     => push(Event.CandleHistoryFailed)
+    }
+
+  def fetchHistory(): Unit = (coin +: State.refCoins.filterNot(_ == coin)).foreach(fetchHistoryFor)
 
   def setMarket(newCoin: String): Unit =
     if newCoin != coin then
-      unsubscriptions(coin).foreach(send)
+      val old = coin
       coin = newCoin
-      subscriptions(coin).foreach(send)
-      fetchHistory()
+      Feed.unsubscriptions(old).foreach(send)
+      Feed.subscriptions(newCoin).foreach(send)
+      fetchHistoryFor(newCoin)
 
 object JdkConnector extends Connector:
   private val client = HttpClient.newHttpClient()
