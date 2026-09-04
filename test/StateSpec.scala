@@ -40,17 +40,6 @@ class StateSpec extends munit.FunSuite:
     val s2 = State.reduce(s1, Event.BookUpdate(sameTime, fromSocket = false), t0 + 1)
     assertEquals(s2.book, Some(b1))
   }
-  test("a book adds its sizes to the window, one sample per second, pruned at 60 seconds") {
-    val s1 = State.reduce(s0, Event.BookUpdate(b1, fromSocket = true), t0)
-    assertEquals(s1.sizes, Vector((t0, Vector(1.0, 2.0, 3.0, 4.0))))
-    val s2 = State.reduce(s1, Event.BookUpdate(b1.copy(time = 1001), fromSocket = true), t0 + 500)
-    assertEquals(s2.sizes.size, 1)
-    val s3 = State.reduce(s2, Event.BookUpdate(b1.copy(time = 1002), fromSocket = true), t0 + 1000)
-    assertEquals(s3.sizes.size, 2)
-    val s4 =
-      State.reduce(s3, Event.BookUpdate(b1.copy(time = 1003), fromSocket = true), t0 + 61_000)
-    assertEquals(s4.sizes.map(_._1), Vector(t0 + 1000, t0 + 61_000))
-  }
   test("a bbo newer than the book replaces the best levels and drops crossed ones") {
     val s1 = State.reduce(s0, Event.BookUpdate(b1, fromSocket = true), t0)
     val s2 = State.reduce(s1, Event.BboUpdate(lv("100.5", "7"), lv("101.5", "8"), 2000), t0 + 1)
@@ -164,7 +153,7 @@ class StateSpec extends munit.FunSuite:
     assertEquals(s5.prompt, None)
     assertEquals(State.reduce(s0, Event.Key(Command.PromptChar('x')), t0).prompt, None)
   }
-  test("submit switches the coin and clears exactly book, tape, candles, ctx and sizes") {
+  test("submit switches the coin and clears exactly book, tape, candles and ctx") {
     val withBook = State.reduce(s0, Event.BookUpdate(b1, fromSocket = true), t0)
     val withTape = State.reduce(withBook, Event.Trades(Vector(Trade(1, Side.Buy, "1", "1"))), t0)
     val full = State.reduce(withTape, Event.CtxUpdate(Ctx("1", "1", "0", "0", "0", "1", None)), t0)
@@ -177,7 +166,6 @@ class StateSpec extends munit.FunSuite:
     assertEquals(s.tape, Vector.empty)
     assertEquals(s.candles, Vector.empty)
     assertEquals(s.ctx, None)
-    assertEquals(s.sizes, Vector.empty)
     assertEquals(s.interval, full.interval)
     assertEquals(s.feed, full.feed)
     assertEquals(s.bad, full.bad)
@@ -201,7 +189,6 @@ class StateSpec extends munit.FunSuite:
     assertEquals(s.tape, full.tape)
     assertEquals(s.candles, full.candles)
     assertEquals(s.ctx, full.ctx)
-    assertEquals(s.sizes, full.sizes)
   }
 
   test(

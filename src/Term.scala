@@ -32,6 +32,9 @@ object Term:
   def frame(lines: Vector[String]): String =
     esc + "[H" + lines.map(_ + esc + "[K").mkString("\r\n") + esc + "[J"
 
+  def bytes(lines: Vector[String]): Array[Byte] =
+    frame(lines).getBytes(java.nio.charset.StandardCharsets.UTF_8)
+
   def write(lines: Vector[String]): Unit =
-    print(frame(lines))
-    Console.flush()
+    System.out.write(bytes(lines))
+    System.out.flush()

@@ -16,3 +16,7 @@ class TermSpec extends munit.FunSuite:
     assertEquals(Term.parseSize(""), None)
     assertEquals(Term.parseSize("x y"), None)
   }
+  test("frames are encoded as UTF-8 bytes") {
+    val bytes = Term.bytes(Vector((0x2801).toChar.toString)).toVector.map(_ & 0xff)
+    assert(bytes.containsSlice(Vector(0xe2, 0xa0, 0x81)), bytes)
+  }

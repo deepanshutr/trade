@@ -50,7 +50,6 @@ final case class Snapshot(
     ctx: Option[Ctx],
     feed: Health,
     bad: Int,
-    sizes: Vector[(Long, Vector[Double])],
     prompt: Option[String],
     quit: Boolean,
     samples: Vector[(Long, Double)],
@@ -73,7 +72,6 @@ object Snapshot:
       None,
       Health.Down(now, now - 6000),
       0,
-      Vector.empty,
       None,
       false,
       Vector.empty,
@@ -89,7 +87,6 @@ object State:
   val intervals: Vector[String] = Vector("1m", "5m", "15m", "1h", "4h", "1d")
   val tapeCap: Int = 200_000
   val candleCap = 1200
-  val windowMs = 60_000L
   val zooms: Vector[Int] = Vector(1, 2, 5, 10, 30, 60, 120, 300)
   val samplesMs: Long = 6L * 3600_000L
   val booksMs: Long = 900_000L
@@ -122,7 +119,7 @@ object State:
     case Event.BookUpdate(book, fromSocket) =>
       val fresh = if fromSocket then s.copy(feed = Health.Live(now)) else s
       if s.book.exists(_.time >= book.time) then fresh
-      else sample(fresh.copy(book = Some(book), sizes = addSizes(fresh.sizes, now, book)), now)
+      else sample(fresh.copy(book = Some(book)), now)
     case Event.BboUpdate(bid, ask, time) =>
       val fresh = s.copy(feed = Health.Live(now))
       s.book match
@@ -150,15 +147,6 @@ object State:
     case Event.Key(cmd)            => key(s, cmd, now)
     case Event.Resize(c, r)        => s.copy(cols = c, rows = r)
 
-  private def addSizes(
-      w: Vector[(Long, Vector[Double])],
-      now: Long,
-      b: Book
-  ): Vector[(Long, Vector[Double])] =
-    val pruned = w.filter(_._1 >= now - windowMs)
-    if pruned.exists(_._1 / 1000 == now / 1000) then pruned
-    else pruned :+ (now, (b.bids ++ b.asks).map(_.sz.toDouble))
-
   private def key(s: Snapshot, cmd: Command, now: Long): Snapshot = cmd match
     case Command.Quit         => s.copy(quit = true)
     case Command.NextInterval =>
@@ -178,7 +166,6 @@ object State:
             tape = Vector.empty,
             candles = Vector.empty,
             ctx = None,
-            sizes = Vector.empty,
             prompt = None,
             samples = Vector.empty,
             books = Vector.empty,
