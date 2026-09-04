@@ -44,14 +44,13 @@ object Gauges:
   ): Vector[((Option[Double], Int), (Option[Double], Int))] =
     val n = lenses.size
     val cuts = lenses.map(secs => now - secs * 1000).toArray
-    val oldest = cuts.minOption.getOrElse(now)
     val buy = Array.fill(n)(0.0)
     val sell = Array.fill(n)(0.0)
     val count = Array.fill(n)(0)
     val bigBuy = Array.fill(n)(0.0)
     val bigSell = Array.fill(n)(0.0)
     val bigCount = Array.fill(n)(0)
-    tape.view.takeWhile(_.time > oldest).foreach { x =>
+    tape.foreach { x =>
       val sz = x.sz.toDouble
       val isBuy = x.side == Side.Buy
       val isBig = t.exists(x.px.toDouble * sz >= _)
