@@ -128,11 +128,11 @@ object Chart:
 
   def ladderRows(
       book: Option[Book],
-      axis: Option[Axis],
+      ax: Option[Axis],
       rows: Int,
       midRow: Option[Int]
   ): Vector[String] =
-    (book, axis) match
+    (book, ax) match
       case (Some(b), Some(a)) =>
         val depth = Array.fill(rows)(0.0)
         val isBid = Array.fill(rows)(false)
@@ -154,9 +154,8 @@ object Chart:
         (0 until rows).toVector.map { row =>
           val price = a.hi - (a.hi - a.lo) * row / (rows - 1).max(1)
           val s = depth(row)
-          val raw = if s <= 0 then 0L
-          else if r <= u then Layout.barW.toLong
-          else Screen.round(Layout.barW * log(1 + s / u) / log(1 + r / u))
+          val raw =
+            if s <= 0 then 0L else Screen.round(Layout.barW * log(1 + s / u) / log(1 + r / u))
           val n = if s <= 0 then 0 else raw.max(1).min(Layout.barW).toInt
           val ink = "#" * n
           val marked = if raw > Layout.barW then
@@ -175,12 +174,12 @@ object Chart:
       case _ => Vector.fill(rows)(" " * Layout.leftW)
 
   def scaleRows(
-      axis: Option[Axis],
+      ax: Option[Axis],
       rows: Int,
       midRow: Option[Int],
       mid: Option[String]
   ): Vector[String] =
-    axis.fold(Vector.fill(rows)(" " * Layout.scaleW)) { a =>
+    ax.fold(Vector.fill(rows)(" " * Layout.scaleW)) { a =>
       val dec = decimals(a.hi)
       val labels = Map(0 -> a.hi, rows / 2 -> (a.hi + a.lo) / 2, rows - 1 -> a.lo)
       (0 until rows).toVector.map { row =>

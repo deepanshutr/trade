@@ -154,6 +154,15 @@ class ChartSpec extends munit.FunSuite:
     assertEquals(Chart.ladderRows(None, None, 2, None), Vector(" " * 30, " " * 30))
   }
 
+  test("ladder bars scale by depth when the reference ties the lower median") {
+    val book = Book(Vector(lvl("100", "1"), lvl("99", "5"), lvl("98", "5")), Vector.empty, 1L)
+    val a = Axis(98.0, 100.0, 3)
+    val plain = Chart.ladderRows(Some(book), Some(a), 3, None).map(Chart.plain)
+    assertEquals(plain(0).drop(9), "######" + " " * 15)
+    assertEquals(plain(1).drop(9), "#" * 21)
+    assertEquals(plain(2).drop(9), "#" * 21)
+  }
+
   test("scale rows label the top middle and bottom and print the mid bold") {
     val rows = Chart.scaleRows(Some(Axis(98.35, 112.65, 14)), 14, Some(7), Some("105.5"))
     assertEquals(rows(0), "   112.65")
