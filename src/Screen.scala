@@ -24,10 +24,7 @@ object Screen:
       .stripTrailingZeros()
       .toPlainString()
 
-  def bigToken(t: Option[Double]): String =
-    t.fold("big --")(x => "big>$" + (if x < 1000 then f"$x%.0f" else short(x)))
-
-  def stats(s: Snapshot, now: Long, cols: Int, t: Option[Double]): String =
+  def stats(s: Snapshot, now: Long, cols: Int): String =
     val text = s.prompt match
       case Some(p) => s"market: ${p}_"
       case None    =>
@@ -40,12 +37,19 @@ object Screen:
             val pct = mid.map(m => (m.toDouble / c.prevDayPx.toDouble - 1) * 100).getOrElse(0.0)
             f"${s.coin}  ${mid.getOrElse("-")}  mark ${c.mark}  orc ${c.oracle}  24h $pct%+.1f%%  " +
               f"fund ${c.funding.toDouble * 100}%.4f%%  OI ${short(c.openInterest.toDouble)}  " +
-              f"vol ${short(c.dayVolume.toDouble)}  ${bigToken(t)}  $fresh$badPart"
-          case None => s"${s.coin}  ${mid.getOrElse("-")}  ${bigToken(t)}  $fresh$badPart"
+              f"vol ${short(c.dayVolume.toDouble)}  $fresh$badPart"
+          case None => s"${s.coin}  ${mid.getOrElse("-")}  $fresh$badPart"
     val fitted = if text.length > cols then text.replace("  ", " ") else text
     fitted.padTo(cols, ' ').take(cols)
 
-  def render(s: Snapshot, cols: Int, rows: Int, now: Long, zone: java.time.ZoneId): Vector[String] =
+  def render(
+      s: Snapshot,
+      cols: Int,
+      rows: Int,
+      now: Long,
+      zone: java.time.ZoneId,
+      style: Style
+  ): Vector[String] =
     if cols < Layout.minCols || rows < Layout.minRows then
       Vector(s"need ${Layout.minCols}x${Layout.minRows}, have ${cols}x$rows")
     else
@@ -56,22 +60,25 @@ object Screen:
       val axis = Chart.axis(columns, s.book, priceRows)
       val mid = s.book.flatMap(midOf)
       val midRow = for a <- axis; m <- mid yield a.row(m.toDouble)
-      val left = Chart.ladderRows(s.book, Map.empty, axis, priceRows, midRow, Style.colour)
-      val chart =
-        axis.fold(Vector.fill(priceRows)(" " * cells))(a => Chart.line(columns, a, Vector.empty))
+      val left = Chart.ladderRows(s.book, s.coarse, axis, priceRows, midRow, style)
+      val refs = State.refCoins.filterNot(_ == s.coin).flatMap { coin =>
+        s.refs.get(coin).map { r =>
+          val (keep, colour) =
+            if coin == "BTC" then (Chart.dash, style.btc) else (Chart.dotted, style.gold)
+          RefLine(Chart.refColumns(r, dots, s, now), keep, colour)
+        }
+      }
+      val chart = axis.fold(Vector.fill(priceRows)(" " * cells))(a => Chart.line(columns, a, refs))
       val scale = Chart.scaleRows(axis, priceRows, midRow, mid)
       val priceLines = (0 until priceRows).toVector.map(r => left(r) + chart(r) + scale(r))
-      val (vol, vmax) = Chart.volumeRows(columns, Style.colour)
+      val (vol, vmax) = Chart.volumeRows(columns, style)
       val volLines = Vector(
-        Chart.rjust("volume", Layout.leftW - 1) + " " + vol(0) + Chart.rjust(
-          f"v $vmax%.1f",
-          Layout.scaleW
-        ),
+        Chart.rjust("volume", Layout.leftW - 1) + " " + vol(0) +
+          Chart.rjust("v " + short(vmax), Layout.scaleW),
         " " * Layout.leftW + vol(1) + " " * Layout.scaleW
       )
       val (first, z) = Chart.window(s, dots, now)
-      val axisLine =
-        Chart.rjust(s"${z}s/col", Layout.leftW - 1) + " " + Chart.axisRow(first, z, dots, zone) +
-          " " * Layout.scaleW
-      (stats(s, now, cols, None) +: priceLines) ++ volLines ++ Vector(axisLine) ++
-        Gauges.rows(s, now, cols, Style.colour)
+      val axisLine = Chart.rjust(State.zoomLabel(z) + "/col", Layout.leftW - 1) + " " +
+        Chart.axisRow(first, z, dots, zone) + " " * Layout.scaleW
+      (stats(s, now, cols) +: priceLines) ++ volLines ++ Vector(axisLine) ++
+        Gauges.rows(s, now, cols, style)

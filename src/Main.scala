@@ -103,7 +103,7 @@ object Main:
           sizeAt = t
         val s = state.get()
         if (s ne last) || t - lastFrameAt >= 1000 then
-          Term.write(Screen.render(s, size._1, size._2, t, zone))
+          Term.write(Screen.render(s, size._1, size._2, t, zone, Style.colour))
           last = s
           lastFrameAt = t
         Thread.sleep(100)
