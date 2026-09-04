@@ -465,6 +465,38 @@ class StateSpec extends munit.FunSuite:
     assertEquals(switched.refs("PAXG").samples.size, 1)
   }
 
+  test("switching off a reference coin keeps its samples and series as that reference's history") {
+    val c = Candle(60_000L, 1, 2, 0.5, 1.5, 3)
+    val onBtc = Vector[Event](
+      Event.CandleHistory("BTC", "1m", Vector(c)),
+      Event.BookUpdate("BTC", bookAt("100", "102", t0 + 1), fromSocket = true)
+    ).foldLeft(Snapshot.initial("BTC", t0))((s, e) => State.reduce(s, e, t0))
+    assertEquals(onBtc.samples, Vector((t0 / 1000, 101.0)))
+    assertEquals(onBtc.candles("1m"), Vector(c))
+    assertEquals(onBtc.refs("BTC"), Ref.empty)
+    val typed = "XMR".foldLeft(press(onBtc, Command.StartMarketPrompt))((s, ch) =>
+      press(s, Command.PromptChar(ch))
+    )
+    val switched = press(typed, Command.PromptSubmit, t0 + 5000)
+    assertEquals(switched.coin, "XMR")
+    assertEquals(switched.refs("BTC").samples, onBtc.samples)
+    assertEquals(switched.refs("BTC").candles("1m"), Vector(c))
+    assertEquals(switched.samples, Vector.empty[(Long, Double)])
+    assertEquals(switched.candles, Map.empty[String, Vector[Candle]])
+    assertEquals(switched.refs("PAXG"), Ref.empty)
+  }
+
+  test("switching off a coin that is not a reference leaves the references untouched") {
+    val busy =
+      State.reduce(s0, Event.CandleHistory("XMR", "1m", Vector(Candle(0L, 1, 1, 1, 1, 1))), t0)
+    val typed = "ETH".foldLeft(press(busy, Command.StartMarketPrompt))((s, ch) =>
+      press(s, Command.PromptChar(ch))
+    )
+    val switched = press(typed, Command.PromptSubmit, t0 + 5000)
+    assertEquals(switched.refs, busy.refs)
+    assertEquals(switched.refs.keySet, Set("BTC", "PAXG"))
+  }
+
   test("the scrub step at the widest zoom is a quarter window of weeks") {
     val wide = (1 to 20).foldLeft(s0)((s, _) => press(s, Command.ZoomOut))
     assertEquals(State.zooms(wide.zoom), 604800)

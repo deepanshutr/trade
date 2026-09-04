@@ -199,6 +199,23 @@ class FeedSpec extends munit.FunSuite:
     feed2.pollCoarse()
     assert(queue2.isEmpty)
   }
+  test("history is fetched on the first connect and again only a minute later") {
+    val c = new FakeConnector
+    val rest = restAnswering()
+    var t = 1_000_000L
+    val queue = new ConcurrentLinkedQueue[Event]()
+    val feed = new Feed(c, rest, queue, () => t, "XMR")
+    def cycle(): Int =
+      val thread = startConnected(feed)
+      c.onClose()
+      val _ = thread.join(1000)
+      rest.bodies.asScala.count(_.contains("candleSnapshot"))
+    assertEquals(cycle(), 18)
+    t += 1_000L
+    assertEquals(cycle(), 18)
+    t += 59_000L
+    assertEquals(cycle(), 36)
+  }
   test("backoff is 1, 2, 4 then 8 seconds forever") {
     assertEquals((1 to 6).map(Feed.backoffMs), Seq(1000L, 2000L, 4000L, 8000L, 8000L, 8000L))
   }

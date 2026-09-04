@@ -10,6 +10,8 @@ class GaugesSpec extends munit.FunSuite:
   private def s0: Snapshot = Snapshot.initial("XMR", now)
   private val FULL = (0x28ff).toChar.toString
   private def tr(v: Option[Double]): String = Gauges.track(v, 13, "")
+  private def series(closes: Vector[Double], t0: Long = 0L): Vector[Candle] =
+    closes.zipWithIndex.map((c, i) => Candle(t0 + i * 60_000L, c, c, c, c, 1))
 
   test("imbalance keeps the part one formulas") {
     val (q, d) = Gauges.imbalance(book("1", "3"))
@@ -36,8 +38,6 @@ class GaugesSpec extends munit.FunSuite:
   }
 
   test("correlation pairs candles by start time over the last n returns") {
-    def series(closes: Vector[Double], t0: Long = 0L): Vector[Candle] =
-      closes.zipWithIndex.map((c, i) => Candle(t0 + i * 60_000L, c, c, c, c, 1))
     val main = series(Vector(1, 2, 4, 7, 16))
     val same = series(Vector(2, 4, 8, 14, 32))
     assertEqualsDouble(Gauges.correlation(main, same, 4).get, 1.0, 1e-9)
@@ -46,6 +46,45 @@ class GaugesSpec extends munit.FunSuite:
     assertEquals(Gauges.correlation(main, series(Vector(1, 2)), 4), None)
     val flat = series(Vector(1, 1, 1, 1, 1))
     assertEquals(Gauges.correlation(main, flat, 4), None)
+  }
+
+  test("correlation reads the tails and returns what the whole series would") {
+    def whole(main: Vector[Candle], ref: Vector[Candle], n: Int): Option[Double] =
+      val a = main.map(c => c.t -> c.c).toMap
+      val b = ref.map(c => c.t -> c.c).toMap
+      val ts = (a.keySet & b.keySet).toVector.sorted.takeRight(n + 1)
+      Gauges.pearson(
+        ts.zip(ts.drop(1)).map((t1, t2) => math.log(a(t2) / a(t1))),
+        ts.zip(ts.drop(1)).map((t1, t2) => math.log(b(t2) / b(t1)))
+      )
+    val main = series((0 until 300).toVector.map(i => 100.0 + math.sin(i / 3.0)))
+    val ref = series((0 until 300).toVector.map(i => 50.0 + math.cos(i / 5.0)))
+    Vector(3, 15, 48, 96, 168).foreach { n =>
+      assertEqualsDouble(
+        Gauges.correlation(main, ref, n).get,
+        whole(main, ref, n).get,
+        1e-12,
+        s"n=$n"
+      )
+    }
+    val gapped = main.filterNot(_.t == 250 * 60_000L)
+    assertEquals(gapped.size, 299)
+    assertEqualsDouble(Gauges.correlation(gapped, ref, 15).get, whole(gapped, ref, 15).get, 1e-12)
+    assertEqualsDouble(
+      Gauges.correlation(main, ref.filterNot(_.t == 290 * 60_000L), 15).get,
+      whole(main, ref.filterNot(_.t == 290 * 60_000L), 15).get,
+      1e-12
+    )
+  }
+
+  test("correlation reads n returns from n plus one closes") {
+    val main = series(Vector(1, 2, 4, 7, 16))
+    val same = series(Vector(2, 4, 8, 14, 32))
+    assertEqualsDouble(Gauges.correlation(main, same, 3).get, 1.0, 1e-9)
+    val threeCloses = Vector(4.0, 7.0, 16.0)
+    val twoReturns = threeCloses.zip(threeCloses.drop(1)).map((x, y) => math.log(y / x))
+    assertEquals(twoReturns.size, 2)
+    assertEquals(Gauges.pearson(twoReturns, twoReturns), None)
   }
 
   test("a lens reads the horizon's series and is undefined for the main market itself") {
@@ -210,14 +249,31 @@ class GaugesSpec extends munit.FunSuite:
     assert(rows(1).contains(Screen.dim) && rows(1).contains(Screen.reset), rows(1))
   }
 
-  test("twelve gauge rows over a full tape render in under two seconds") {
+  test("twelve gauge rows over a full tape and full series render in under 200 milliseconds") {
     val tape = Vector.tabulate(200_000)(i =>
       Trade(now - i.toLong * 70L, if i % 2 == 0 then Side.Buy else Side.Sell, "100", "1")
     )
-    val s = s0.copy(book = Some(book("1", "1")), tape = tape, since = now - 100_000_000L)
+    def full(seed: Double): Map[String, Vector[Candle]] =
+      Vector("1m", "5m", "15m", "1h", "4h").map { i =>
+        val ms = State.intervalMs(i)
+        i -> Vector.tabulate(State.seriesCap) { k =>
+          val c = 100.0 + math.sin((k + seed) / 7.0)
+          Candle(k * ms, c, c, c, c, 1.0)
+        }
+      }.toMap
+    val s = s0.copy(
+      book = Some(book("1", "1")),
+      tape = tape,
+      since = now - 100_000_000L,
+      candles = full(0.0),
+      refs = Map("BTC" -> Ref(Vector.empty, full(1.0)), "PAXG" -> Ref(Vector.empty, full(2.0)))
+    )
+    val _ = Gauges.rows(s, now, 100, Style.colour)
+    val _ = Gauges.rows(s, now, 100, Style.colour)
     val started = System.nanoTime()
     val rows = Gauges.rows(s, now, 100, Style.colour)
     val elapsed = System.nanoTime() - started
     assertEquals(rows.size, 12)
-    assert(elapsed < 2e9, s"took ${elapsed / 1e6} ms")
+    assertEquals(rows.map(Chart.plain).count(_.matches(".*r[+-]\\d\\.\\d\\d\\s*")), 12)
+    assert(elapsed < 2e8, s"took ${elapsed / 1e6} ms")
   }

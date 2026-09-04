@@ -191,7 +191,9 @@ class ChartSpec extends munit.FunSuite:
     val lines = Chart.line(main, a, Vector(RefLine(ref, Chart.dash, Style.colour.btc)))
     val cells = Chart.plain(lines.head)
     assertEquals(cells.length, 2)
-    assert(lines.head.startsWith(Style.colour.btc), lines.head)
+    assertEquals(a.dot(110.0), 1)
+    assertEquals(a.dot(100.0), 2)
+    assertEquals(lines, Vector(br(0x34) + Screen.bold + br(0x24) + Screen.reset))
     assertEquals(Chart.dash(0) && Chart.dash(1) && !Chart.dash(2) && !Chart.dash(3), true)
     assertEquals(
       (0 to 6).map(Chart.dotted).toVector,
@@ -199,6 +201,33 @@ class ChartSpec extends munit.FunSuite:
     )
     val alone = Chart.line(main, a, Vector.empty)
     assert(Chart.plain(alone.head) != cells)
+  }
+
+  test("the main line clears the style of every cell it inks, the reference keeps the rest") {
+    val a = Axis(90.0, 120.0, 1)
+    val main = Vector(col(100.0), col(100.0), None, None, col(100.0), col(100.0))
+    val ref = RefLine(Vector.fill(6)(Some(50.0)), _ => true, "S")
+    val lines = Chart.line(main, a, Vector(ref))
+    assertEquals(
+      lines,
+      Vector(
+        br(0x24) + "S" + br(0x24) + Screen.reset + Screen.bold + br(0x24) + Screen.reset
+      )
+    )
+  }
+
+  test("a reference value outside the axis draws nothing") {
+    val a = Axis(90.0, 120.0, 1)
+    val main = Vector(col(100.0), None, None, None)
+    def drawn(v: Double): Vector[String] =
+      Chart.line(main, a, Vector(RefLine(Vector(Some(50.0), None, Some(v), None), _ => true, "S")))
+    val onlyMain = Screen.bold + br(0x04) + Screen.reset + " "
+    assertEquals(drawn(70.0), Vector(onlyMain))
+    assertEquals(drawn(20.0), Vector(onlyMain))
+    assertEquals(
+      drawn(55.0),
+      Vector(Screen.bold + br(0x04) + Screen.reset + "S" + br(0x02) + Screen.reset)
+    )
   }
 
   test("a bucket width follows the significant figures") {
@@ -264,6 +293,18 @@ class ChartSpec extends munit.FunSuite:
     )
     assertEquals(depth.toVector, Vector(0.0, 30.0, 30.0, 20.0, 0.0, 0.0, 0.0))
     assertEquals(isBid.toVector, Vector(false, false, false, true, false, false, false))
+  }
+
+  test("a span partly outside the axis contributes only its visible fraction") {
+    val a = Axis(526.3058, 531.02, 14)
+    val (depth, isBid) = Chart.depthRows(Vector(Span(531.0, 532.0, 500.0, false)), a)
+    assertEqualsDouble(depth(0), 10.0, 1e-9)
+    assertEqualsDouble(depth.toVector.sum, 10.0, 1e-9)
+    assertEquals(isBid.toVector.count(identity), 0)
+    val inside = Chart.depthRows(Vector(Span(529.0, 530.0, 20.0, true)), Axis(500.0, 560.0, 7))
+    assertEquals(inside._1.toVector, Vector(0.0, 0.0, 0.0, 20.0, 0.0, 0.0, 0.0))
+    val level = Chart.depthRows(Vector(Span(530.0, 530.0, 7.0, true)), Axis(500.0, 560.0, 7))
+    assertEquals(level._1.toVector, Vector(0.0, 0.0, 0.0, 7.0, 0.0, 0.0, 0.0))
   }
 
   test("bars are braille with a half cell for the odd step and the clamp mark outside") {

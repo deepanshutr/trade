@@ -11,12 +11,13 @@ final class Canvas(val cells: Int, val rows: Int):
   private val styles = Array.fill(rows, cells)("")
   private val bit =
     Array(Array(0x01, 0x08), Array(0x02, 0x10), Array(0x04, 0x20), Array(0x40, 0x80))
-  def dot(x: Int, y: Int, style: String = ""): Unit =
+  def dot(x: Int, y: Int, style: String = "", clear: Boolean = false): Unit =
     if x >= 0 && x < w && y >= 0 && y < h then
       bits(y / 4)(x / 2) |= bit(y % 4)(x % 2)
       if style.nonEmpty then styles(y / 4)(x / 2) = style
-  def run(x: Int, y0: Int, y1: Int, style: String = ""): Unit =
-    for y <- (y0 min y1) to (y0 max y1) do dot(x, y, style)
+      else if clear then styles(y / 4)(x / 2) = ""
+  def run(x: Int, y0: Int, y1: Int, style: String = "", clear: Boolean = false): Unit =
+    for y <- (y0 min y1) to (y0 max y1) do dot(x, y, style, clear)
   def restyle(cell: Int, row: Int, style: String): Unit =
     if cell >= 0 && cell < cells && row >= 0 && row < rows then styles(row)(cell) = style
   def lines: Vector[String] =
@@ -161,7 +162,10 @@ object Chart:
       refs.foreach { ref =>
         ref.values.drop(i0).flatten.headOption.foreach { b0 =>
           ref.values.zipWithIndex.foreach { (v, x) =>
-            v.foreach(vv => if ref.keep(x) then cv.dot(x, a.dot(m0 * vv / b0), ref.style))
+            v.foreach { vv =>
+              val p = m0 * vv / b0
+              if ref.keep(x) && p >= a.lo && p <= a.hi then cv.dot(x, a.dot(p), ref.style)
+            }
           }
         }
       }
@@ -169,8 +173,8 @@ object Chart:
     var newest: Option[(Int, Int)] = None
     columns.zipWithIndex.foreach { (col, x) =>
       col.foreach { c =>
-        cv.run(x, a.dot(prev.getOrElse(c.first)), a.dot(c.first))
-        cv.run(x, a.dot(c.low), a.dot(c.high))
+        cv.run(x, a.dot(prev.getOrElse(c.first)), a.dot(c.first), clear = true)
+        cv.run(x, a.dot(c.low), a.dot(c.high), clear = true)
         prev = Some(c.last)
         newest = Some((x / 2, a.dot(c.last) / 4))
       }
@@ -204,10 +208,13 @@ object Chart:
     val depth = Array.fill(a.rows)(0.0)
     val isBid = Array.fill(a.rows)(false)
     spans.foreach { sp =>
-      if sp.hi >= a.lo && sp.lo <= a.hi then
-        val r1 = a.row(sp.hi)
-        val r2 = a.row(sp.lo)
-        val share = sp.size / (r2 - r1 + 1)
+      val vLo = sp.lo.max(a.lo)
+      val vHi = sp.hi.min(a.hi)
+      if vHi >= vLo then
+        val visible = if sp.hi > sp.lo then sp.size * (vHi - vLo) / (sp.hi - sp.lo) else sp.size
+        val r1 = a.row(vHi)
+        val r2 = a.row(vLo)
+        val share = visible / (r2 - r1 + 1)
         for r <- r1 to r2 do
           depth(r) += share
           if sp.bid then isBid(r) = true
@@ -261,8 +268,8 @@ object Chart:
           val label =
             rjust(s"%.${dec}f".format(price), Layout.labelW) + (if midRow.contains(row) then ">"
                                                                 else " ")
-          if bestRows.contains(row) then Screen.bold + label + Screen.reset + coloured
-          else if midRow.contains(row) then Screen.bold + label + Screen.reset + coloured
+          if bestRows.contains(row) || midRow.contains(row) then
+            Screen.bold + label + Screen.reset + coloured
           else label + coloured
         }
       case _ => Vector.fill(rows)(" " * Layout.leftW)

@@ -29,6 +29,7 @@ object Feed:
   val url = "wss://api.hyperliquid.xyz/ws"
   val restUrl = "https://api.hyperliquid.xyz/info"
   val ping = """{"method":"ping"}"""
+  val historyEveryMs = 60_000L
 
   def backoffMs(attempt: Int): Long = attempt match
     case 1 => 1000L
@@ -67,6 +68,7 @@ final class Feed(
 ):
   @volatile var coin: String = coin0
   @volatile private var socket: Option[Socket] = None
+  @volatile private var lastHistoryAt: Long = 0L
   private val sendLock = new Object
 
   private def push(e: Event): Unit =
@@ -88,7 +90,10 @@ final class Feed(
         socket = Some(s)
         Feed.subscriptions(coin).foreach(send)
         push(Event.SocketUp)
-        fetchHistory()
+        val t = clock()
+        if lastHistoryAt == 0L || t - lastHistoryAt >= Feed.historyEveryMs then
+          lastHistoryAt = t
+          fetchHistory()
         closed.await()
         socket = None
         push(Event.SocketDown)
@@ -126,7 +131,9 @@ final class Feed(
         case None     => push(Event.CandleHistoryFailed)
     }
 
-  def fetchHistory(): Unit = (coin +: State.refCoins.filterNot(_ == coin)).foreach(fetchHistoryFor)
+  def fetchHistory(): Unit =
+    val c = coin
+    (c +: State.refCoins.filterNot(_ == c)).foreach(fetchHistoryFor)
 
   def setMarket(newCoin: String): Unit =
     if newCoin != coin then

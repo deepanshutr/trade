@@ -186,8 +186,8 @@ object State:
           case None => sample(fresh.copy(book = Some(Book(Vector(bid), Vector(ask), time))), now)
       else
         s.refs.get(coin).fold(fresh) { r =>
-          val mid = (bid.px.toDouble + ask.px.toDouble) / 2
-          fresh.copy(refs = s.refs.updated(coin, sampleRef(r, mid, now / 1000)))
+          val refMid = (bid.px.toDouble + ask.px.toDouble) / 2
+          fresh.copy(refs = s.refs.updated(coin, sampleRef(r, refMid, now / 1000)))
         }
     case Event.Trades(coin, ts) =>
       val fresh = s.copy(feed = Health.Live(now))
@@ -237,8 +237,12 @@ object State:
     case Command.PromptSubmit      =>
       s.prompt match
         case Some(name) if name.nonEmpty && name != s.coin =>
+          val refs =
+            if s.refs.contains(s.coin) then s.refs.updated(s.coin, Ref(s.samples, s.candles))
+            else s.refs
           s.copy(
             coin = name,
+            refs = refs,
             book = None,
             tape = Vector.empty,
             candles = Map.empty,

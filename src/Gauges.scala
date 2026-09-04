@@ -18,8 +18,8 @@ object Gauges:
       ("1M", "4h", 180)
     )
 
-  private def weighted(levels: Vector[Level], keep: Level => Boolean): Double =
-    levels.take(10).zip(weights).map((l, w) => if keep(l) then l.sz.toDouble * w else 0.0).sum
+  private def weighted(levels: Vector[Level]): Double =
+    levels.take(10).zip(weights).map((l, w) => l.sz.toDouble * w).sum
 
   def imbalance(b: Book): (Double, Double) =
     val q = (b.bids.headOption, b.asks.headOption) match
@@ -29,7 +29,7 @@ object Gauges:
       case (Some(_), None) => 1.0
       case (None, Some(_)) => -1.0
       case _               => 0.0
-    val (wb, wa) = (weighted(b.bids, _ => true), weighted(b.asks, _ => true))
+    val (wb, wa) = (weighted(b.bids), weighted(b.asks))
     (q, if wb + wa == 0 then 0.0 else (wb - wa) / (wb + wa))
 
   private def ratio(buy: Double, sell: Double, n: Int): (Option[Double], Int) =
@@ -47,8 +47,9 @@ object Gauges:
       if sxx <= 0 || syy <= 0 then None else Some(sxy / math.sqrt(sxx * syy))
 
   def correlation(main: Vector[Candle], ref: Vector[Candle], n: Int): Option[Double] =
-    val a = main.map(c => c.t -> c.c).toMap
-    val b = ref.map(c => c.t -> c.c).toMap
+    val tail = 2 * (n + 1)
+    val a = main.takeRight(tail).map(c => c.t -> c.c).toMap
+    val b = ref.takeRight(tail).map(c => c.t -> c.c).toMap
     val ts = (a.keySet & b.keySet).toVector.sorted.takeRight(n + 1)
     val ra = ts.zip(ts.drop(1)).map((t1, t2) => math.log(a(t2) / a(t1)))
     val rb = ts.zip(ts.drop(1)).map((t1, t2) => math.log(b(t2) / b(t1)))
@@ -110,8 +111,8 @@ object Gauges:
   private def corrHalf(s: Snapshot, coin: String, name: String, i: Int, h: Int, st: Style): String =
     val (hz, interval, n) = horizons(i)
     val v = lens(s, coin, interval, n)
-    val colour = if st.colour then (if coin == "BTC" then st.btc else st.gold) else ""
-    s" ${st.wrap(colour, name)} ${Chart.rjust(hz, 3)} ${track(v, h, colour)} ${fmt(v, 'r')}"
+    val refStyle = if st.colour then (if coin == "BTC" then st.btc else st.gold) else ""
+    s" ${st.wrap(refStyle, name)} ${Chart.rjust(hz, 3)} ${track(v, h, refStyle)} ${fmt(v, 'r')}"
 
   def bookRow(s: Snapshot, i: Int, now: Long, h: Int, st: Style): String =
     val (name, secs) = bookLenses(i)
