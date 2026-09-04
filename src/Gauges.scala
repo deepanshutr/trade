@@ -8,8 +8,15 @@ object Gauges:
     Vector(("now", 0L), ("10s", 10L), ("30s", 30L), ("1m", 60L), ("5m", 300L), ("15m", 900L))
   val tapeLenses: Vector[(String, Long)] =
     Vector(("10s", 10L), ("1m", 60L), ("5m", 300L), ("15m", 900L), ("1h", 3600L), ("4h", 14400L))
-
-  private def dollars(l: Level): Double = l.px.toDouble * l.sz.toDouble
+  val horizons: Vector[(String, String, Int)] =
+    Vector(
+      ("15m", "1m", 15),
+      ("1h", "1m", 60),
+      ("4h", "5m", 48),
+      ("1d", "15m", 96),
+      ("1w", "1h", 168),
+      ("1M", "4h", 180)
+    )
 
   private def weighted(levels: Vector[Level], keep: Level => Boolean): Double =
     levels.take(10).zip(weights).map((l, w) => if keep(l) then l.sz.toDouble * w else 0.0).sum
@@ -25,59 +32,47 @@ object Gauges:
     val (wb, wa) = (weighted(b.bids, _ => true), weighted(b.asks, _ => true))
     (q, if wb + wa == 0 then 0.0 else (wb - wa) / (wb + wa))
 
-  def imbalanceBig(b: Book, t: Double): Option[Double] =
-    val (wb, wa) = (weighted(b.bids, dollars(_) >= t), weighted(b.asks, dollars(_) >= t))
-    if wb + wa == 0 then None else Some((wb - wa) / (wb + wa))
-
-  def bigCounts(b: Book, t: Double): (Int, Int) =
-    (b.bids.count(dollars(_) >= t), b.asks.count(dollars(_) >= t))
-
   private def ratio(buy: Double, sell: Double, n: Int): (Option[Double], Int) =
     val total = buy + sell
     (if n == 0 || total == 0 then None else Some((buy - sell) / total), n)
 
-  def tapeStats(
-      tape: Vector[Trade],
-      now: Long,
-      t: Option[Double],
-      lenses: Vector[Long]
-  ): Vector[((Option[Double], Int), (Option[Double], Int))] =
-    val n = lenses.size
-    val cuts = lenses.map(secs => now - secs * 1000).toArray
-    val buy = Array.fill(n)(0.0)
-    val sell = Array.fill(n)(0.0)
-    val count = Array.fill(n)(0)
-    val bigBuy = Array.fill(n)(0.0)
-    val bigSell = Array.fill(n)(0.0)
-    val bigCount = Array.fill(n)(0)
-    tape.foreach { x =>
-      val sz = x.sz.toDouble
-      val isBuy = x.side == Side.Buy
-      val isBig = t.exists(x.px.toDouble * sz >= _)
-      var k = 0
-      while k < n do
-        if x.time > cuts(k) then
-          if isBuy then buy(k) += sz else sell(k) += sz
-          count(k) += 1
-          if isBig then
-            if isBuy then bigBuy(k) += sz else bigSell(k) += sz
-            bigCount(k) += 1
-        k += 1
-    }
-    (0 until n).toVector.map(k =>
-      (ratio(buy(k), sell(k), count(k)), ratio(bigBuy(k), bigSell(k), bigCount(k)))
-    )
+  def pearson(xs: Vector[Double], ys: Vector[Double]): Option[Double] =
+    val n = xs.size min ys.size
+    if n < 3 then None
+    else
+      val (mx, my) = (xs.take(n).sum / n, ys.take(n).sum / n)
+      val sxy = xs.zip(ys).map((x, y) => (x - mx) * (y - my)).sum
+      val sxx = xs.take(n).map(x => (x - mx) * (x - mx)).sum
+      val syy = ys.take(n).map(y => (y - my) * (y - my)).sum
+      if sxx <= 0 || syy <= 0 then None else Some(sxy / math.sqrt(sxx * syy))
 
-  def threshold(trades: Vector[Trade], now: Long): Option[Double] =
-    val xs = trades.filter(_.time > now - 900_000L).map(t => t.px.toDouble * t.sz.toDouble)
-    if xs.isEmpty then None else Some(Chart.percentile(xs, 0.9))
+  def correlation(main: Vector[Candle], ref: Vector[Candle], n: Int): Option[Double] =
+    val a = main.map(c => c.t -> c.c).toMap
+    val b = ref.map(c => c.t -> c.c).toMap
+    val ts = (a.keySet & b.keySet).toVector.sorted.takeRight(n + 1)
+    val ra = ts.zip(ts.drop(1)).map((t1, t2) => math.log(a(t2) / a(t1)))
+    val rb = ts.zip(ts.drop(1)).map((t1, t2) => math.log(b(t2) / b(t1)))
+    pearson(ra, rb)
+
+  def lens(s: Snapshot, coin: String, interval: String, n: Int): Option[Double] =
+    if coin == s.coin then None
+    else
+      for
+        r <- s.refs.get(coin)
+        m <- s.candles.get(interval)
+        c <- r.candles.get(interval)
+        v <- correlation(m, c, n)
+      yield v
 
   def half(cols: Int): Int = ((cols - 50) / 4).max(4).min(30)
 
-  def track(v: Option[Double], h: Int): String =
-    val cells = ("." * h + "|" + "." * h).toCharArray
-    v.foreach(x => cells(h + Screen.round(x * h).toInt.max(-h).min(h)) = '#')
-    new String(cells)
+  def track(v: Option[Double], h: Int, style: String): String =
+    val base = "." * h + "|" + "." * h
+    v.fold(base) { x =>
+      val at = h + Screen.round(x * h).toInt.max(-h).min(h)
+      val mark = if style.isEmpty then Chart.FULL else style + Chart.FULL + Screen.reset
+      base.take(at) + mark + base.drop(at + 1)
+    }
 
   def mean(xs: Vector[Double]): Option[Double] = if xs.isEmpty then None else Some(xs.sum / xs.size)
 
@@ -87,7 +82,39 @@ object Gauges:
     val text = Chart.rjust(name, 4)
     if secs * 1000 > now - s.since then Screen.dim + text + Screen.reset else text
 
-  def bookRow(s: Snapshot, name: String, secs: Long, now: Long, t: Option[Double], h: Int): String =
+  def tapeStats(
+      tape: Vector[Trade],
+      now: Long,
+      lenses: Vector[Long]
+  ): Vector[(Option[Double], Int)] =
+    val n = lenses.size
+    val cuts = lenses.map(secs => now - secs * 1000).toArray
+    val buy = Array.fill(n)(0.0)
+    val sell = Array.fill(n)(0.0)
+    val count = Array.fill(n)(0)
+    tape.foreach { x =>
+      val sz = x.sz.toDouble
+      val isBuy = x.side == Side.Buy
+      var k = 0
+      while k < n do
+        if x.time > cuts(k) then
+          if isBuy then buy(k) += sz else sell(k) += sz
+          count(k) += 1
+        k += 1
+    }
+    (0 until n).toVector.map(k => ratio(buy(k), sell(k), count(k)))
+
+  private def sideStyle(v: Option[Double], st: Style): String =
+    v.fold("")(x => if x >= 0 then st.bid else st.ask)
+
+  private def corrHalf(s: Snapshot, coin: String, name: String, i: Int, h: Int, st: Style): String =
+    val (hz, interval, n) = horizons(i)
+    val v = lens(s, coin, interval, n)
+    val colour = if st.colour then (if coin == "BTC" then st.btc else st.gold) else ""
+    s" ${st.wrap(colour, name)} ${Chart.rjust(hz, 3)} ${track(v, h, colour)} ${fmt(v, 'r')}"
+
+  def bookRow(s: Snapshot, i: Int, now: Long, h: Int, st: Style): String =
+    val (name, secs) = bookLenses(i)
     val set =
       if secs == 0 then s.book.toVector
       else
@@ -96,29 +123,24 @@ object Gauges:
     val readings = set.map(imbalance)
     val d = mean(readings.map(_._2))
     val q = mean(readings.map(_._1))
-    val dBig = mean(set.flatMap(b => t.flatMap(imbalanceBig(b, _))))
-    val counts =
-      if secs == 0 then
-        (for b <- s.book; tt <- t yield bigCounts(b, tt)).fold("")((nb, na) => s" b$nb a$na")
-      else ""
-    s"BOOK ${label(s, name, secs, now)} ${track(d, h)} ${fmt(d, 'D')} ${fmt(q, 'Q')}  big ${track(dBig, h)} ${fmt(dBig, 'D')}$counts"
+    s"BOOK ${label(s, name, secs, now)} ${track(d, h, sideStyle(d, st))} ${fmt(d, 'D')} ${fmt(q, 'Q')} " +
+      corrHalf(s, "BTC", "BTC ", i, h, st)
 
   private def tapeText(
       s: Snapshot,
-      name: String,
-      secs: Long,
+      i: Int,
       now: Long,
       all: (Option[Double], Int),
-      big: (Option[Double], Int),
-      h: Int
+      h: Int,
+      st: Style
   ): String =
+    val (name, secs) = tapeLenses(i)
     val (f, n) = all
-    val (fb, nb) = big
-    f"TAPE ${label(s, name, secs, now)} ${track(f, h)} ${fmt(f, 'F')} n=$n%-5d big ${track(fb, h)} ${fmt(fb, 'F')} n=$nb"
+    f"TAPE ${label(s, name, secs, now)} ${track(f, h, sideStyle(f, st))} ${fmt(f, 'F')} n=$n%-5d" +
+      corrHalf(s, "PAXG", "GOLD", i, h, st)
 
-  def tapeRow(s: Snapshot, name: String, secs: Long, now: Long, t: Option[Double], h: Int): String =
-    val (all, big) = tapeStats(s.tape, now, t, Vector(secs)).head
-    tapeText(s, name, secs, now, all, big, h)
+  def tapeRow(s: Snapshot, i: Int, now: Long, h: Int, st: Style): String =
+    tapeText(s, i, now, tapeStats(s.tape, now, Vector(tapeLenses(i)._2)).head, h, st)
 
   private def fit(line: String, cols: Int): String =
     val visible = Chart.plain(line).length
@@ -132,11 +154,9 @@ object Gauges:
       }
       out.toString
 
-  def rows(s: Snapshot, now: Long, cols: Int, t: Option[Double]): Vector[String] =
+  def rows(s: Snapshot, now: Long, cols: Int, st: Style): Vector[String] =
     val h = half(cols)
-    val stats = tapeStats(s.tape, now, t, tapeLenses.map(_._2))
-    val lines = bookLenses.map((name, secs) => bookRow(s, name, secs, now, t, h)) ++
-      tapeLenses.zip(stats).map { case ((name, secs), (all, big)) =>
-        tapeText(s, name, secs, now, all, big, h)
-      }
+    val stats = tapeStats(s.tape, now, tapeLenses.map(_._2))
+    val lines = bookLenses.indices.toVector.map(i => bookRow(s, i, now, h, st)) ++
+      stats.zipWithIndex.map((all, i) => tapeText(s, i, now, all, h, st))
     lines.map(l => fit(l, cols))

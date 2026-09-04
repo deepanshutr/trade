@@ -73,6 +73,5 @@ object Screen:
       val axisLine =
         Chart.rjust(s"${z}s/col", Layout.leftW - 1) + " " + Chart.axisRow(first, z, dots, zone) +
           " " * Layout.scaleW
-      val t = Gauges.threshold(s.tape, now)
-      (stats(s, now, cols, t) +: priceLines) ++ volLines ++ Vector(axisLine) ++
-        Gauges.rows(s, now, cols, t)
+      (stats(s, now, cols, None) +: priceLines) ++ volLines ++ Vector(axisLine) ++
+        Gauges.rows(s, now, cols, Style.colour)

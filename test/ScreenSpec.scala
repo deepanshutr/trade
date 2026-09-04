@@ -137,15 +137,6 @@ class ScreenSpec extends munit.FunSuite:
     assertEquals(frame.drop(18).map(_.take(4)), Vector.fill(6)("BOOK") ++ Vector.fill(6)("TAPE"))
   }
 
-  test("the stats line carries the big threshold and no interval") {
-    val line = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone).head
-    assert(line.contains("big>$"), line)
-    assert(!line.contains(" 1m "), line)
-    assert(line.indexOf("big>$") < line.indexOf("live"), line)
-    assertEquals(Screen.bigToken(None), "big --")
-    assertEquals(Screen.bigToken(Some(410.29)), "big>$410")
-    assertEquals(Screen.bigToken(Some(1234.0)), "big>$1.2k")
-  }
   test("write the golden frames when asked") {
     assume(sys.env.contains("WRITE_GOLDEN"), "set WRITE_GOLDEN=1 to regenerate the frames")
     java.nio.file.Files.createDirectories(java.nio.file.Paths.get("golden"))
