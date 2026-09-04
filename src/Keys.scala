@@ -13,7 +13,6 @@ object Keys:
 
   private def plain(byte: Int): Option[Command] = byte match
     case 113 | 3 => Some(Command.Quit)
-    case 105     => Some(Command.NextInterval)
     case 109     => Some(Command.StartMarketPrompt)
     case _       => None
 

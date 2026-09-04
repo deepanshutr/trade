@@ -22,7 +22,7 @@ enum Health:
   case Down(since: Long, lastMsgAt: Long)
 
 enum Command:
-  case Quit, NextInterval, StartMarketPrompt, PromptBackspace, PromptCancel, PromptSubmit
+  case Quit, StartMarketPrompt, PromptBackspace, PromptCancel, PromptSubmit
   case PromptChar(c: Char)
   case ZoomIn, ZoomOut, ScrubBack, ScrubForward
 
@@ -43,7 +43,6 @@ enum Event:
 
 final case class Snapshot(
     coin: String,
-    interval: String,
     book: Option[Book],
     tape: Vector[Trade],
     candles: Vector[Candle],
@@ -62,10 +61,9 @@ final case class Snapshot(
 )
 
 object Snapshot:
-  def initial(coin: String, interval: String, now: Long): Snapshot =
+  def initial(coin: String, now: Long): Snapshot =
     Snapshot(
       coin,
-      interval,
       None,
       Vector.empty,
       Vector.empty,
@@ -84,7 +82,6 @@ object Snapshot:
     )
 
 object State:
-  val intervals: Vector[String] = Vector("1m", "5m", "15m", "1h", "4h", "1d")
   val tapeCap: Int = 200_000
   val candleCap = 1200
   val zooms: Vector[Int] = Vector(1, 2, 5, 10, 30, 60, 120, 300)
@@ -148,11 +145,7 @@ object State:
     case Event.Resize(c, r) => s.copy(cols = c.max(Layout.minCols), rows = r.max(Layout.minRows))
 
   private def key(s: Snapshot, cmd: Command, now: Long): Snapshot = cmd match
-    case Command.Quit         => s.copy(quit = true)
-    case Command.NextInterval =>
-      val i = intervals.indexOf(s.interval)
-      val next = if i < 0 then intervals.head else intervals((i + 1) % intervals.size)
-      s.copy(interval = next, candles = Vector.empty)
+    case Command.Quit              => s.copy(quit = true)
     case Command.StartMarketPrompt => s.copy(prompt = Some(""))
     case Command.PromptChar(c)     => s.copy(prompt = s.prompt.map(_ + c))
     case Command.PromptBackspace   => s.copy(prompt = s.prompt.map(_.dropRight(1)))

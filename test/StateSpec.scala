@@ -6,14 +6,14 @@ class StateSpec extends munit.FunSuite:
   def book(time: Long, bids: Seq[(String, String)], asks: Seq[(String, String)]) =
     Book(bids.map(lv).toVector, asks.map(lv).toVector, time)
   val b1 = book(1000, Seq("100" -> "1", "99" -> "2"), Seq("101" -> "3", "102" -> "4"))
-  val s0 = Snapshot.initial("XMR", "5m", t0)
+  val s0 = Snapshot.initial("XMR", t0)
   private def bookAt(bid: String, ask: String, t: Long): Book =
     book(t, Seq(bid -> "1"), Seq(ask -> "1"))
   private def press(s: Snapshot, c: Command, now: Long = t0): Snapshot =
     State.reduce(s, Event.Key(c), now)
 
   test("the initial snapshot seeds the feed six seconds stale so the screen starts honest") {
-    assertEquals(State.lastMsgAt(Snapshot.initial("X", "5m", t0).feed), t0 - 6000)
+    assertEquals(State.lastMsgAt(Snapshot.initial("X", t0).feed), t0 - 6000)
   }
   test("a socket book marks the socket live and replaces the book") {
     val s = State.reduce(s0, Event.BookUpdate(b1, fromSocket = true), t0 + 10)
@@ -131,16 +131,6 @@ class StateSpec extends munit.FunSuite:
   test("quit sets the flag") {
     assert(State.reduce(s0, Event.Key(Command.Quit), t0).quit)
   }
-  test("next interval cycles, wraps, enters the cycle from outside, and clears candles") {
-    val withCandle = s0.copy(candles = Vector(Candle(1, 1, 1, 1, 1, 1)))
-    val s1 = State.reduce(withCandle, Event.Key(Command.NextInterval), t0)
-    assertEquals(s1.interval, "15m")
-    assertEquals(s1.candles, Vector.empty)
-    val s2 = State.reduce(s0.copy(interval = "1d"), Event.Key(Command.NextInterval), t0)
-    assertEquals(s2.interval, "1m")
-    val s3 = State.reduce(s0.copy(interval = "3m"), Event.Key(Command.NextInterval), t0)
-    assertEquals(s3.interval, "1m")
-  }
   test("the prompt opens, takes characters, backspaces, cancels") {
     val s1 = State.reduce(s0, Event.Key(Command.StartMarketPrompt), t0)
     assertEquals(s1.prompt, Some(""))
@@ -166,7 +156,6 @@ class StateSpec extends munit.FunSuite:
     assertEquals(s.tape, Vector.empty)
     assertEquals(s.candles, Vector.empty)
     assertEquals(s.ctx, None)
-    assertEquals(s.interval, full.interval)
     assertEquals(s.feed, full.feed)
     assertEquals(s.bad, full.bad)
     val empty = State.reduce(opened, Event.Key(Command.PromptSubmit), t0)

@@ -36,36 +36,17 @@ object Feed:
     case 3 => 4000L
     case _ => 8000L
 
-  def intervalMs(i: String): Long =
-    val minute = 60_000L
-    val hour = 60 * minute
-    val day = 24 * hour
-    i match
-      case "1m"  => minute
-      case "3m"  => 3 * minute
-      case "5m"  => 5 * minute
-      case "15m" => 15 * minute
-      case "30m" => 30 * minute
-      case "1h"  => hour
-      case "2h"  => 2 * hour
-      case "4h"  => 4 * hour
-      case "8h"  => 8 * hour
-      case "12h" => 12 * hour
-      case "1d"  => day
-      case "3d"  => 3 * day
-      case "1w"  => 7 * day
-      case _     => 30 * day
+  val interval = "1m"
+  val historyMs = 1000L * 60_000L
 
 final class Feed(
     connector: Connector,
     rest: Rest,
     queue: java.util.Queue[Event],
     clock: () => Long,
-    coin0: String,
-    interval0: String
+    coin0: String
 ):
   @volatile var coin: String = coin0
-  @volatile var interval: String = interval0
   @volatile private var socket: Option[Socket] = None
   private val sendLock = new Object
 
@@ -75,16 +56,16 @@ final class Feed(
   private def sub(kind: String, c: String, extra: String = ""): String =
     s"""{"method":"subscribe","subscription":{"type":"$kind","coin":"$c"$extra}}"""
 
-  def subscriptions(c: String, i: String): Vector[String] = Vector(
+  def subscriptions(c: String): Vector[String] = Vector(
     sub("l2Book", c),
     sub("bbo", c),
     sub("trades", c),
-    sub("candle", c, s""","interval":"$i""""),
+    sub("candle", c, s""","interval":"${Feed.interval}""""),
     sub("activeAssetCtx", c)
   )
 
-  def unsubscriptions(c: String, i: String): Vector[String] =
-    subscriptions(c, i).map(_.replace("\"method\":\"subscribe\"", "\"method\":\"unsubscribe\""))
+  def unsubscriptions(c: String): Vector[String] =
+    subscriptions(c).map(_.replace("\"method\":\"subscribe\"", "\"method\":\"unsubscribe\""))
 
   def send(text: String): Unit = sendLock.synchronized {
     socket.foreach(_.send(text))
@@ -100,7 +81,7 @@ final class Feed(
       case None    => false
       case Some(s) =>
         socket = Some(s)
-        subscriptions(coin, interval).foreach(send)
+        subscriptions(coin).foreach(send)
         push(Event.SocketUp)
         fetchHistory()
         closed.await()
@@ -125,24 +106,18 @@ final class Feed(
 
   def fetchHistory(): Unit =
     val now = clock()
-    val start = now - 200L * Feed.intervalMs(interval)
+    val start = now - Feed.historyMs
     val body =
-      s"""{"type":"candleSnapshot","req":{"coin":"$coin","interval":"$interval","startTime":$start,"endTime":$now}}"""
+      s"""{"type":"candleSnapshot","req":{"coin":"$coin","interval":"${Feed.interval}","startTime":$start,"endTime":$now}}"""
     rest.post(body).flatMap(Events.parseRestCandles) match
       case Some(cs) => push(Event.CandleHistory(cs))
       case None     => push(Event.CandleHistoryFailed)
 
-  def setMarket(newCoin: String, newInterval: String): Unit =
+  def setMarket(newCoin: String): Unit =
     if newCoin != coin then
-      unsubscriptions(coin, interval).foreach(send)
+      unsubscriptions(coin).foreach(send)
       coin = newCoin
-      interval = newInterval
-      subscriptions(coin, interval).foreach(send)
-      fetchHistory()
-    else if newInterval != interval then
-      send(unsubscriptions(coin, interval)(3))
-      interval = newInterval
-      send(subscriptions(coin, interval)(3))
+      subscriptions(coin).foreach(send)
       fetchHistory()
 
 object JdkConnector extends Connector:

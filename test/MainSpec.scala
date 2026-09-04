@@ -1,18 +1,11 @@
 package desk
 
 class MainSpec extends munit.FunSuite:
-  test("arguments: defaults, a coin, an interval, and errors") {
-    assertEquals(Main.parseArgs(Nil), Right(Main.Args("XMR", "5m")))
-    assertEquals(Main.parseArgs(Seq("BTC")), Right(Main.Args("BTC", "5m")))
-    assertEquals(
-      Main.parseArgs(Seq("flx:GOLD", "--interval", "1h")),
-      Right(Main.Args("flx:GOLD", "1h"))
-    )
-    assertEquals(Main.parseArgs(Seq("--interval", "15m")), Right(Main.Args("XMR", "15m")))
-    assert(Main.parseArgs(Seq("--interval", "7m")).isLeft)
-    assert(Main.parseArgs(Seq("--interval")).isLeft)
-    assert(Main.parseArgs(Seq("--nope")).isLeft)
-    assert(Main.parseArgs(Seq("A", "B")).isLeft)
+  test("parseArgs takes an optional coin and nothing else") {
+    assertEquals(Main.parseArgs(Nil), Right(Main.Args("XMR")))
+    assertEquals(Main.parseArgs(Seq("BTC")), Right(Main.Args("BTC")))
+    assert(Main.parseArgs(Seq("--interval", "5m")).isLeft)
+    assert(Main.parseArgs(Seq("BTC", "ETH")).isLeft)
   }
   test("a size event fires only when the size changes") {
     assertEquals(Main.sizeEvent((100, 30), (100, 30)), None)
@@ -25,5 +18,5 @@ class MainSpec extends munit.FunSuite:
     assertEquals(Main.nextPromptOpen(true, Command.PromptChar('x')), true)
     assertEquals(Main.nextPromptOpen(true, Command.PromptBackspace), true)
     assertEquals(Main.nextPromptOpen(false, Command.Quit), false)
-    assertEquals(Main.nextPromptOpen(false, Command.NextInterval), false)
+    assertEquals(Main.nextPromptOpen(false, Command.ZoomIn), false)
   }

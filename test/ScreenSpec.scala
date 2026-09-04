@@ -20,7 +20,7 @@ class ScreenSpec extends munit.FunSuite:
   test("the stats line shows the figures, the age, stale, bad and the prompt") {
     val ctx =
       Ctx("522.28", "521.515", "0.0001302411", "210160.16", "31202156.16", "529.78", Some("522.26"))
-    val s = Snapshot.initial("XMR", "5m", t0).copy(ctx = Some(ctx), feed = Health.Live(t0 - 300))
+    val s = Snapshot.initial("XMR", t0).copy(ctx = Some(ctx), feed = Health.Live(t0 - 300))
     val line = Screen.stats(s, t0, 110, None)
     assertEquals(line.length, 110)
     val expected = "XMR  522.26  mark 522.28  orc 521.515  24h -1.4%  fund 0.0130%  " +
@@ -33,25 +33,25 @@ class ScreenSpec extends munit.FunSuite:
     assert(staleLine.contains("STALE 12s"), staleLine)
     assert(staleLine.contains("bad 3"), staleLine)
     assert(Screen.stats(s.copy(prompt = Some("BT")), t0, 110, None).startsWith("market: BT_"))
-    val bare = Snapshot.initial("XMR", "5m", t0).copy(feed = Health.Live(t0))
+    val bare = Snapshot.initial("XMR", t0).copy(feed = Health.Live(t0))
     assert(Screen.stats(bare, t0, 110, None).startsWith("XMR  -  big --  live 0.0s"))
   }
   test("the stats line prints the book mid, falling back to the context mid without a book") {
     val ctx =
       Ctx("522.28", "521.515", "0.0001302411", "210160.16", "31202156.16", "529.78", Some("522.26"))
     val book = Book(Vector(lv("500.10", "1")), Vector(lv("500.20", "1")), t0)
-    val s = Snapshot.initial("XMR", "5m", t0).copy(ctx = Some(ctx), feed = Health.Live(t0))
+    val s = Snapshot.initial("XMR", t0).copy(ctx = Some(ctx), feed = Health.Live(t0))
     assert(Screen.stats(s, t0, 110, None).startsWith("XMR  522.26  "), "no book")
     val withBook = Screen.stats(s.copy(book = Some(book)), t0, 110, None)
     assert(withBook.startsWith("XMR  500.15  "), withBook)
   }
   test("the feed is stale past five seconds, not six") {
-    val s = Snapshot.initial("XMR", "5m", t0).copy(feed = Health.Live(t0 - 5500))
+    val s = Snapshot.initial("XMR", t0).copy(feed = Health.Live(t0 - 5500))
     val line = Screen.stats(s, t0, 100, None)
     assert(line.contains("STALE"), line)
   }
   test("the socket age never goes negative, even if the last message is ahead of now") {
-    val s = Snapshot.initial("X", "5m", t0).copy(feed = Health.Live(t0 + 400))
+    val s = Snapshot.initial("X", t0).copy(feed = Health.Live(t0 + 400))
     val line = Screen.stats(s, t0, 100, None)
     assert(line.contains("live 0.0s"), line)
   }
@@ -59,7 +59,7 @@ class ScreenSpec extends munit.FunSuite:
     val ctx =
       Ctx("522.28", "521.515", "0.0001302411", "210160.16", "31202156.16", "529.78", Some("522.26"))
     val s = Snapshot
-      .initial("flx:GOLD", "5m", t0)
+      .initial("flx:GOLD", t0)
       .copy(ctx = Some(ctx), feed = Health.Down(t0 - 12_000, t0 - 12_300), bad = 3)
     val line = Screen.stats(s, t0, 100, None)
     assertEquals(line.length, 100)

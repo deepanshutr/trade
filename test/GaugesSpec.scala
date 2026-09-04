@@ -7,7 +7,7 @@ class GaugesSpec extends munit.FunSuite:
   private val now = 1_700_000_000_000L
   private def trade(agoMs: Long, side: Side, px: String, sz: String): Trade =
     Trade(now - agoMs, side, px, sz)
-  private def s0: Snapshot = Snapshot.initial("XMR", "1m", now)
+  private def s0: Snapshot = Snapshot.initial("XMR", now)
 
   test("the threshold is the 90th percentile of dollar size over fifteen minutes") {
     val ts = (1 to 10).toVector.map(i => trade(i * 1000L, Side.Buy, "1", i.toString))

@@ -7,7 +7,7 @@ object Golden:
   def fixture(name: String): String = Files.readString(Paths.get("fixtures", name))
   private def level(px: Double): Level = Level(f"$px%.3f", "1", 1)
   lazy val snapshot: Snapshot =
-    val s0 = Snapshot.initial("XMR", "1m", now - 310_000)
+    val s0 = Snapshot.initial("XMR", now - 310_000)
     val mids =
       ujson.read(fixture("mids_5m.json")).arr.toVector.map(a => (a(0).num.toLong, a(1).num))
     val books =

@@ -14,6 +14,7 @@ class KeysSpec extends munit.FunSuite:
     assertEquals(feed(3)(), Vector(Command.Quit))
     assertEquals(feed(109)(), Vector(Command.StartMarketPrompt))
     assertEquals(feed(120)(), Vector.empty)
+    assertEquals(feed(105)(), Vector.empty)
   }
 
   test("arrows in both sequences map to zoom and scrub") {

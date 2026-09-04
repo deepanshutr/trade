@@ -4,22 +4,17 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 
 object Main:
-  final case class Args(coin: String, interval: String)
-  val usage = "usage: desk [COIN] [--interval I]"
-  private val intervals =
-    Set("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "1w", "1M")
+  final case class Args(coin: String)
+  val usage = "usage: desk [COIN]"
 
   def parseArgs(args: Seq[String]): Either[String, Args] =
-    def loop(rest: List[String], coin: Option[String], interval: String): Either[String, Args] =
+    def loop(rest: List[String], coin: Option[String]): Either[String, Args] =
       rest match
-        case Nil => Right(Args(coin.getOrElse("XMR"), interval))
-        case "--interval" :: i :: tail if intervals(i) => loop(tail, coin, i)
-        case "--interval" :: i :: _                    => Left(s"unknown interval $i")
-        case "--interval" :: Nil                       => Left("--interval needs a value")
-        case flag :: _ if flag.startsWith("--")        => Left(s"unknown flag $flag")
-        case c :: tail if coin.isEmpty                 => loop(tail, Some(c), interval)
-        case extra :: _                                => Left(s"unexpected argument $extra")
-    loop(args.toList, None, "5m")
+        case Nil                                => Right(Args(coin.getOrElse("XMR")))
+        case flag :: _ if flag.startsWith("--") => Left(s"unknown flag $flag")
+        case c :: tail if coin.isEmpty          => loop(tail, Some(c))
+        case extra :: _                         => Left(s"unexpected argument $extra")
+    loop(args.toList, None)
 
   def nextPromptOpen(promptOpen: Boolean, command: Command): Boolean = command match
     case Command.StartMarketPrompt                   => true
@@ -45,8 +40,8 @@ object Main:
   def run(args: Args): Unit =
     val now = () => System.currentTimeMillis()
     val queue = new LinkedBlockingQueue[Event]()
-    val state = new AtomicReference(Snapshot.initial(args.coin, args.interval, now()))
-    val feed = new Feed(JdkConnector, JdkRest, queue, now, args.coin, args.interval)
+    val state = new AtomicReference(Snapshot.initial(args.coin, now()))
+    val feed = new Feed(JdkConnector, JdkRest, queue, now, args.coin)
     val zone = java.time.ZoneId.systemDefault()
     val saved = scala.util.Try(Term.enterRaw()).getOrElse {
       System.err.println("desk needs a terminal")
@@ -90,8 +85,7 @@ object Main:
         val before = state.get()
         val after = State.reduce(before, event, now())
         state.set(after)
-        if after.coin != before.coin || after.interval != before.interval then
-          feed.setMarket(after.coin, after.interval)
+        if after.coin != before.coin then feed.setMarket(after.coin)
     }
     var last: Snapshot = null
     var lastFrameAt = 0L

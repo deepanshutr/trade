@@ -7,7 +7,7 @@ class ChartSpec extends munit.FunSuite:
   private def lvl(px: String, sz: String = "1"): Level = Level(px, sz, 1)
   private def col(v: Double, vol: Double = 0.0): Option[Column] = Some(Column(v, v, v, v, vol))
   private val t0 = 1_700_000_000_000L
-  private def s0: Snapshot = Snapshot.initial("XMR", "1m", t0)
+  private def s0: Snapshot = Snapshot.initial("XMR", t0)
 
   test("a canvas maps dots to braille bits") {
     val cv = Canvas(1, 1)

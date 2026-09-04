@@ -46,7 +46,7 @@ class FeedSpec extends munit.FunSuite:
   }
   def newFeed(connector: Connector, rest: Rest, clock: () => Long = () => 1_000_000L) =
     val queue = new ConcurrentLinkedQueue[Event]()
-    (new Feed(connector, rest, queue, clock, "XMR", "5m"), queue)
+    (new Feed(connector, rest, queue, clock, "XMR"), queue)
   def startConnected(feed: Feed): Thread =
     val t = new Thread(() => { val _ = feed.connectOnce() })
     t.setDaemon(true)
@@ -69,13 +69,13 @@ class FeedSpec extends munit.FunSuite:
     val (feed, queue) = newFeed(c, rest)
     val t = startConnected(feed)
     val sent = c.sockets.peek().sent.asScala.toVector
-    assertEquals(sent, feed.subscriptions("XMR", "5m"))
+    assertEquals(sent, feed.subscriptions("XMR"))
     assert(
       sent(0).contains("\"l2Book\"") && sent(1).contains("\"bbo\"") && sent(2).contains(
         "\"trades\""
       )
     )
-    assert(sent(3).contains("\"candle\"") && sent(3).contains("\"interval\":\"5m\""))
+    assert(sent(3).contains("\"candle\"") && sent(3).contains("\"interval\":\"1m\""))
     assert(sent(4).contains("\"activeAssetCtx\""))
     assert(rest.bodies.asScala.exists(_.contains("candleSnapshot")))
     val events = queue.asScala.toVector
@@ -123,13 +123,14 @@ class FeedSpec extends munit.FunSuite:
     feed3.poll()
     assert(queue3.isEmpty)
   }
-  test("history asks for 200 intervals ending now and a failure is reported") {
+  test("history asks for a thousand minutes ending now and a failure is reported") {
     val rest = restAnswering()
     val (feed, queue) = newFeed(new FakeConnector, rest, () => 10_000_000L)
     feed.fetchHistory()
     val body = rest.bodies.asScala.last
-    assert(body.contains("\"startTime\":" + (10_000_000L - 200L * 300_000L)), body)
+    assert(body.contains("\"startTime\":" + (10_000_000L - 60_000_000L)), body)
     assert(body.contains("\"endTime\":10000000"), body)
+    assert(body.contains("\"interval\":\"1m\""), body)
     assert(queue.asScala.toVector.head.isInstanceOf[Event.CandleHistory])
     val (feed2, queue2) = newFeed(new FakeConnector, restAnswering(candles = false))
     feed2.fetchHistory()
@@ -155,38 +156,7 @@ class FeedSpec extends munit.FunSuite:
     Thread.sleep(300)
     assertEquals(waits.asScala.toVector.take(3), Vector(1000L, 2000L, 1000L))
   }
-  test(
-    "an interval change resubscribes candles only, a coin change resubscribes all five and moves the poll"
-  ) {
-    val c = new FakeConnector
-    val rest = restAnswering()
-    val (feed, _) = newFeed(c, rest)
-    val t = startConnected(feed)
-    val s = c.sockets.peek()
-    s.sent.clear()
-    feed.setMarket("XMR", "1h")
-    val afterInterval = s.sent.asScala.toVector
-    assertEquals(afterInterval.size, 2)
-    assert(afterInterval(0).contains("\"unsubscribe\"") && afterInterval(0).contains("\"candle\""))
-    assert(afterInterval(0).contains("\"5m\""))
-    assert(afterInterval(1).contains("\"subscribe\"") && afterInterval(1).contains("\"1h\""))
-    assertEquals(feed.interval, "1h")
-    s.sent.clear()
-    feed.setMarket("BTC", "1h")
-    val afterCoin = s.sent.asScala.toVector
-    assertEquals(afterCoin.size, 10)
-    assert(afterCoin.take(5).forall(m => m.contains("\"unsubscribe\"") && m.contains("\"XMR\"")))
-    assert(afterCoin.drop(5).forall(m => m.contains("\"subscribe\"") && m.contains("\"BTC\"")))
-    feed.poll()
-    assert(rest.bodies.asScala.last.contains("\"coin\":\"BTC\""))
-    c.onClose()
-    t.join(1000)
-  }
-  test("interval lengths in milliseconds") {
-    assertEquals(Feed.intervalMs("1m"), 60_000L)
-    assertEquals(Feed.intervalMs("5m"), 300_000L)
-    assertEquals(Feed.intervalMs("1h"), 3_600_000L)
-    assertEquals(Feed.intervalMs("1d"), 86_400_000L)
-    assertEquals(Feed.intervalMs("1w"), 7 * 86_400_000L)
-    assertEquals(Feed.intervalMs("1M"), 30 * 86_400_000L)
+  test("the candle stream is one minute and history is a thousand minutes") {
+    assertEquals(Feed.interval, "1m")
+    assertEquals(Feed.historyMs, 60_000_000L)
   }
