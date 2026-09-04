@@ -81,10 +81,10 @@ class GaugesSpec extends munit.FunSuite:
       since = now - 15_000
     )
     val row = Gauges.bookRow(s, 0, now, 13, Style.mono)
-    assertEquals(row, s"BOOK  now ${tr(Some(0.0))} D+0.00 Q+0.00  BTC  15m ${tr(None)} r --")
+    assertEquals(row, s"BOOK  now ${tr(Some(0.0))} D+0.00 Q+0.00  BTC  15m ${tr(None)} r   --")
     assertEquals(
       Gauges.bookRow(s, 2, now, 13, Style.mono),
-      s"BOOK ${Screen.dim} 30s${Screen.reset} ${tr(Some(-0.25))} D-0.25 Q-0.25  BTC   4h ${tr(None)} r --"
+      s"BOOK ${Screen.dim} 30s${Screen.reset} ${tr(Some(-0.25))} D-0.25 Q-0.25  BTC   4h ${tr(None)} r   --"
     )
     val coloured = Gauges.bookRow(s, 0, now, 13, Style.colour)
     assert(coloured.contains(Style.colour.btc + "BTC " + Screen.reset), coloured)
@@ -105,7 +105,7 @@ class GaugesSpec extends munit.FunSuite:
     )
     assertEquals(
       Gauges.bookRow(s, 1, now, 13, Style.mono),
-      s"BOOK  10s ${tr(Some(0.25))} D+0.25 Q+0.25  BTC   1h ${tr(None)} r --"
+      s"BOOK  10s ${tr(Some(0.25))} D+0.25 Q+0.25  BTC   1h ${tr(None)} r   --"
     )
   }
 
@@ -122,11 +122,11 @@ class GaugesSpec extends munit.FunSuite:
     )
     assertEquals(
       Gauges.tapeRow(s, 0, now, 13, Style.mono),
-      s"TAPE  10s ${tr(Some(1.0))} F+1.00 n=1     GOLD 15m ${tr(None)} r --"
+      s"TAPE  10s ${tr(Some(1.0))} F+1.00 n=1     GOLD 15m ${tr(None)} r   --"
     )
     assertEquals(
       Gauges.tapeRow(s, 1, now, 13, Style.mono),
-      s"TAPE   1m ${tr(Some(-0.5))} F-0.50 n=2     GOLD  1h ${tr(None)} r --"
+      s"TAPE   1m ${tr(Some(-0.5))} F-0.50 n=2     GOLD  1h ${tr(None)} r   --"
     )
     val coloured = Gauges.tapeRow(s, 1, now, 13, Style.colour)
     assert(coloured.contains(Style.colour.ask + FULL + Screen.reset), coloured)
@@ -137,13 +137,12 @@ class GaugesSpec extends munit.FunSuite:
     val s = s0.copy(tape = Vector(trade(10_000L, Side.Buy, "100", "1")), since = now - 1_000_000L)
     assertEquals(
       Gauges.tapeRow(s, 0, now, 13, Style.mono),
-      s"TAPE  10s ${tr(None)} F -- n=0     GOLD 15m ${tr(None)} r --"
+      s"TAPE  10s ${tr(None)} F   -- n=0     GOLD 15m ${tr(None)} r   --"
     )
   }
 
   test("rows gives twelve lines of the width with the lenses in order") {
-    val s = s0.copy(book = Some(book("1", "1")), tape = Vector(trade(1_000L, Side.Buy, "100", "1")))
-    val rows = Gauges.rows(s, now, 100, Style.colour)
+    val rows = Gauges.rows(s0, now, 100, Style.colour)
     assertEquals(rows.size, 12)
     assert(rows.map(Chart.plain).forall(_.length == 100), rows.map(Chart.plain).map(_.length))
     assertEquals(
@@ -165,9 +164,20 @@ class GaugesSpec extends munit.FunSuite:
     )
     for cols <- 100 to 170 do
       assert(
-        Gauges.rows(s, now, cols, Style.colour).map(Chart.plain).forall(_.length == cols),
+        Gauges.rows(s0, now, cols, Style.colour).map(Chart.plain).forall(_.length == cols),
         cols
       )
+  }
+
+  test("the left half stays fifty characters wide even when every reading is undefined") {
+    Gauges.bookLenses.indices.foreach { i =>
+      val row = Chart.plain(Gauges.bookRow(s0, i, now, 12, Style.mono))
+      assert(row.take(50).length == 50 && row.drop(50).startsWith(" BTC"), row)
+    }
+    Gauges.tapeLenses.indices.foreach { i =>
+      val row = Chart.plain(Gauges.tapeRow(s0, i, now, 12, Style.mono))
+      assert(row.take(50).length == 50 && row.drop(50).startsWith(" GOLD"), row)
+    }
   }
 
   test("every gauge row is exactly the width, from a hundred columns to a hundred and seventy") {

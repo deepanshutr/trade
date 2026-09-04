@@ -76,7 +76,7 @@ object Gauges:
 
   def mean(xs: Vector[Double]): Option[Double] = if xs.isEmpty then None else Some(xs.sum / xs.size)
 
-  def fmt(v: Option[Double], letter: Char): String = v.fold(s"$letter --")(x => f"$letter$x%+.2f")
+  def fmt(v: Option[Double], letter: Char): String = v.fold(s"$letter   --")(x => f"$letter$x%+.2f")
 
   private def label(s: Snapshot, name: String, secs: Long, now: Long): String =
     val text = Chart.rjust(name, 4)
