@@ -32,15 +32,12 @@ proc wait_for {pattern seconds label} {
     }
 }
 
-set start [clock seconds]
-wait_for "book " 20 "book "
-set spent [expr {[clock seconds] - $start}]
-set remain [expr {20 - $spent}]
-if {$remain < 1} { set remain 1 }
-wait_for "live " $remain "live (after book)"
+wait_for "live " 20 "live "
 
-send "i"
-wait_for " 15m " 10 " 15m "
+send -- "${esc}\[A"
+wait_for " 2s/col " 10 "zoom out to two seconds per column"
+send -- "${esc}\[B"
+wait_for " 1s/col " 10 "zoom back to one second per column"
 
 send "m"
 send "BTC"
