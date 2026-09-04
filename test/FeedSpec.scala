@@ -156,6 +156,44 @@ class FeedSpec extends munit.FunSuite:
     Thread.sleep(300)
     assertEquals(waits.asScala.toVector.take(3), Vector(1000L, 2000L, 1000L))
   }
+  test(
+    "setMarket on a new coin unsubscribes the old five, subscribes the new five and refetches history; the same coin sends nothing"
+  ) {
+    val c = new FakeConnector
+    val rest = restAnswering()
+    val (feed, _) = newFeed(c, rest)
+    val t = startConnected(feed)
+    val s = c.sockets.peek()
+    val bodiesBefore = rest.bodies.asScala.size
+    s.sent.clear()
+    feed.setMarket("BTC")
+    val sent = s.sent.asScala.toVector
+    assertEquals(sent.size, 10)
+    assert(sent.take(5).forall(m => m.contains("\"unsubscribe\"") && m.contains("\"XMR\"")))
+    assert(sent.drop(5).forall(m => m.contains("\"subscribe\"") && m.contains("\"BTC\"")))
+    assert(sent(0).contains("\"l2Book\""))
+    assert(sent(1).contains("\"bbo\""))
+    assert(sent(2).contains("\"trades\""))
+    assert(sent(3).contains("\"candle\""))
+    assert(sent(4).contains("\"activeAssetCtx\""))
+    assert(sent(5).contains("\"l2Book\""))
+    assert(sent(6).contains("\"bbo\""))
+    assert(sent(7).contains("\"trades\""))
+    assert(sent(8).contains("\"candle\"") && sent(8).contains("\"interval\":\"1m\""))
+    assert(sent(9).contains("\"activeAssetCtx\""))
+    assert(
+      rest.bodies.asScala
+        .drop(bodiesBefore)
+        .exists(b => b.contains("candleSnapshot") && b.contains("\"coin\":\"BTC\""))
+    )
+    val bodiesAfterCoin = rest.bodies.asScala.size
+    s.sent.clear()
+    feed.setMarket("BTC")
+    assert(s.sent.isEmpty)
+    assertEquals(rest.bodies.asScala.size, bodiesAfterCoin)
+    c.onClose()
+    t.join(1000)
+  }
   test("the candle stream is one minute and history is a thousand minutes") {
     assertEquals(Feed.interval, "1m")
     assertEquals(Feed.historyMs, 60_000_000L)
