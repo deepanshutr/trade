@@ -92,7 +92,11 @@ class ChartSpec extends munit.FunSuite:
   }
 
   test("columns pick samples below sixty seconds and candles from sixty") {
-    val s = s0.copy(samples = Vector((999L, 1.0)), candles = Vector(Candle(0L, 2, 2, 2, 2, 1)))
+    val s =
+      s0.copy(
+        samples = Vector((999L, 1.0)),
+        candles = Map("1m" -> Vector(Candle(0L, 2, 2, 2, 2, 1)))
+      )
     assertEquals(Chart.columns(s, 2, 1_000_000L), Vector(col(1.0), col(1.0)))
     assertEquals(
       Chart.columns(s.copy(zoom = 5), 2, 119_000L),

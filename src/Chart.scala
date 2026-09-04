@@ -40,7 +40,7 @@ object Chart:
   def columns(s: Snapshot, dotCols: Int, now: Long): Vector[Option[Column]] =
     val (first, z) = window(s, dotCols, now)
     if z < 60 then fromSamples(s.samples, s.tape, first, z, dotCols)
-    else fromCandles(s.candles, first, z, dotCols)
+    else fromCandles(s.candles.getOrElse("1m", Vector.empty), first, z, dotCols)
 
   private def bucket(sec: Long, first: Long, z: Int): Int =
     (Math.floorDiv(sec, z.toLong) - first).toInt

@@ -10,7 +10,7 @@ class EventsSpec extends munit.FunSuite:
   }
   test("l2Book parses to a socket book with 20 levels a side") {
     Events.parse(fixture("l2Book.json")) match
-      case Some(Event.BookUpdate(b, true)) =>
+      case Some(Event.BookUpdate("XMR", b, true)) =>
         assertEquals(b.bids.size, 20)
         assertEquals(b.asks.size, 20)
         assertEquals(b.bids.head, Level("522.24", "0.766", 1))
@@ -22,7 +22,12 @@ class EventsSpec extends munit.FunSuite:
     assertEquals(
       Events.parse(fixture("bbo.json")),
       Some(
-        Event.BboUpdate(Level("522.24", "0.766", 1), Level("522.28", "5.487", 2), 1788345725728L)
+        Event.BboUpdate(
+          "XMR",
+          Level("522.24", "0.766", 1),
+          Level("522.28", "5.487", 2),
+          1788345725728L
+        )
       )
     )
   }
@@ -33,7 +38,7 @@ class EventsSpec extends munit.FunSuite:
   }
   test("trades parse in order with B as buy and A as sell") {
     Events.parse(fixture("trades.json")) match
-      case Some(Event.Trades(ts)) =>
+      case Some(Event.Trades("XMR", ts)) =>
         assertEquals(ts.size, 30)
         assertEquals(ts.head, Trade(1788345676023L, Side.Buy, "522.05", "0.421"))
         assert(ts.exists(_.side == Side.Sell))
@@ -48,7 +53,13 @@ class EventsSpec extends munit.FunSuite:
   test("candle parses its text prices to numbers") {
     assertEquals(
       Events.parse(fixture("candle.json")),
-      Some(Event.CandleUpdate(Candle(1788345720000L, 522.27, 522.27, 522.27, 522.27, 0.493)))
+      Some(
+        Event.CandleUpdate(
+          "XMR",
+          "1m",
+          Candle(1788345720000L, 522.27, 522.27, 522.27, 522.27, 0.493)
+        )
+      )
     )
   }
   test("activeAssetCtx keeps every figure as text") {
@@ -56,6 +67,7 @@ class EventsSpec extends munit.FunSuite:
       Events.parse(fixture("activeAssetCtx.json")),
       Some(
         Event.CtxUpdate(
+          "XMR",
           Ctx(
             "522.28",
             "521.515",
@@ -72,8 +84,8 @@ class EventsSpec extends munit.FunSuite:
   test("a context with a null mid keeps mid empty") {
     val text = fixture("activeAssetCtx.json").replace("\"midPx\":\"522.26\"", "\"midPx\":null")
     Events.parse(text) match
-      case Some(Event.CtxUpdate(c)) => assertEquals(c.mid, None)
-      case other                    => fail(s"unexpected $other")
+      case Some(Event.CtxUpdate(_, c)) => assertEquals(c.mid, None)
+      case other                       => fail(s"unexpected $other")
   }
   test("pong parses and subscriptionResponse is ignored") {
     assertEquals(Events.parse(fixture("pong.json")), Some(Event.Pong))
@@ -93,6 +105,25 @@ class EventsSpec extends munit.FunSuite:
   test("an unknown extra field still parses") {
     val text = fixture("bbo.json").replace("\"coin\":\"XMR\"", "\"coin\":\"XMR\",\"extra\":[1,2]")
     assert(Events.parse(text).exists(_.isInstanceOf[Event.BboUpdate]))
+  }
+  test("market events carry their market and candles their interval") {
+    val bbo = Events.parse(fixture("bbo.json")).get
+    assert(
+      bbo match { case Event.BboUpdate("XMR", _, _, _) => true; case _ => false },
+      bbo.toString
+    )
+    val one = Events.parse(fixture("candle.json")).get
+    assert(
+      one match { case Event.CandleUpdate("XMR", "1m", _) => true; case _ => false },
+      one.toString
+    )
+    val text = fixture("bbo.json").replace("\"XMR\"", "\"BTC\"")
+    assert(Events.parse(text).get match {
+      case Event.BboUpdate("BTC", _, _, _) => true; case _ => false
+    })
+  }
+  test("a trades message with no trades yields no event") {
+    assertEquals(Events.parse("""{"channel":"trades","data":[]}"""), None)
   }
   test("a REST book reply parses to a book") {
     val b = Events.parseRestBook(fixture("rest_l2Book.json")).get

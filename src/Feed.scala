@@ -99,18 +99,20 @@ final class Feed(
   def heartbeat(): Unit = send(Feed.ping)
 
   def poll(): Unit =
+    val c = coin
     rest
-      .post(s"""{"type":"l2Book","coin":"$coin"}""")
+      .post(s"""{"type":"l2Book","coin":"$c"}""")
       .flatMap(Events.parseRestBook)
-      .foreach(b => push(Event.BookUpdate(b, fromSocket = false)))
+      .foreach(b => push(Event.BookUpdate(c, b, fromSocket = false)))
 
   def fetchHistory(): Unit =
+    val c = coin
     val now = clock()
     val start = now - Feed.historyMs
     val body =
-      s"""{"type":"candleSnapshot","req":{"coin":"$coin","interval":"${Feed.interval}","startTime":$start,"endTime":$now}}"""
+      s"""{"type":"candleSnapshot","req":{"coin":"$c","interval":"${Feed.interval}","startTime":$start,"endTime":$now}}"""
     rest.post(body).flatMap(Events.parseRestCandles) match
-      case Some(cs) => push(Event.CandleHistory(cs))
+      case Some(cs) => push(Event.CandleHistory(c, Feed.interval, cs))
       case None     => push(Event.CandleHistoryFailed)
 
   def setMarket(newCoin: String): Unit =

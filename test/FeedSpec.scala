@@ -114,8 +114,8 @@ class FeedSpec extends munit.FunSuite:
     val (feed, queue) = newFeed(new FakeConnector, restAnswering())
     feed.poll()
     queue.asScala.toVector match
-      case Vector(Event.BookUpdate(b, false)) => assertEquals(b.time, 1788345727341L)
-      case other                              => fail(s"unexpected $other")
+      case Vector(Event.BookUpdate("XMR", b, false)) => assertEquals(b.time, 1788345727341L)
+      case other                                     => fail(s"unexpected $other")
     val (feed2, queue2) = newFeed(new FakeConnector, restAnswering(book = false))
     feed2.poll()
     assert(queue2.isEmpty)

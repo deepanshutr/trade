@@ -15,15 +15,31 @@ object Events:
   private def parseUnsafe(text: String): Option[Event] =
     val j = ujson.read(text)
     j("channel").str match
-      case "l2Book" => Some(Event.BookUpdate(book(j("data")), fromSocket = true))
-      case "bbo"    =>
+      case "l2Book" =>
+        val d = j("data")
+        Some(Event.BookUpdate(d("coin").str, book(d), fromSocket = true))
+      case "bbo" =>
         val d = j("data")
         val sides = d("bbo").arr
         if sides(0).isNull || sides(1).isNull then None
-        else Some(Event.BboUpdate(level(sides(0)), level(sides(1)), d("time").num.toLong))
-      case "trades"               => Some(Event.Trades(j("data").arr.toVector.map(trade)))
-      case "candle"               => Some(Event.CandleUpdate(candle(j("data"))))
-      case "activeAssetCtx"       => Some(Event.CtxUpdate(ctx(j("data")("ctx"))))
+        else
+          Some(
+            Event.BboUpdate(
+              d("coin").str,
+              level(sides(0)),
+              level(sides(1)),
+              d("time").num.toLong
+            )
+          )
+      case "trades" =>
+        val raw = j("data").arr.toVector
+        raw.headOption.map(first => Event.Trades(first("coin").str, raw.map(trade)))
+      case "candle" =>
+        val d = j("data")
+        Some(Event.CandleUpdate(d("s").str, d("i").str, candle(d)))
+      case "activeAssetCtx" =>
+        val d = j("data")
+        Some(Event.CtxUpdate(d("coin").str, ctx(d("ctx"))))
       case "pong"                 => Some(Event.Pong)
       case "subscriptionResponse" => None
       case other                  => Some(Event.Bad(s"channel $other"))

@@ -17,6 +17,11 @@ final case class Ctx(
     mid: Option[String]
 )
 
+final case class Ref(samples: Vector[(Long, Double)], candles: Map[String, Vector[Candle]])
+
+object Ref:
+  val empty: Ref = Ref(Vector.empty, Map.empty)
+
 enum Health:
   case Live(lastMsgAt: Long)
   case Down(since: Long, lastMsgAt: Long)
@@ -27,13 +32,14 @@ enum Command:
   case ZoomIn, ZoomOut, ScrubBack, ScrubForward
 
 enum Event:
-  case BookUpdate(book: Book, fromSocket: Boolean)
-  case BboUpdate(bid: Level, ask: Level, time: Long)
-  case Trades(trades: Vector[Trade])
-  case CandleUpdate(candle: Candle)
-  case CandleHistory(candles: Vector[Candle])
+  case BookUpdate(coin: String, book: Book, fromSocket: Boolean)
+  case CoarseBook(coin: String, sigFigs: Int, book: Book)
+  case BboUpdate(coin: String, bid: Level, ask: Level, time: Long)
+  case Trades(coin: String, trades: Vector[Trade])
+  case CandleUpdate(coin: String, interval: String, candle: Candle)
+  case CandleHistory(coin: String, interval: String, candles: Vector[Candle])
   case CandleHistoryFailed
-  case CtxUpdate(ctx: Ctx)
+  case CtxUpdate(coin: String, ctx: Ctx)
   case Pong
   case Bad(text: String)
   case SocketUp
@@ -45,7 +51,7 @@ final case class Snapshot(
     coin: String,
     book: Option[Book],
     tape: Vector[Trade],
-    candles: Vector[Candle],
+    candles: Map[String, Vector[Candle]],
     ctx: Option[Ctx],
     feed: Health,
     bad: Int,
@@ -57,7 +63,9 @@ final case class Snapshot(
     zoom: Int,
     offsetSec: Long,
     cols: Int,
-    rows: Int
+    rows: Int,
+    coarse: Map[Int, Book],
+    refs: Map[String, Ref]
 )
 
 object Snapshot:
@@ -66,7 +74,7 @@ object Snapshot:
       coin,
       None,
       Vector.empty,
-      Vector.empty,
+      Map.empty,
       None,
       Health.Down(now, now - 6000),
       0,
@@ -78,13 +86,42 @@ object Snapshot:
       0,
       0L,
       Layout.minCols,
-      Layout.minRows
+      Layout.minRows,
+      Map.empty,
+      State.refCoins.map(_ -> Ref.empty).toMap
     )
 
 object State:
   val tapeCap: Int = 200_000
-  val candleCap = 1200
-  val zooms: Vector[Int] = Vector(1, 2, 5, 10, 30, 60, 120, 300)
+  val refCoins: Vector[String] = Vector("BTC", "PAXG")
+  val intervals: Vector[String] = Vector("1m", "5m", "15m", "1h", "4h", "1d")
+  def intervalMs(interval: String): Long = interval match
+    case "1m"  => 60_000L
+    case "5m"  => 300_000L
+    case "15m" => 900_000L
+    case "1h"  => 3_600_000L
+    case "4h"  => 14_400_000L
+    case _     => 86_400_000L
+  val seriesCap = 5200
+  val zooms: Vector[Int] =
+    Vector(1, 2, 5, 10, 30, 60, 120, 300, 900, 1800, 3600, 14400, 43200, 86400, 259200, 604800)
+
+  def seriesFor(zoom: Int): Option[String] =
+    if zoom < 60 then None
+    else if zoom < 300 then Some("1m")
+    else if zoom < 900 then Some("5m")
+    else if zoom < 3600 then Some("15m")
+    else if zoom < 14400 then Some("1h")
+    else if zoom < 86400 then Some("4h")
+    else Some("1d")
+
+  def zoomLabel(zoom: Int): String =
+    if zoom < 60 then s"${zoom}s"
+    else if zoom < 3600 then s"${zoom / 60}m"
+    else if zoom < 86400 then s"${zoom / 3600}h"
+    else if zoom < 604800 then s"${zoom / 86400}d"
+    else "1w"
+
   val samplesMs: Long = 6L * 3600_000L
   val booksMs: Long = 900_000L
   val tapeMs: Long = 4L * 3600_000L
@@ -110,38 +147,85 @@ object State:
       s.copy(samples = samples, books = keep(s.books, sec, booksMs) :+ (sec, b))
     }
 
+  private def addCandle(
+      map: Map[String, Vector[Candle]],
+      interval: String,
+      c: Candle
+  ): Map[String, Vector[Candle]] =
+    val kept = (map.getOrElse(interval, Vector.empty).filterNot(_.t == c.t) :+ c).sortBy(_.t)
+    map.updated(interval, kept.takeRight(seriesCap))
+
+  private def setHistory(
+      map: Map[String, Vector[Candle]],
+      interval: String,
+      cs: Vector[Candle]
+  ): Map[String, Vector[Candle]] =
+    map.updated(interval, cs.sortBy(_.t).takeRight(seriesCap))
+
+  private def sampleRef(r: Ref, mid: Double, sec: Long): Ref =
+    r.copy(samples = keep(r.samples, sec, samplesMs) :+ (sec, mid))
+
   private def step(s: Snapshot): Long = Layout.dotCols(s.cols) / 4L * zooms(s.zoom)
 
   def reduce(s: Snapshot, e: Event, now: Long): Snapshot = e match
-    case Event.BookUpdate(book, fromSocket) =>
+    case Event.BookUpdate(coin, book, fromSocket) =>
       val fresh = if fromSocket then s.copy(feed = Health.Live(now)) else s
-      if s.book.exists(_.time >= book.time) then fresh
+      if coin != s.coin || s.book.exists(_.time >= book.time) then fresh
       else sample(fresh.copy(book = Some(book)), now)
-    case Event.BboUpdate(bid, ask, time) =>
+    case Event.CoarseBook(coin, k, book) =>
+      if coin == s.coin then s.copy(coarse = s.coarse.updated(k, book)) else s
+    case Event.BboUpdate(coin, bid, ask, time) =>
       val fresh = s.copy(feed = Health.Live(now))
-      s.book match
-        case Some(b) if b.time >= time => fresh
-        case Some(b)                   =>
-          val bids = bid +: b.bids.drop(1).filterNot(_.px.toDouble >= bid.px.toDouble)
-          val asks = ask +: b.asks.drop(1).filterNot(_.px.toDouble <= ask.px.toDouble)
-          sample(fresh.copy(book = Some(Book(bids, asks, time))), now)
-        case None => sample(fresh.copy(book = Some(Book(Vector(bid), Vector(ask), time))), now)
-    case Event.Trades(ts) =>
-      s.copy(
-        feed = Health.Live(now),
-        tape = (ts.sortBy(-_.time) ++ s.tape).filter(_.time >= now - tapeMs).take(tapeCap)
-      )
-    case Event.CandleUpdate(c) =>
-      val kept = (s.candles.filterNot(_.t == c.t) :+ c).sortBy(_.t)
-      s.copy(feed = Health.Live(now), candles = kept.takeRight(candleCap))
-    case Event.CandleHistory(cs)   => s.copy(candles = cs.sortBy(_.t).takeRight(candleCap))
+      if coin == s.coin then
+        s.book match
+          case Some(b) if b.time >= time => fresh
+          case Some(b)                   =>
+            val bids = bid +: b.bids.drop(1).filterNot(_.px.toDouble >= bid.px.toDouble)
+            val asks = ask +: b.asks.drop(1).filterNot(_.px.toDouble <= ask.px.toDouble)
+            sample(fresh.copy(book = Some(Book(bids, asks, time))), now)
+          case None => sample(fresh.copy(book = Some(Book(Vector(bid), Vector(ask), time))), now)
+      else
+        s.refs.get(coin).fold(fresh) { r =>
+          val mid = (bid.px.toDouble + ask.px.toDouble) / 2
+          fresh.copy(refs = s.refs.updated(coin, sampleRef(r, mid, now / 1000)))
+        }
+    case Event.Trades(coin, ts) =>
+      val fresh = s.copy(feed = Health.Live(now))
+      if coin != s.coin then fresh
+      else
+        fresh.copy(tape =
+          (ts.sortBy(-_.time) ++ s.tape).filter(_.time >= now - tapeMs).take(tapeCap)
+        )
+    case Event.CandleUpdate(coin, interval, c) =>
+      val fresh = s.copy(feed = Health.Live(now))
+      if coin == s.coin then fresh.copy(candles = addCandle(s.candles, interval, c))
+      else
+        s.refs
+          .get(coin)
+          .fold(fresh)(r =>
+            fresh.copy(refs =
+              s.refs.updated(coin, r.copy(candles = addCandle(r.candles, interval, c)))
+            )
+          )
+    case Event.CandleHistory(coin, interval, cs) =>
+      if coin == s.coin then s.copy(candles = setHistory(s.candles, interval, cs))
+      else
+        s.refs
+          .get(coin)
+          .fold(s)(r =>
+            s.copy(refs =
+              s.refs.updated(coin, r.copy(candles = setHistory(r.candles, interval, cs)))
+            )
+          )
     case Event.CandleHistoryFailed => s.copy(bad = s.bad + 1)
-    case Event.CtxUpdate(c)        => s.copy(feed = Health.Live(now), ctx = Some(c))
-    case Event.Pong                => s.copy(feed = Health.Live(now))
-    case Event.Bad(_)              => s.copy(feed = Health.Live(now), bad = s.bad + 1)
-    case Event.SocketDown          => s.copy(feed = Health.Down(now, lastMsgAt(s.feed)))
-    case Event.SocketUp            => s.copy(feed = Health.Live(now))
-    case Event.Key(cmd)            => key(s, cmd, now)
+    case Event.CtxUpdate(coin, c)  =>
+      val fresh = s.copy(feed = Health.Live(now))
+      if coin == s.coin then fresh.copy(ctx = Some(c)) else fresh
+    case Event.Pong         => s.copy(feed = Health.Live(now))
+    case Event.Bad(_)       => s.copy(feed = Health.Live(now), bad = s.bad + 1)
+    case Event.SocketDown   => s.copy(feed = Health.Down(now, lastMsgAt(s.feed)))
+    case Event.SocketUp     => s.copy(feed = Health.Live(now))
+    case Event.Key(cmd)     => key(s, cmd, now)
     case Event.Resize(c, r) => s.copy(cols = c.max(Layout.minCols), rows = r.max(Layout.minRows))
 
   private def key(s: Snapshot, cmd: Command, now: Long): Snapshot = cmd match
@@ -157,7 +241,8 @@ object State:
             coin = name,
             book = None,
             tape = Vector.empty,
-            candles = Vector.empty,
+            candles = Map.empty,
+            coarse = Map.empty,
             ctx = None,
             prompt = None,
             samples = Vector.empty,

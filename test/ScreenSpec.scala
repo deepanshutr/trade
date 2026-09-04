@@ -121,7 +121,7 @@ class ScreenSpec extends munit.FunSuite:
       val o = 503.0 + (i % 7) * 0.1
       Candle(minute - (129 - i) * 60_000L, o, o + 0.2, o - 0.2, o + 0.05, 1.0 + i % 5)
     }
-    val s = Golden.snapshot.copy(candles = candles, zoom = 5)
+    val s = Golden.snapshot.copy(candles = Map("1m" -> candles), zoom = 5)
     val frame = Screen.render(s, 100, 30, Golden.now, zone).map(plain)
     assertEquals(frame.size, 30)
     assert(frame.forall(_.length == 100), frame.map(_.length))

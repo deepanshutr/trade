@@ -13,12 +13,12 @@ object Golden:
     val books =
       ujson.read(fixture("l2Book_5m.json")).arr.toVector.map(m => Events.parse(m.render()).get)
     val timed: Vector[(Long, Event)] =
-      mids.map((t, m) => (t, Event.BboUpdate(level(m - 0.005), level(m + 0.005), t))) ++
-        books.map { case e @ Event.BookUpdate(b, _) => (b.time, e); case e => (0L, e) }
+      mids.map((t, m) => (t, Event.BboUpdate("XMR", level(m - 0.005), level(m + 0.005), t))) ++
+        books.map { case e @ Event.BookUpdate(_, b, _) => (b.time, e); case e => (0L, e) }
     val folded = timed.sortBy(_._1).foldLeft(s0)((s, te) => State.reduce(s, te._2, te._1))
     val rest = Vector(
       Events.parse(fixture("trades_5m.json")).get,
       Events.parse(fixture("activeAssetCtx_5m.json")).get,
-      Event.CandleHistory(Events.parseRestCandles(fixture("rest_candles.json")).get)
+      Event.CandleHistory("XMR", "1m", Events.parseRestCandles(fixture("rest_candles.json")).get)
     )
     rest.foldLeft(folded)((s, e) => State.reduce(s, e, now - 300))
