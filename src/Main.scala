@@ -21,28 +21,13 @@ object Main:
         case extra :: _                                => Left(s"unexpected argument $extra")
     loop(args.toList, None, "5m")
 
-  // byte codes: 3 control C, 8 backspace, 10 newline, 13 return, 27 escape, 127 delete,
-  // 113 q, 105 i, 109 m
-  def keyToCommand(byte: Int, promptOpen: Boolean): Option[Command] =
-    if promptOpen then
-      byte match
-        case 13 | 10                 => Some(Command.PromptSubmit)
-        case 27                      => Some(Command.PromptCancel)
-        case 127 | 8                 => Some(Command.PromptBackspace)
-        case 3                       => Some(Command.Quit)
-        case c if c >= 32 && c < 127 => Some(Command.PromptChar(c.toChar))
-        case _                       => None
-    else
-      byte match
-        case 113 | 3 => Some(Command.Quit)
-        case 105     => Some(Command.NextInterval)
-        case 109     => Some(Command.StartMarketPrompt)
-        case _       => None
-
   def nextPromptOpen(promptOpen: Boolean, command: Command): Boolean = command match
     case Command.StartMarketPrompt                   => true
     case Command.PromptSubmit | Command.PromptCancel => false
     case _                                           => promptOpen
+
+  def sizeEvent(last: (Int, Int), size: (Int, Int)): Option[Event] =
+    if size == last then None else Some(Event.Resize(size._1, size._2))
 
   def main(argv: Array[String]): Unit =
     parseArgs(argv.toSeq) match
@@ -87,14 +72,17 @@ object Main:
         Thread.sleep(500)
     }
     daemon("keys") {
+      var pending = Vector.empty[Int]
       var promptOpen = false
-      var byte = System.in.read()
-      while byte >= 0 do
-        keyToCommand(byte, promptOpen).foreach { c =>
-          val _ = queue.add(Event.Key(c))
+      var b = System.in.read()
+      while b >= 0 do
+        val (p, cmd) = Keys.step(pending, b, promptOpen)
+        pending = p
+        cmd.foreach { c =>
           promptOpen = nextPromptOpen(promptOpen, c)
+          queue.put(Event.Key(c))
         }
-        byte = System.in.read()
+        b = System.in.read()
     }
     daemon("fold") {
       while true do
@@ -108,12 +96,16 @@ object Main:
     var last: Snapshot = null
     var lastFrameAt = 0L
     var size = Term.size()
+    if size != (0, 0) then queue.put(Event.Resize(size._1, size._2))
     var sizeAt = now()
     try
       while !state.get().quit do
         val t = now()
         if t - sizeAt >= 1000 then
-          size = Term.size()
+          val polled = Term.size()
+          if polled != (0, 0) then
+            sizeEvent(size, polled).foreach(e => queue.put(e))
+            size = polled
           sizeAt = t
         val s = state.get()
         if (s ne last) || t - lastFrameAt >= 1000 then

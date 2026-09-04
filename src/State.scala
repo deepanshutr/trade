@@ -145,7 +145,7 @@ object State:
     case Event.SocketDown          => s.copy(feed = Health.Down(now, lastMsgAt(s.feed)))
     case Event.SocketUp            => s.copy(feed = Health.Live(now))
     case Event.Key(cmd)            => key(s, cmd, now)
-    case Event.Resize(c, r)        => s.copy(cols = c, rows = r)
+    case Event.Resize(c, r) => s.copy(cols = c.max(Layout.minCols), rows = r.max(Layout.minRows))
 
   private def key(s: Snapshot, cmd: Command, now: Long): Snapshot = cmd match
     case Command.Quit         => s.copy(quit = true)

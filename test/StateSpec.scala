@@ -247,6 +247,11 @@ class StateSpec extends munit.FunSuite:
     assertEquals((s0.cols, s0.rows), (100, 30))
   }
 
+  test("a resize narrower than the minimums clamps to them") {
+    val a = State.reduce(s0, Event.Resize(50, 20), t0)
+    assertEquals((a.cols, a.rows), (100, 30))
+  }
+
   test("zoom walks the table and stops at both ends") {
     assertEquals(press(s0, Command.ZoomIn).zoom, 0)
     val out = (1 to 9).foldLeft(s0)((s, _) => press(s, Command.ZoomOut))
