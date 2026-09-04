@@ -62,6 +62,12 @@ class EventsSpec extends munit.FunSuite:
       )
     )
   }
+  test("candle events carry their own interval, not always 1m") {
+    val text = fixture("candle.json").replace("\"i\":\"1m\"", "\"i\":\"5m\"")
+    Events.parse(text) match
+      case Some(Event.CandleUpdate(_, i, _)) => assertEquals(i, "5m")
+      case other                             => fail(s"unexpected $other")
+  }
   test("activeAssetCtx keeps every figure as text") {
     assertEquals(
       Events.parse(fixture("activeAssetCtx.json")),

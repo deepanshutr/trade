@@ -350,6 +350,12 @@ class StateSpec extends munit.FunSuite:
     assertEquals(s0.refs.keySet, Set("BTC", "PAXG"))
   }
 
+  test("a reference market's bbo in the same second replaces the sample, not appends") {
+    val a = State.reduce(s0, Event.BboUpdate("BTC", lvl("100"), lvl("102"), t0 + 1), t0 + 1)
+    val b = State.reduce(a, Event.BboUpdate("BTC", lvl("110"), lvl("112"), t0 + 2), t0 + 999)
+    assertEquals(b.refs("BTC").samples, Vector((t0 / 1000, 111.0)))
+  }
+
   test("candle series keep 5200 each and a same time candle replaces the old one") {
     val cs = (0 until 5300).toVector.map(i => Candle(i * 60_000L, 1, 1, 1, 1, 1))
     val a = State.reduce(s0, Event.CandleHistory("XMR", "1h", cs), t0)
@@ -363,6 +369,16 @@ class StateSpec extends munit.FunSuite:
       State.reduce(s0, Event.CandleUpdate("XMR", "1m", cs.head), t0).candles("1m"),
       Vector(cs.head)
     )
+  }
+
+  test("live candle updates cap a series at 5200, not just history snapshots") {
+    val n = 5210
+    val loaded = (0 until n).foldLeft(s0) { (s, i) =>
+      State.reduce(s, Event.CandleUpdate("XMR", "1m", Candle(i * 60_000L, 1, 1, 1, 1, 1)), t0)
+    }
+    assertEquals(loaded.candles("1m").size, 5200)
+    assertEquals(loaded.candles("1m").head.t, (n - 5200) * 60_000L)
+    assertEquals(loaded.candles("1m").last.t, (n - 1) * 60_000L)
   }
 
   test("coarse books are kept by resolution for the main market only") {

@@ -238,6 +238,20 @@ class ChartSpec extends munit.FunSuite:
     assertEquals(Chart.spans(full, Map.empty).size, 3)
   }
 
+  test("a bid bucket exactly touching the finer book's lowest bid is joined, not excluded") {
+    val full = Book(Vector(lvl("101", "1")), Vector(lvl("102", "1")), 1L)
+    val sf3 = Book(Vector(lvl("100", "5")), Vector.empty, 1L)
+    val spans = Chart.spans(full, Map(3 -> sf3))
+    assertEquals(
+      spans,
+      Vector(
+        Span(101.0, 101.0, 1.0, true),
+        Span(102.0, 102.0, 1.0, false),
+        Span(100.0, 101.0, 5.0, true)
+      )
+    )
+  }
+
   test("a span spreads its size evenly over the rows it covers") {
     val a = Axis(500.0, 560.0, 7)
     val (depth, isBid) = Chart.depthRows(

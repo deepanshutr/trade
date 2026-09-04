@@ -133,6 +133,22 @@ class ScreenSpec extends munit.FunSuite:
     assert(ink(withRefs) > ink(noRefs), (ink(withRefs), ink(noRefs)))
   }
 
+  test("when the main market is itself a reference market, that reference draws no line") {
+    val asBtc = Golden.snapshot.copy(coin = "BTC")
+    val withBtcRefData = Screen.render(asBtc, 100, 30, Golden.now, zone, Style.mono).map(plain)
+    val withoutBtcRefData = Screen
+      .render(
+        asBtc.copy(refs = asBtc.refs.updated("BTC", Ref.empty)),
+        100,
+        30,
+        Golden.now,
+        zone,
+        Style.mono
+      )
+      .map(plain)
+    assertEquals(withBtcRefData, withoutBtcRefData)
+  }
+
   test(
     "the volume rows carry the caption and the largest volume, the axis row the zoom and clocks"
   ) {
@@ -160,6 +176,18 @@ class ScreenSpec extends munit.FunSuite:
     val braille = frame.slice(1, 15).filter(_.exists(c => c >= 0x2800 && c <= 0x28ff))
     assert(braille.nonEmpty, frame.slice(1, 15).mkString("\n"))
     assert(frame(15).endsWith("v 5.0"), frame(15))
+  }
+
+  test("the volume label uses short form, not a raw decimal, for large volumes") {
+    val minute = Golden.now / 60_000L * 60_000L
+    val candles = Vector.tabulate(130) { i =>
+      val o = 503.0 + (i % 7) * 0.1
+      val v = if i == 129 then 12345.0 else 1.0 + i % 5
+      Candle(minute - (129 - i) * 60_000L, o, o + 0.2, o - 0.2, o + 0.05, v)
+    }
+    val s = Golden.snapshot.copy(candles = Map("1m" -> candles), zoom = 5)
+    val frame = Screen.render(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
+    assert(frame(15).endsWith("v 12.3k"), frame(15))
   }
 
   test("a coarse zoom draws candles with dates on the axis and history from the series") {
