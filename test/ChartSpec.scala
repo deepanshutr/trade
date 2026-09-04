@@ -171,12 +171,26 @@ class ChartSpec extends munit.FunSuite:
   }
 
   test("scale rows label the top middle and bottom and print the mid bold") {
-    val rows = Chart.scaleRows(Some(Axis(98.35, 112.65, 14)), 14, Some(7), Some("105.5"))
+    val a = Axis(98.35, 112.65, 14)
+    val rows = Chart.scaleRows(Some(a), 14, Some(7), Some("105.5"))
     assertEquals(rows(0), "   112.65")
     assertEquals(rows(7), Screen.bold + "   <105.5" + Screen.reset)
     assertEquals(rows(13), "    98.35")
     assertEquals(rows(1), " " * 9)
+    val lower = Chart.scaleRows(Some(a), 14, Some(8), Some("105.5"))
+    assertEquals(lower(7), "   104.95")
+    assertEquals(lower(8), Screen.bold + "   <105.5" + Screen.reset)
     assertEquals(Chart.scaleRows(None, 2, None, None), Vector(" " * 9, " " * 9))
+  }
+
+  test("the middle scale label is the price of the middle ladder row") {
+    val a = Axis(98.35, 112.65, 14)
+    val book = Book(Vector(lvl("100")), Vector(lvl("110")), 1L)
+    val ladder = Chart.ladderRows(Some(book), Some(a), 14, None).map(Chart.plain)
+    val scale = Chart.scaleRows(Some(a), 14, None, None)
+    assertEquals(scale(7).trim, ladder(7).take(Layout.labelW).trim)
+    assertEquals(scale(0).trim, ladder(0).take(Layout.labelW).trim)
+    assertEquals(scale(13).trim, ladder(13).take(Layout.labelW).trim)
   }
 
   test("volume rows scale to the largest column with at least one dot") {

@@ -101,7 +101,7 @@ object Chart:
 
   def decimals(hi: Double): Int =
     val digits = if hi < 1 then 0 else hi.toLong.toString.length
-    (5 - digits).max(0).min(6)
+    (5 - digits).max(0)
 
   def line(columns: Vector[Option[Column]], a: Axis): Vector[String] =
     val cv = Canvas(columns.size / 2, a.rows)
@@ -122,7 +122,7 @@ object Chart:
 
   private def lowerMedian(xs: Vector[Double]): Double = xs.sorted.apply((xs.size - 1) / 2)
 
-  private def percentile(xs: Vector[Double], q: Double): Double =
+  def percentile(xs: Vector[Double], q: Double): Double =
     val sorted = xs.sorted
     sorted(((sorted.size - 1) * q).toInt.min(sorted.size - 1))
 
@@ -181,7 +181,8 @@ object Chart:
   ): Vector[String] =
     ax.fold(Vector.fill(rows)(" " * Layout.scaleW)) { a =>
       val dec = decimals(a.hi)
-      val labels = Map(0 -> a.hi, rows / 2 -> (a.hi + a.lo) / 2, rows - 1 -> a.lo)
+      val middle = a.hi - (a.hi - a.lo) * (rows / 2) / (rows - 1).max(1)
+      val labels = Map(0 -> a.hi, rows / 2 -> middle, rows - 1 -> a.lo)
       (0 until rows).toVector.map { row =>
         (midRow, mid) match
           case (Some(m), Some(text)) if m == row =>

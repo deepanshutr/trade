@@ -37,10 +37,29 @@ class GaugesSpec extends munit.FunSuite:
     assertEqualsDouble(Gauges.weights(1), 0.7, 1e-9)
   }
 
-  test("flow over a set of trades and undefined when empty") {
-    assertEquals(Gauges.flow(Vector.empty), (None, 0))
-    val (f, n) = Gauges.flow(Vector(trade(1L, Side.Buy, "1", "3"), trade(2L, Side.Sell, "1", "1")))
-    assertEquals((f, n), (Some(0.5), 2))
+  test("flow over a window of trades and undefined when the window is empty") {
+    val lens = Vector(10L)
+    assertEquals(Gauges.tapeStats(Vector.empty, now, None, lens).head._1, (Option.empty[Double], 0))
+    val ts = Vector(trade(1L, Side.Buy, "1", "3"), trade(2L, Side.Sell, "1", "1"))
+    assertEquals(Gauges.tapeStats(ts, now, None, lens).head._1, (Some(0.5), 2))
+    assertEquals(Gauges.tapeStats(ts, now, None, lens).head._2, (Option.empty[Double], 0))
+    val zero = Vector(trade(1L, Side.Buy, "1", "0"))
+    assertEquals(Gauges.tapeStats(zero, now, None, lens).head._1, (Option.empty[Double], 1))
+  }
+
+  test("one pass over the tape reads every window and its big money side") {
+    val ts = Vector(
+      trade(5_000L, Side.Buy, "100", "1"),
+      trade(30_000L, Side.Sell, "100", "3"),
+      trade(200_000L, Side.Buy, "100", "10")
+    )
+    val stats = Gauges.tapeStats(ts, now, Some(300.0), Vector(10L, 60L, 300L))
+    assertEquals(stats.map(_._1._2), Vector(1, 2, 3))
+    assertEquals(stats.map(_._2._2), Vector(0, 1, 2))
+    assertEquals(stats(0)._1._1, Some(1.0))
+    assertEquals(stats(1)._1._1, Some(-0.5))
+    assertEqualsDouble(stats(2)._1._1.get, 8.0 / 14, 1e-9)
+    assertEqualsDouble(stats(2)._2._1.get, 7.0 / 13, 1e-9)
   }
 
   test("a track puts the marker by the half width and none when undefined") {
@@ -49,18 +68,21 @@ class GaugesSpec extends munit.FunSuite:
     assertEquals(Gauges.track(Some(-1.0), 4), "#...|....")
     assertEquals(Gauges.track(Some(3.0), 4), "....|...#")
     assertEquals(Gauges.track(Some(0.0), 4), "....#....")
-    assertEquals(Gauges.half(100), 13)
-    assertEquals(Gauges.half(120), 18)
-    assertEquals(Gauges.half(80), 8)
+    assertEquals(Gauges.half(100), 12)
+    assertEquals(Gauges.half(110), 15)
+    assertEquals(Gauges.half(120), 17)
+    assertEquals(Gauges.half(80), 7)
     assertEquals(Gauges.half(50), 4)
     assertEquals(Gauges.half(300), 30)
   }
 
   test("book lens rows average the books in the window and the now row carries the counts") {
     val sec = now / 1000
+    val older = book("1", "3")
+    val current = book("1", "1")
     val s = s0.copy(
-      book = Some(book("1", "1")),
-      books = Vector((sec - 20, book("1", "3")), (sec - 5, book("3", "1"))),
+      book = Some(current),
+      books = Vector((sec - 20, older), (sec - 5, current)),
       since = now - 15_000
     )
     val t = Some(50.0)
@@ -71,11 +93,11 @@ class GaugesSpec extends munit.FunSuite:
     )
     assertEquals(
       Gauges.bookRow(s, "10s", 10L, now, t, 13),
-      s"BOOK  10s ${tr(Some(0.25))} D+0.25 Q+0.25  big ${tr(Some(0.25))} D+0.25"
+      s"BOOK  10s ${tr(Some(0.0))} D+0.00 Q+0.00  big ${tr(Some(0.0))} D+0.00"
     )
     assertEquals(
       Gauges.bookRow(s, "30s", 30L, now, t, 13),
-      s"BOOK ${Screen.dim} 30s${Screen.reset} ${tr(Some(0.0))} D+0.00 Q+0.00  big ${tr(Some(0.0))} D+0.00"
+      s"BOOK ${Screen.dim} 30s${Screen.reset} ${tr(Some(-0.25))} D-0.25 Q-0.25  big ${tr(Some(-0.25))} D-0.25"
     )
     assertEquals(
       Gauges.bookRow(s, "now", 0L, now, None, 13),
@@ -84,6 +106,20 @@ class GaugesSpec extends munit.FunSuite:
     assertEquals(
       Gauges.bookRow(s.copy(book = None, books = Vector.empty), "now", 0L, now, t, 13),
       s"BOOK  now ${tr(None)} D -- Q --  big ${tr(None)} D --"
+    )
+  }
+
+  test("a lens adds the current book once when the newest kept book is an older one") {
+    val sec = now / 1000
+    val s = s0.copy(
+      book = Some(book("1", "1")),
+      books = Vector((sec - 5, book("3", "1"))),
+      since = now - 100_000
+    )
+    val tr = Gauges.track(_: Option[Double], 13)
+    assertEquals(
+      Gauges.bookRow(s, "10s", 10L, now, None, 13),
+      s"BOOK  10s ${tr(Some(0.25))} D+0.25 Q+0.25  big ${tr(None)} D --"
     )
   }
 
@@ -154,4 +190,49 @@ class GaugesSpec extends munit.FunSuite:
       )
     )
     assert(Gauges.rows(s0, now, 120, None).map(Chart.plain).forall(_.length == 120))
+  }
+
+  test("every gauge row is exactly the width, from a hundred columns to a hundred and seventy") {
+    val deep = Book(
+      (1 to 20).toVector.map(i => lvl((100 - i).toString, "10")),
+      (1 to 20).toVector.map(i => lvl((101 + i).toString, "10")),
+      1L
+    )
+    val sec = now / 1000
+    val tape =
+      Vector.tabulate(100_000)(i => Trade(now - i.toLong * 9_999L / 100_000L, Side.Buy, "100", "1"))
+    val s = s0.copy(
+      book = Some(deep),
+      books = Vector((sec, deep)),
+      tape = tape,
+      since = now - 100_000_000L
+    )
+    val t = Some(50.0)
+    for cols <- 100 to 170 do
+      val rows = Gauges.rows(s, now, cols, t)
+      assertEquals(rows.size, 12)
+      assertEquals(rows.map(r => Chart.plain(r).length).distinct, Vector(cols), s"at $cols columns")
+    val wide = Gauges.rows(s, now, 100, t)
+    assert(Chart.plain(wide.head).contains(" b20 a20"), Chart.plain(wide.head))
+    assert(Chart.plain(wide(6)).contains("n=100000"), Chart.plain(wide(6)))
+  }
+
+  test("a row too long for the width is cut and keeps its escapes whole") {
+    val s = s0.copy(book = Some(book("1", "1")), since = now)
+    val rows = Gauges.rows(s, now, 50, Some(50.0))
+    assertEquals(rows.map(r => Chart.plain(r).length).distinct, Vector(50))
+    assert(rows(1).contains(Screen.dim) && rows(1).contains(Screen.reset), rows(1))
+  }
+
+  test("twelve gauge rows over a full tape render in under two seconds") {
+    val tape = Vector.tabulate(200_000)(i =>
+      Trade(now - i.toLong * 70L, if i % 2 == 0 then Side.Buy else Side.Sell, "100", "1")
+    )
+    val s = s0.copy(book = Some(book("1", "1")), tape = tape, since = now - 100_000_000L)
+    val t = Gauges.threshold(tape, now)
+    val started = System.nanoTime()
+    val rows = Gauges.rows(s, now, 100, t)
+    val elapsed = System.nanoTime() - started
+    assertEquals(rows.size, 12)
+    assert(elapsed < 2e9, s"took ${elapsed / 1e6} ms")
   }

@@ -32,17 +32,48 @@ object Gauges:
   def bigCounts(b: Book, t: Double): (Int, Int) =
     (b.bids.count(dollars(_) >= t), b.asks.count(dollars(_) >= t))
 
-  def flow(trades: Vector[Trade]): (Option[Double], Int) =
-    val buy = trades.filter(_.side == Side.Buy).map(_.sz.toDouble).sum
-    val sell = trades.filter(_.side == Side.Sell).map(_.sz.toDouble).sum
+  private def ratio(buy: Double, sell: Double, n: Int): (Option[Double], Int) =
     val total = buy + sell
-    (if trades.isEmpty || total == 0 then None else Some((buy - sell) / total), trades.size)
+    (if n == 0 || total == 0 then None else Some((buy - sell) / total), n)
+
+  def tapeStats(
+      tape: Vector[Trade],
+      now: Long,
+      t: Option[Double],
+      lenses: Vector[Long]
+  ): Vector[((Option[Double], Int), (Option[Double], Int))] =
+    val n = lenses.size
+    val cuts = lenses.map(secs => now - secs * 1000).toArray
+    val oldest = cuts.minOption.getOrElse(now)
+    val buy = Array.fill(n)(0.0)
+    val sell = Array.fill(n)(0.0)
+    val count = Array.fill(n)(0)
+    val bigBuy = Array.fill(n)(0.0)
+    val bigSell = Array.fill(n)(0.0)
+    val bigCount = Array.fill(n)(0)
+    tape.view.takeWhile(_.time > oldest).foreach { x =>
+      val sz = x.sz.toDouble
+      val isBuy = x.side == Side.Buy
+      val isBig = t.exists(x.px.toDouble * sz >= _)
+      var k = 0
+      while k < n do
+        if x.time > cuts(k) then
+          if isBuy then buy(k) += sz else sell(k) += sz
+          count(k) += 1
+          if isBig then
+            if isBuy then bigBuy(k) += sz else bigSell(k) += sz
+            bigCount(k) += 1
+        k += 1
+    }
+    (0 until n).toVector.map(k =>
+      (ratio(buy(k), sell(k), count(k)), ratio(bigBuy(k), bigSell(k), bigCount(k)))
+    )
 
   def threshold(trades: Vector[Trade], now: Long): Option[Double] =
-    val xs = trades.filter(_.time > now - 900_000L).map(t => t.px.toDouble * t.sz.toDouble).sorted
-    if xs.isEmpty then None else Some(xs((xs.size - 1) * 9 / 10))
+    val xs = trades.filter(_.time > now - 900_000L).map(t => t.px.toDouble * t.sz.toDouble)
+    if xs.isEmpty then None else Some(Chart.percentile(xs, 0.9))
 
-  def half(cols: Int): Int = ((cols - 46) / 4).max(4).min(30)
+  def half(cols: Int): Int = ((cols - 50) / 4).max(4).min(30)
 
   def track(v: Option[Double], h: Int): String =
     val cells = ("." * h + "|" + "." * h).toCharArray
@@ -60,7 +91,9 @@ object Gauges:
   def bookRow(s: Snapshot, name: String, secs: Long, now: Long, t: Option[Double], h: Int): String =
     val set =
       if secs == 0 then s.book.toVector
-      else s.books.filter(_._1 >= now / 1000 - secs).map(_._2) ++ s.book.toVector
+      else
+        val inWindow = s.books.filter(_._1 >= now / 1000 - secs).map(_._2)
+        s.book.fold(inWindow)(b => if inWindow.contains(b) then inWindow else inWindow :+ b)
     val readings = set.map(imbalance)
     val d = mean(readings.map(_._2))
     val q = mean(readings.map(_._1))
@@ -71,18 +104,40 @@ object Gauges:
       else ""
     s"BOOK ${label(s, name, secs, now)} ${track(d, h)} ${fmt(d, 'D')} ${fmt(q, 'Q')}  big ${track(dBig, h)} ${fmt(dBig, 'D')}$counts"
 
-  def tapeRow(s: Snapshot, name: String, secs: Long, now: Long, t: Option[Double], h: Int): String =
-    val ts = s.tape.filter(_.time > now - secs * 1000)
-    val (f, n) = flow(ts)
-    val big = t.fold(Vector.empty[Trade])(tt => ts.filter(x => x.px.toDouble * x.sz.toDouble >= tt))
-    val (fb, nb) = flow(big)
+  private def tapeText(
+      s: Snapshot,
+      name: String,
+      secs: Long,
+      now: Long,
+      all: (Option[Double], Int),
+      big: (Option[Double], Int),
+      h: Int
+  ): String =
+    val (f, n) = all
+    val (fb, nb) = big
     f"TAPE ${label(s, name, secs, now)} ${track(f, h)} ${fmt(f, 'F')} n=$n%-5d big ${track(fb, h)} ${fmt(fb, 'F')} n=$nb"
+
+  def tapeRow(s: Snapshot, name: String, secs: Long, now: Long, t: Option[Double], h: Int): String =
+    val (all, big) = tapeStats(s.tape, now, t, Vector(secs)).head
+    tapeText(s, name, secs, now, all, big, h)
+
+  private def fit(line: String, cols: Int): String =
+    val visible = Chart.plain(line).length
+    if visible <= cols then line + " " * (cols - visible)
+    else
+      val (out, _, _) = line.foldLeft((StringBuilder(), 0, false)) { case ((sb, seen, inEsc), c) =>
+        if inEsc then (sb.append(c), seen, c != 'm')
+        else if c == Screen.esc.head then (sb.append(c), seen, true)
+        else if seen < cols then (sb.append(c), seen + 1, false)
+        else (sb, seen + 1, false)
+      }
+      out.toString
 
   def rows(s: Snapshot, now: Long, cols: Int, t: Option[Double]): Vector[String] =
     val h = half(cols)
+    val stats = tapeStats(s.tape, now, t, tapeLenses.map(_._2))
     val lines = bookLenses.map((name, secs) => bookRow(s, name, secs, now, t, h)) ++
-      tapeLenses.map((name, secs) => tapeRow(s, name, secs, now, t, h))
-    lines.map { l =>
-      val visible = Chart.plain(l).length
-      (l + " " * (cols - visible).max(0))
-    }
+      tapeLenses.zip(stats).map { case ((name, secs), (all, big)) =>
+        tapeText(s, name, secs, now, all, big, h)
+      }
+    lines.map(l => fit(l, cols))

@@ -83,7 +83,7 @@ class ScreenSpec extends munit.FunSuite:
   }
 
   test("render yields rows lines of the width at both golden sizes") {
-    for (cols, rows) <- Vector((100, 30), (120, 40)) do
+    for (cols, rows) <- Vector((100, 30), (110, 30), (120, 40), (166, 50)) do
       val frame = Screen.render(Golden.snapshot, cols, rows, Golden.now, zone)
       assertEquals(frame.size, rows)
       assert(frame.map(plain).forall(_.length == cols), frame.map(plain).map(_.length))
@@ -113,6 +113,23 @@ class ScreenSpec extends munit.FunSuite:
     assert(frame(17).startsWith(" " * 23 + "1s/col "))
     assert(frame(17).drop(30).take(8).matches("\\d\\d:\\d\\d:\\d\\d"))
     assert(frame(17).drop(83).take(8).matches("\\d\\d:\\d\\d:\\d\\d"))
+  }
+
+  test("a coarse zoom draws the candles, the minute clocks and the candle volume") {
+    val minute = Golden.now / 60_000L * 60_000L
+    val candles = Vector.tabulate(130) { i =>
+      val o = 503.0 + (i % 7) * 0.1
+      Candle(minute - (129 - i) * 60_000L, o, o + 0.2, o - 0.2, o + 0.05, 1.0 + i % 5)
+    }
+    val s = Golden.snapshot.copy(candles = candles, zoom = 5)
+    val frame = Screen.render(s, 100, 30, Golden.now, zone).map(plain)
+    assertEquals(frame.size, 30)
+    assert(frame.forall(_.length == 100), frame.map(_.length))
+    assert(frame(17).contains("60s/col"), frame(17))
+    assertEquals("""\d\d:\d\d""".r.findAllIn(frame(17)).size, 3, frame(17))
+    val braille = frame.slice(1, 15).filter(_.exists(c => c >= 0x2800 && c <= 0x28ff))
+    assert(braille.nonEmpty, frame.slice(1, 15).mkString("\n"))
+    assert(frame(15).endsWith("v 5.0"), frame(15))
   }
 
   test("the gauge rows fill the last twelve lines") {
