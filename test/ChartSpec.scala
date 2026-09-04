@@ -8,6 +8,9 @@ class ChartSpec extends munit.FunSuite:
   private def col(v: Double, vol: Double = 0.0): Option[Column] = Some(Column(v, v, v, v, vol))
   private val t0 = 1_700_000_000_000L
   private def s0: Snapshot = Snapshot.initial("XMR", t0)
+  private val FULL = (0x28ff).toChar.toString
+  private val LHALF = (0x2847).toChar.toString
+  private val RHALF = (0x28b8).toChar.toString
 
   test("a canvas maps dots to braille bits") {
     val cv = Canvas(1, 1)
@@ -33,6 +36,35 @@ class ChartSpec extends munit.FunSuite:
     cv.run(0, 6, 1)
     assertEquals(cv.lines, Vector(br(0x46), br(0x07)))
     assertEquals(Canvas(2, 1).lines, Vector("  "))
+  }
+
+  test("a canvas carries a style per cell and wraps it on output") {
+    val cv = Canvas(2, 1)
+    cv.dot(0, 0, "X")
+    cv.dot(2, 0)
+    assertEquals(cv.lines, Vector("X" + br(0x01) + Screen.reset + br(0x01)))
+    cv.restyle(1, 0, "Y")
+    assertEquals(cv.lines, Vector("X" + br(0x01) + Screen.reset + "Y" + br(0x01) + Screen.reset))
+    assertEquals(
+      Chart.styled(Vector(('a', "S"), ('b', "S"), ('c', ""))),
+      "S" + "ab" + Screen.reset + "c"
+    )
+  }
+
+  test("a style turns its colours off for greyscale and keeps the references dim") {
+    assertEquals(Style.colour.bid, Screen.esc + "[32m")
+    assertEquals(Style.colour.ask, Screen.esc + "[31m")
+    assertEquals(Style.colour.btc, Screen.esc + "[38;5;208m")
+    assertEquals(Style.colour.gold, Screen.esc + "[38;5;178m")
+    assertEquals(Style.mono.bid, "")
+    assertEquals(Style.mono.btc, Screen.dim)
+    assertEquals(Style.mono.gold, Screen.dim)
+    assertEquals(
+      Style.colour.wrap(Style.colour.bid, "ab"),
+      Screen.esc + "[32m" + "ab" + Screen.reset
+    )
+    assertEquals(Style.mono.wrap(Style.mono.bid, "ab"), "ab")
+    assertEquals(Style.colour.wrap(Style.colour.bid, "  "), "  ")
   }
 
   test("the window ends at the column holding the right edge second") {
@@ -104,6 +136,21 @@ class ChartSpec extends munit.FunSuite:
     )
   }
 
+  test("columns pick the series of the zoom and reference columns take the last value") {
+    val c5 = Candle(0L, 2, 3, 1, 2.5, 1)
+    val s = s0.copy(
+      candles = Map("5m" -> Vector(c5), "1m" -> Vector(Candle(0L, 9, 9, 9, 9, 9))),
+      zoom = State.zooms.indexOf(300)
+    )
+    assertEquals(Chart.columns(s, 2, 599_000L), Vector(Some(Column(2.0, 1.0, 3.0, 2.5, 1.0)), None))
+    val r = Ref(Vector((999L, 1.0)), Map.empty)
+    assertEquals(Chart.refColumns(r, 2, s0, 1_000_000L), Vector(Some(1.0), Some(1.0)))
+    assertEquals(
+      Chart.refColumns(Ref(Vector.empty, Map("5m" -> Vector(c5))), 2, s, 599_000L),
+      Vector(Some(2.5), None)
+    )
+  }
+
   test("the axis pads five percent around the columns and the book and maps rows and dots") {
     val book = Book(Vector(lvl("99")), Vector(lvl("112")), 1L)
     val a = Chart.axis(Vector(Some(Column(100, 100, 110, 110, 0)), None), Some(book), 14).get
@@ -132,23 +179,100 @@ class ChartSpec extends munit.FunSuite:
 
   test("the line joins consecutive columns and bolds the newest cell") {
     val a = Axis(1.0, 3.0, 1)
-    val lines = Chart.line(Vector(col(1.0), col(3.0)), a)
+    val lines = Chart.line(Vector(col(1.0), col(3.0)), a, Vector.empty)
     assertEquals(lines, Vector(Screen.bold + br(0xf8) + Screen.reset))
-    assertEquals(Chart.line(Vector(None, None), a), Vector(" "))
+    assertEquals(Chart.line(Vector(None, None), a, Vector.empty), Vector(" "))
+  }
+
+  test("a reference line normalizes to the first visible main value and keeps its pattern") {
+    val a = Axis(90.0, 120.0, 1)
+    val main = Vector(col(100.0), col(100.0), col(100.0), col(100.0))
+    val ref = Vector(Some(50.0), Some(55.0), Some(60.0), None)
+    val lines = Chart.line(main, a, Vector(RefLine(ref, Chart.dash, Style.colour.btc)))
+    val cells = Chart.plain(lines.head)
+    assertEquals(cells.length, 2)
+    assert(lines.head.startsWith(Style.colour.btc), lines.head)
+    assertEquals(Chart.dash(0) && Chart.dash(1) && !Chart.dash(2) && !Chart.dash(3), true)
+    assertEquals(
+      (0 to 6).map(Chart.dotted).toVector,
+      Vector(true, false, false, true, false, false, true)
+    )
+    val alone = Chart.line(main, a, Vector.empty)
+    assert(Chart.plain(alone.head) != cells)
+  }
+
+  test("a bucket width follows the significant figures") {
+    assertEqualsDouble(Chart.width(530.0, 4), 0.1, 1e-9)
+    assertEqualsDouble(Chart.width(530.0, 3), 1.0, 1e-9)
+    assertEqualsDouble(Chart.width(530.0, 2), 10.0, 1e-9)
+    assertEqualsDouble(Chart.width(81010.0, 3), 100.0, 1e-9)
+    assertEqualsDouble(Chart.width(0.0523, 3), 0.0001, 1e-12)
+  }
+
+  test("coarse buckets join the spans only beyond the finer book's outermost level") {
+    val full = Book(Vector(lvl("530.5", "1"), lvl("530.4", "1")), Vector(lvl("530.7", "1")), 1L)
+    val sf3 =
+      Book(Vector(lvl("530", "10"), lvl("529", "20")), Vector(lvl("531", "5"), lvl("532", "7")), 1L)
+    val sf2 = Book(
+      Vector(lvl("530", "100"), lvl("520", "200")),
+      Vector(lvl("540", "50"), lvl("550", "60")),
+      1L
+    )
+    val spans = Chart.spans(full, Map(3 -> sf3, 2 -> sf2))
+    assertEquals(
+      spans.take(3),
+      Vector(
+        Span(530.5, 530.5, 1.0, true),
+        Span(530.4, 530.4, 1.0, true),
+        Span(530.7, 530.7, 1.0, false)
+      )
+    )
+    assertEquals(
+      spans.drop(3),
+      Vector(
+        Span(529.0, 530.0, 20.0, true),
+        Span(531.0, 532.0, 7.0, false),
+        Span(540.0, 550.0, 60.0, false)
+      )
+    )
+    assertEquals(Chart.spans(full, Map.empty).size, 3)
+  }
+
+  test("a span spreads its size evenly over the rows it covers") {
+    val a = Axis(500.0, 560.0, 7)
+    val (depth, isBid) = Chart.depthRows(
+      Vector(
+        Span(529.0, 530.0, 20.0, true),
+        Span(540.0, 550.0, 60.0, false),
+        Span(600.0, 610.0, 5.0, false)
+      ),
+      a
+    )
+    assertEquals(depth.toVector, Vector(0.0, 30.0, 30.0, 20.0, 0.0, 0.0, 0.0))
+    assertEquals(isBid.toVector, Vector(false, false, false, true, false, false, false))
+  }
+
+  test("bars are braille with a half cell for the odd step and the clamp mark outside") {
+    assertEquals(Chart.bar(3, bid = true, clamp = false), FULL + LHALF + " " * 19)
+    assertEquals(Chart.bar(3, bid = false, clamp = false), " " * 19 + RHALF + FULL)
+    assertEquals(Chart.bar(1, bid = false, clamp = false), " " * 20 + RHALF)
+    assertEquals(Chart.bar(42, bid = true, clamp = true), FULL * 20 + ">")
+    assertEquals(Chart.bar(42, bid = false, clamp = true), ">" + FULL * 20)
+    assertEquals(Chart.bar(42, bid = true, clamp = false), FULL * 21)
   }
 
   test("ladder rows put bids from the label side and asks from the chart side") {
     val book = Book(Vector(lvl("100", "1")), Vector(lvl("110", "100"), lvl("107.5", "10")), 1L)
     val a = Axis(100.0, 110.0, 5)
-    val rows = Chart.ladderRows(Some(book), Some(a), 5, Some(2))
+    val rows = Chart.ladderRows(Some(book), Map.empty, Some(a), 5, Some(2), Style.mono)
     assertEquals(rows.size, 5)
     val plain = rows.map(Chart.plain)
     assert(plain.forall(_.length == 30), plain)
-    assertEquals(plain(0), "  110.00 " + "#" * 21)
-    assertEquals(plain(1), "  107.50 " + " " * 15 + "######")
+    assertEquals(plain(0), "  110.00 " + FULL * 21)
+    assertEquals(plain(1), "  107.50 " + " " * 15 + FULL * 6)
     assertEquals(plain(2), "  105.00>" + " " * 21)
     assertEquals(plain(3), "  102.50 " + " " * 21)
-    assertEquals(plain(4), "  100.00 " + "#" + " " * 20)
+    assertEquals(plain(4), "  100.00 " + FULL + " " * 20)
     assert(rows(0).startsWith(Screen.bold) && rows(4).startsWith(Screen.bold))
     assert(!rows(1).contains(Screen.bold))
     assert(rows(2).contains(Screen.bold + "  105.00>" + Screen.reset))
@@ -158,20 +282,46 @@ class ChartSpec extends munit.FunSuite:
     val bids = (1 to 20).toVector.map(i => Level((200 - i).toString, (i * i).toString, 1))
     val book = Book(bids, Vector.empty, 1L)
     val a = Axis(180.0, 199.0, 20)
-    val plain = Chart.ladderRows(Some(book), Some(a), 20, None).map(Chart.plain)
-    assertEquals(plain(19).drop(9), "#" * 20 + ">")
-    assertEquals(plain(0).drop(9).count(_ == '#'), 1)
+    val plain =
+      Chart.ladderRows(Some(book), Map.empty, Some(a), 20, None, Style.mono).map(Chart.plain)
+    assertEquals(plain(19).drop(9), FULL * 20 + ">")
+    assertEquals(plain(0).drop(9), LHALF + " " * 20)
     assert(plain.forall(_.length == 30))
-    assertEquals(Chart.ladderRows(None, None, 2, None), Vector(" " * 30, " " * 30))
+    assertEquals(
+      Chart.ladderRows(None, Map.empty, None, 2, None, Style.mono),
+      Vector(" " * 30, " " * 30)
+    )
   }
 
   test("ladder bars scale by depth when the reference ties the lower median") {
     val book = Book(Vector(lvl("100", "1"), lvl("99", "5"), lvl("98", "5")), Vector.empty, 1L)
     val a = Axis(98.0, 100.0, 3)
-    val plain = Chart.ladderRows(Some(book), Some(a), 3, None).map(Chart.plain)
-    assertEquals(plain(0).drop(9), "######" + " " * 15)
-    assertEquals(plain(1).drop(9), "#" * 21)
-    assertEquals(plain(2).drop(9), "#" * 21)
+    val plain =
+      Chart.ladderRows(Some(book), Map.empty, Some(a), 3, None, Style.mono).map(Chart.plain)
+    assertEquals(plain(0).drop(9), FULL * 5 + LHALF + " " * 15)
+    assertEquals(plain(1).drop(9), FULL * 21)
+    assertEquals(plain(2).drop(9), FULL * 21)
+  }
+
+  test("ladder rows draw far depth from the coarse books in colour") {
+    val full = Book(Vector(lvl("530.5", "1")), Vector(lvl("530.7", "1")), 1L)
+    val sf2 = Book(Vector.empty, Vector(lvl("550", "60")), 1L)
+    val a = Axis(500.0, 560.0, 7)
+    val rows = Chart.ladderRows(Some(full), Map(2 -> sf2), Some(a), 7, None, Style.colour)
+    val plain = rows.map(Chart.plain)
+    assert(plain.forall(_.length == 30), plain)
+    assert(plain(1).drop(9).trim.nonEmpty && plain(2).drop(9).trim.nonEmpty, plain)
+    assert(rows(1).contains(Style.colour.ask), rows(1))
+    assert(
+      rows(3).contains(Style.colour.bid) || rows(4).contains(Style.colour.bid),
+      rows.mkString("\n")
+    )
+    assert(!plain.exists(_.contains("#")))
+    assert(
+      !Chart
+        .ladderRows(Some(full), Map(2 -> sf2), Some(a), 7, None, Style.mono)
+        .exists(_.contains(Screen.esc + "[3"))
+    )
   }
 
   test("scale rows label the top middle and bottom and print the mid bold") {
@@ -190,7 +340,8 @@ class ChartSpec extends munit.FunSuite:
   test("the middle scale label is the price of the middle ladder row") {
     val a = Axis(98.35, 112.65, 14)
     val book = Book(Vector(lvl("100")), Vector(lvl("110")), 1L)
-    val ladder = Chart.ladderRows(Some(book), Some(a), 14, None).map(Chart.plain)
+    val ladder =
+      Chart.ladderRows(Some(book), Map.empty, Some(a), 14, None, Style.mono).map(Chart.plain)
     val scale = Chart.scaleRows(Some(a), 14, None, None)
     assertEquals(scale(7).trim, ladder(7).take(Layout.labelW).trim)
     assertEquals(scale(0).trim, ladder(0).take(Layout.labelW).trim)
@@ -199,10 +350,19 @@ class ChartSpec extends munit.FunSuite:
 
   test("volume rows scale to the largest column with at least one dot") {
     val cs = Vector(col(1.0, 0.0), col(1.0, 7.0), col(1.0, 1.0), col(1.0, 14.0))
-    val (lines, vmax) = Chart.volumeRows(cs)
+    val (lines, vmax) = Chart.volumeRows(cs, Style.mono)
     assertEquals(vmax, 14.0)
     assertEquals(lines, Vector(" " + br(0xb0), br(0xb8) + br(0xf8)))
-    assertEquals(Chart.volumeRows(Vector(None, None)), (Vector(" ", " "), 0.0))
+    assertEquals(Chart.volumeRows(Vector(None, None), Style.mono), (Vector(" ", " "), 0.0))
+  }
+
+  test("volume dots colour by column direction") {
+    val up = Some(Column(1.0, 1.0, 2.0, 2.0, 5.0))
+    val down = Some(Column(2.0, 1.0, 2.0, 1.0, 5.0))
+    val (lines, _) = Chart.volumeRows(Vector(up, up, down, down), Style.colour)
+    assert(lines(1).contains(Style.colour.bid) && lines(1).contains(Style.colour.ask), lines)
+    val (mono, _) = Chart.volumeRows(Vector(up, up, down, down), Style.mono)
+    assert(!mono(1).contains(Screen.esc))
   }
 
   test("the axis row prints three clocks at the first middle and last column") {
@@ -215,6 +375,13 @@ class ChartSpec extends munit.FunSuite:
     assertEquals(coarse.take(5), "00:00")
     assertEquals(coarse.slice(28, 33), "01:01")
     assertEquals(coarse.drop(56), "02:01")
+  }
+
+  test("the axis row picks its clock pattern by zoom") {
+    assertEquals(Chart.axisRow(0L, 3600, 122, ZoneOffset.UTC).take(11), "01-01 00:00")
+    assertEquals(Chart.axisRow(0L, 86400, 122, ZoneOffset.UTC).take(10), "1970-01-01")
+    assertEquals(Chart.axisRow(0L, 60, 122, ZoneOffset.UTC).take(5), "00:00")
+    assertEquals(Chart.axisRow(0L, 1, 122, ZoneOffset.UTC).take(8), "00:00:00")
   }
 
   test("rjust pads on the left and cuts on the right") {

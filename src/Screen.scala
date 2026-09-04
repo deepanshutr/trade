@@ -56,11 +56,12 @@ object Screen:
       val axis = Chart.axis(columns, s.book, priceRows)
       val mid = s.book.flatMap(midOf)
       val midRow = for a <- axis; m <- mid yield a.row(m.toDouble)
-      val left = Chart.ladderRows(s.book, axis, priceRows, midRow)
-      val chart = axis.fold(Vector.fill(priceRows)(" " * cells))(a => Chart.line(columns, a))
+      val left = Chart.ladderRows(s.book, Map.empty, axis, priceRows, midRow, Style.colour)
+      val chart =
+        axis.fold(Vector.fill(priceRows)(" " * cells))(a => Chart.line(columns, a, Vector.empty))
       val scale = Chart.scaleRows(axis, priceRows, midRow, mid)
       val priceLines = (0 until priceRows).toVector.map(r => left(r) + chart(r) + scale(r))
-      val (vol, vmax) = Chart.volumeRows(columns)
+      val (vol, vmax) = Chart.volumeRows(columns, Style.colour)
       val volLines = Vector(
         Chart.rjust("volume", Layout.leftW - 1) + " " + vol(0) + Chart.rjust(
           f"v $vmax%.1f",
