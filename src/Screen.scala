@@ -42,13 +42,20 @@ object Screen:
     val fitted = if text.length > cols then text.replace("  ", " ") else text
     fitted.padTo(cols, ' ').take(cols)
 
+  def footerRows(footer: Vector[String], cols: Int): Vector[String] =
+    footer.take(4).padTo(4, "").map { line =>
+      val plain = Chart.plain(line)
+      plain.padTo(cols, ' ').take(cols)
+    }
+
   def render(
       s: Snapshot,
       cols: Int,
       rows: Int,
       now: Long,
       zone: java.time.ZoneId,
-      style: Style
+      style: Style,
+      footer: Vector[String] = Vector.empty
   ): Vector[String] =
     if cols < Layout.minCols || rows < Layout.minRows then
       Vector(s"need ${Layout.minCols}x${Layout.minRows}, have ${cols}x$rows")
@@ -81,4 +88,4 @@ object Screen:
       val axisLine = Chart.rjust(State.zoomLabel(z) + "/col", Layout.leftW - 1) + " " +
         Chart.axisRow(first, z, dots, zone) + " " * Layout.scaleW
       (stats(s, now, cols) +: priceLines) ++ volLines ++ Vector(axisLine) ++
-        Gauges.rows(s, now, cols, style)
+        Gauges.rows(s, now, cols, style) ++ footerRows(footer, cols)

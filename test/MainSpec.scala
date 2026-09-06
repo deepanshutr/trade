@@ -179,3 +179,75 @@ class MainSpec extends munit.FunSuite:
     assertEquals(Main.nextPromptOpen(false, Command.Quit), false)
     assertEquals(Main.nextPromptOpen(false, Command.ZoomIn), false)
   }
+
+  test("trading is explicit and the settings path is optional") {
+    assertEquals(
+      Main.parseArgs(Seq("XMR", "--trade", "--config", "/tmp/desk.json")),
+      Right(Main.Args("XMR", false, true, Some("/tmp/desk.json")))
+    )
+    assertEquals(
+      Main.parseArgs(Seq("--config", "/tmp/desk.json", "--mono", "BTC")),
+      Right(Main.Args("BTC", true, false, Some("/tmp/desk.json")))
+    )
+    assertEquals(Main.parseArgs(Nil), Right(Main.Args("XMR", false, false, None)))
+    assert(Main.parseArgs(Seq("--config")).isLeft)
+    assert(Main.parseArgs(Seq("--config", "--trade")).isLeft)
+    assert(Main.parseArgs(Seq("--config", "one", "--config", "two")).isLeft)
+  }
+
+  test("a missing default settings file uses defaults but an explicit path stays explicit") {
+    val home = java.nio.file.Files.createTempDirectory("desk-home")
+    assertEquals(Main.configPath(Main.Args("XMR", false), home), None)
+    val directory = home.resolve(".config/desk")
+    java.nio.file.Files.createDirectories(directory)
+    val file = directory.resolve("config.json")
+    java.nio.file.Files.writeString(file, "{}")
+    assertEquals(Main.configPath(Main.Args("XMR", false), home), Some(file))
+    assertEquals(
+      Main.configPath(Main.Args("XMR", false, config = Some("missing.json")), home),
+      Some(java.nio.file.Path.of("missing.json"))
+    )
+  }
+
+  test("public quote sources use the selected account network") {
+    val (mainSocket, mainRest) = Main.publicSources(TradingConfig())
+    assertEquals(mainSocket.url, "wss://api.hyperliquid.xyz/ws")
+    assertEquals(mainRest.url, "https://api.hyperliquid.xyz/info")
+    val (testSocket, testRest) = Main.publicSources(TradingConfig(network = "testnet"))
+    assertEquals(testSocket.url, "wss://api.hyperliquid-testnet.xyz/ws")
+    assertEquals(testRest.url, "https://api.hyperliquid-testnet.xyz/info")
+  }
+
+  test("the fold selects the order market before publishing it and before subscription work") {
+    val time = 1_000_000L
+    val queue = new LinkedBlockingQueue[Event]()
+    val state = new AtomicReference(Snapshot.initial("XMR", time).copy(prompt = Some("BTC")))
+    val events = new ConcurrentLinkedQueue[String]()
+    val called = new CountDownLatch(1)
+    val rest = new Rest:
+      def post(body: String): Option[String] =
+        val _ = events.add("history " + state.get().coin)
+        called.countDown()
+        Some("[]")
+    val connector = new Connector:
+      def connect(text: String => Unit, closed: () => Unit): Socket =
+        throw new IllegalStateException("not connected in this test")
+    val feed = new Feed(connector, rest, queue, () => time, "XMR")
+    val workers = Main.startFold(
+      queue,
+      state,
+      feed,
+      () => time,
+      coin => {
+        assertEquals(state.get().coin, "XMR")
+        val _ = events.add("selected " + coin)
+      }
+    )
+    try
+      queue.put(Event.Key(Command.PromptSubmit))
+      assert(called.await(3, TimeUnit.SECONDS))
+      assertEquals(events.asScala.toVector.take(2), Vector("selected BTC", "history BTC"))
+    finally
+      workers.foreach(_.interrupt())
+      workers.foreach(_.join(3000))
+  }

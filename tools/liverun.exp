@@ -34,10 +34,14 @@ proc wait_for {pattern seconds label} {
 
 wait_for "live " 20 "live "
 
-send -- "${esc}\[A"
-wait_for " 2s/col " 10 "zoom out to two seconds per column"
 send -- "${esc}\[B"
+wait_for " 2s/col " 10 "zoom out to two seconds per column"
+send -- "${esc}\[A"
 wait_for " 1s/col " 10 "zoom back to one second per column"
+
+wait_for "Hard 1 buy" 10 "the hard action row"
+wait_for "Best 5 buy" 10 "the best action row"
+send -- "${esc}\[200~1234567890${esc}\[201~"
 
 send "m"
 send "BTC"

@@ -30,6 +30,9 @@ enum Command:
   case Quit, StartMarketPrompt, PromptBackspace, PromptCancel, PromptSubmit
   case PromptChar(c: Char)
   case ZoomIn, ZoomOut, ScrubBack, ScrubForward
+  case PlaceOrder(intent: OrderIntent)
+  case SelectTarget(side: Side)
+  case SubmitTarget, CancelTarget, ToggleCandles
 
 enum Event:
   case BookUpdate(coin: String, book: Book, fromSocket: Boolean)
@@ -229,6 +232,9 @@ object State:
     case Event.Resize(c, r) => s.copy(cols = c.max(Layout.minCols), rows = r.max(Layout.minRows))
 
   private def key(s: Snapshot, cmd: Command, now: Long): Snapshot = cmd match
+    case Command.PlaceOrder(_) | Command.SelectTarget(_) | Command.SubmitTarget |
+        Command.CancelTarget | Command.ToggleCandles =>
+      s
     case Command.Quit              => s.copy(quit = true)
     case Command.StartMarketPrompt => s.copy(prompt = Some(""))
     case Command.PromptChar(c)     => s.copy(prompt = s.prompt.map(_ + c))

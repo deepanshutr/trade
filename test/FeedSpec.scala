@@ -282,3 +282,23 @@ class FeedSpec extends munit.FunSuite:
     c.onClose()
     t.join(1000)
   }
+
+  test("the order observer receives an event before the fold queue") {
+    val queue = new ConcurrentLinkedQueue[Event]()
+    val seen = new ConcurrentLinkedQueue[Event]()
+    val feed = new Feed(
+      new FakeConnector,
+      restAnswering(),
+      queue,
+      () => 1_000_000L,
+      "XMR",
+      State.refCoins,
+      event => {
+        assert(queue.isEmpty)
+        val _ = seen.add(event)
+      }
+    )
+    feed.poll()
+    assertEquals(seen.asScala.toVector, queue.asScala.toVector)
+    assertEquals(seen.size(), 1)
+  }

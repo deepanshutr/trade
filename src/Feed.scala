@@ -40,17 +40,18 @@ object Feed:
   private def sub(kind: String, c: String, extra: String = ""): String =
     s"""{"method":"subscribe","subscription":{"type":"$kind","coin":"$c"$extra}}"""
 
-  def subscriptions(c: String): Vector[String] =
+  def subscriptions(c: String, referenceCoins: Vector[String] = State.refCoins): Vector[String] =
     val main =
       Vector(sub("l2Book", c), sub("bbo", c), sub("trades", c), sub("activeAssetCtx", c)) ++
         State.intervals.map(i => sub("candle", c, s""","interval":"$i""""))
-    val refs = State.refCoins.flatMap(r =>
+    val refs = referenceCoins.distinct.flatMap(r =>
       sub("bbo", r) +: State.intervals.map(i => sub("candle", r, s""","interval":"$i""""))
     )
     (main ++ refs).distinct
 
-  def unsubscriptions(c: String): Vector[String] =
-    subscriptions(c).map(_.replace("\"method\":\"subscribe\"", "\"method\":\"unsubscribe\""))
+  def unsubscriptions(c: String, referenceCoins: Vector[String] = State.refCoins): Vector[String] =
+    subscriptions(c, referenceCoins)
+      .map(_.replace("\"method\":\"subscribe\"", "\"method\":\"unsubscribe\""))
 
   def historyBody(coin: String, interval: String, now: Long): String =
     val start = now - 5000L * State.intervalMs(interval)
@@ -64,14 +65,20 @@ final class Feed(
     rest: Rest,
     queue: java.util.Queue[Event],
     clock: () => Long,
-    coin0: String
+    coin0: String,
+    referenceCoins: Vector[String] = State.refCoins,
+    observer: Event => Unit = _ => ()
 ):
   @volatile var coin: String = coin0
   @volatile private var socket: Option[Socket] = None
   @volatile private var lastHistoryAt: Long = 0L
   private val sendLock = new Object
 
+  private val references = referenceCoins.distinct
+  require(references.size <= 3, "choose at most three reference markets")
+
   private def push(e: Event): Unit =
+    observer(e)
     val _ = queue.add(e)
 
   def send(text: String): Unit = sendLock.synchronized {
@@ -88,7 +95,7 @@ final class Feed(
       case None    => false
       case Some(s) =>
         socket = Some(s)
-        Feed.subscriptions(coin).foreach(send)
+        Feed.subscriptions(coin, references).foreach(send)
         push(Event.SocketUp)
         val t = clock()
         if lastHistoryAt == 0L || t - lastHistoryAt >= Feed.historyEveryMs then
@@ -135,17 +142,17 @@ final class Feed(
 
   def fetchHistory(): Unit =
     val c = coin
-    (c +: State.refCoins.filterNot(_ == c)).foreach(fetchHistoryFor)
+    (c +: references.filterNot(_ == c)).foreach(fetchHistoryFor)
 
   def setMarket(newCoin: String): Unit =
     if newCoin != coin then
       val old = coin
       coin = newCoin
-      Feed.unsubscriptions(old).foreach(send)
-      Feed.subscriptions(newCoin).foreach(send)
+      Feed.unsubscriptions(old, references).foreach(send)
+      Feed.subscriptions(newCoin, references).foreach(send)
       fetchHistoryFor(newCoin)
 
-object JdkConnector extends Connector:
+final class SocketConnector(val url: String) extends Connector:
   private val client = HttpClient.newHttpClient()
 
   def connect(onText: String => Unit, onClose: () => Unit): Socket =
@@ -161,19 +168,19 @@ object JdkConnector extends Connector:
         closed()
         null
       override def onError(ws: WebSocket, error: Throwable): Unit = closed()
-    val ws = client.newWebSocketBuilder().buildAsync(URI.create(Feed.url), listener).join()
+    val ws = client.newWebSocketBuilder().buildAsync(URI.create(url), listener).join()
     new Socket:
       def send(text: String): Unit =
         val _ = ws.sendText(text, true).join()
       def close(): Unit =
         val _ = ws.sendClose(WebSocket.NORMAL_CLOSURE, "bye")
 
-object JdkRest extends Rest:
+final class EndpointRest(val url: String) extends Rest:
   private val client = HttpClient.newHttpClient()
 
   def post(body: String): Option[String] = Try {
     val request = HttpRequest
-      .newBuilder(URI.create(Feed.restUrl))
+      .newBuilder(URI.create(url))
       .timeout(java.time.Duration.ofSeconds(5))
       .header("Content-Type", "application/json")
       .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -182,3 +189,12 @@ object JdkRest extends Rest:
     if response.statusCode() == 200 then response.body()
     else throw new RuntimeException(s"http ${response.statusCode()}")
   }.toOption
+
+object JdkConnector extends Connector:
+  private val delegate = new SocketConnector(Feed.url)
+  def connect(onText: String => Unit, onClose: () => Unit): Socket =
+    delegate.connect(onText, onClose)
+
+object JdkRest extends Rest:
+  private val delegate = new EndpointRest(Feed.restUrl)
+  def post(body: String): Option[String] = delegate.post(body)
