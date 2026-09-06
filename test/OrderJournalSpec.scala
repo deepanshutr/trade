@@ -1,0 +1,117 @@
+package desk
+
+import java.io.IOException
+import java.nio.file.Files
+
+class OrderJournalSpec extends munit.FunSuite:
+  private val identity = "mainnet-" + "1" * 40
+  private def plan: OrderPlan =
+    val b = Book(Vector(Level("99", "50", 1)), Vector(Level("100", "50", 1)), 1L)
+    Trading
+      .plan(
+        "XMR",
+        MarketRules(0, 3, 5),
+        b,
+        BigDecimal(100),
+        BigDecimal(0),
+        OrderIntent(Side.Buy, OrderKind.Hard),
+        TradeSizes()
+      )
+      .toOption
+      .get
+
+  test("an unresolved press survives restart and blocks replacement") {
+    val dir = Files.createTempDirectory("desk-journal")
+    val first = OrderJournal.open(dir, identity)
+    val saved = first.reserve(plan, 1000L)
+    assertEquals(saved.nonce, 1000L)
+    assertEquals(saved.expiresAfter, 6000L)
+    assert(saved.id.matches("0x[0-9a-f]{32}"))
+    intercept[IllegalStateException](first.reserve(plan, 1001L))
+    first.close()
+    val second = OrderJournal.open(dir, identity)
+    try
+      assertEquals(second.pending, Some(saved))
+      intercept[IllegalStateException](second.reserve(plan, 1002L))
+      intercept[IllegalArgumentException](second.finish("different"))
+      second.finish(saved.id)
+      val next = second.reserve(plan, 999L)
+      assertEquals(next.nonce, 1001L)
+      assertNotEquals(next.id, saved.id)
+    finally second.close()
+  }
+
+  test("only one process owner can hold a signing state") {
+    val dir = Files.createTempDirectory("desk-lock")
+    val first = OrderJournal.open(dir, identity)
+    try intercept[Exception](OrderJournal.open(dir, identity))
+    finally first.close()
+    OrderJournal.open(dir, identity).close()
+  }
+
+  test("a failed reservation writes no request and consumes no nonce") {
+    val dir = Files.createTempDirectory("desk-write")
+    val journal = OrderJournal.open(dir, identity, () => throw new IOException("held"))
+    try
+      intercept[IOException](journal.reserve(plan, 1000L))
+      assertEquals(journal.pending, None)
+    finally journal.close()
+    val reopened = OrderJournal.open(dir, identity)
+    try assertEquals(reopened.reserve(plan, 1000L).nonce, 1000L)
+    finally reopened.close()
+  }
+
+  test("a failed completion keeps the previous unresolved record") {
+    val dir = Files.createTempDirectory("desk-finish")
+    var fail = false
+    val journal = OrderJournal.open(dir, identity, () => if fail then throw new IOException("held"))
+    val saved = journal.reserve(plan, 1000L)
+    fail = true
+    intercept[IOException](journal.finish(saved.id))
+    assertEquals(journal.pending, Some(saved))
+    journal.close()
+    val reopened = OrderJournal.open(dir, identity)
+    try assertEquals(reopened.pending, Some(saved))
+    finally reopened.close()
+  }
+
+  test("failure after replacement can leave disk ahead of memory") {
+    val dir = Files.createTempDirectory("desk-replaced")
+    val journal =
+      OrderJournal.open(dir, identity, afterReplace = () => throw new IOException("held"))
+    try
+      intercept[IOException](journal.reserve(plan, 1000L))
+      assertEquals(journal.pending, None)
+    finally journal.close()
+    val reopened = OrderJournal.open(dir, identity)
+    try
+      assertEquals(reopened.pending.map(_.nonce), Some(1000L))
+      intercept[IllegalStateException](reopened.reserve(plan, 1001L))
+    finally reopened.close()
+  }
+
+  test("leverage nonces persist without replacing an unresolved order") {
+    val dir = Files.createTempDirectory("desk-nonce")
+    val journal = OrderJournal.open(dir, identity)
+    assertEquals(journal.nextNonce(1000L), 1000L)
+    journal.close()
+    val reopened = OrderJournal.open(dir, identity)
+    try
+      assertEquals(reopened.nextNonce(999L), 1001L)
+      val saved = reopened.reserve(plan, 998L)
+      assertEquals(saved.nonce, 1002L)
+      intercept[IllegalStateException](reopened.nextNonce(1003L))
+    finally reopened.close()
+  }
+
+  test("malformed saved state cannot be overwritten as a clean start") {
+    val dir = Files.createTempDirectory("desk-corrupt")
+    val file = dir.resolve(identity + ".json")
+    Files.writeString(file, "broken")
+    Files.setPosixFilePermissions(
+      file,
+      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
+    )
+    intercept[Exception](OrderJournal.open(dir, identity))
+    assertEquals(Files.readString(file), "broken")
+  }
