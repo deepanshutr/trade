@@ -65,8 +65,6 @@ object Gauges:
         v <- correlation(m, c, n)
       yield v
 
-  def half(cols: Int): Int = ((cols - 50) / 4).max(4).min(30)
-
   def track(v: Option[Double], h: Int, style: String): String =
     val base = "." * h + "|" + "." * h
     v.fold(base) { x =>
@@ -108,12 +106,6 @@ object Gauges:
   private def sideStyle(v: Option[Double], st: Style): String =
     v.fold("")(x => if x >= 0 then st.bid else st.ask)
 
-  private def corrHalf(s: Snapshot, coin: String, name: String, i: Int, h: Int, st: Style): String =
-    val (hz, interval, n) = horizons(i)
-    val v = lens(s, coin, interval, n)
-    val refStyle = if st.colour then (if coin == "BTC" then st.btc else st.gold) else ""
-    s" ${st.wrap(refStyle, name)} ${Chart.rjust(hz, 3)} ${track(v, h, refStyle)} ${fmt(v, 'r')}"
-
   def bookRow(s: Snapshot, i: Int, now: Long, h: Int, st: Style): String =
     val (name, secs) = bookLenses(i)
     val set =
@@ -124,8 +116,7 @@ object Gauges:
     val readings = set.map(imbalance)
     val d = mean(readings.map(_._2))
     val q = mean(readings.map(_._1))
-    s"BOOK ${label(s, name, secs, now)} ${track(d, h, sideStyle(d, st))} ${fmt(d, 'D')} ${fmt(q, 'Q')} " +
-      corrHalf(s, "BTC", "BTC ", i, h, st)
+    s"BOOK ${label(s, name, secs, now)} ${track(d, h, sideStyle(d, st))} ${fmt(d, 'D')} ${fmt(q, 'Q')} "
 
   private def tapeText(
       s: Snapshot,
@@ -137,27 +128,31 @@ object Gauges:
   ): String =
     val (name, secs) = tapeLenses(i)
     val (f, n) = all
-    f"TAPE ${label(s, name, secs, now)} ${track(f, h, sideStyle(f, st))} ${fmt(f, 'F')} n=$n%-5d" +
-      corrHalf(s, "PAXG", "GOLD", i, h, st)
+    f"TAPE ${label(s, name, secs, now)} ${track(f, h, sideStyle(f, st))} ${fmt(f, 'F')} n=$n%-5d"
+
+  def correlationRows(s: Snapshot, coin: String): Vector[String] =
+    val name = if coin == "BTC" then "bitcoin" else if coin == "PAXG" then "gold" else coin
+    val values = horizons.map { (hz, interval, n) =>
+      Chart.rjust(hz, 3) + " " + fmt(lens(s, coin, interval, n), 'r')
+    }
+    values
+      .grouped(2)
+      .zipWithIndex
+      .map { (pair, i) =>
+        val prefix = if i == 0 then name.take(7).padTo(7, ' ') else " " * 7
+        Chart.fit(prefix + " " + pair.mkString(" "), Layout.leftW)
+      }
+      .toVector
+
+  def rows(s: Snapshot, now: Long, cols: Int, st: Style): Vector[String] =
+    val left = cols / 2
+    val right = cols - left
+    val h = ((left - 27) / 2).max(1).min(30)
+    val stats = tapeStats(s.tape, now, tapeLenses.map(_._2))
+    bookLenses.indices.toVector.map { i =>
+      Chart.fit(bookRow(s, i, now, h, st), left) +
+        Chart.fit(tapeText(s, i, now, stats(i), h, st), right)
+    }
 
   def tapeRow(s: Snapshot, i: Int, now: Long, h: Int, st: Style): String =
     tapeText(s, i, now, tapeStats(s.tape, now, Vector(tapeLenses(i)._2)).head, h, st)
-
-  private def fit(line: String, cols: Int): String =
-    val visible = Chart.plain(line).length
-    if visible <= cols then line + " " * (cols - visible)
-    else
-      val (out, _, _) = line.foldLeft((StringBuilder(), 0, false)) { case ((sb, seen, inEsc), c) =>
-        if inEsc then (sb.append(c), seen, c != 'm')
-        else if c == Screen.esc.head then (sb.append(c), seen, true)
-        else if seen < cols then (sb.append(c), seen + 1, false)
-        else (sb, seen + 1, false)
-      }
-      out.toString
-
-  def rows(s: Snapshot, now: Long, cols: Int, st: Style): Vector[String] =
-    val h = half(cols)
-    val stats = tapeStats(s.tape, now, tapeLenses.map(_._2))
-    val lines = bookLenses.indices.toVector.map(i => bookRow(s, i, now, h, st)) ++
-      stats.zipWithIndex.map((all, i) => tapeText(s, i, now, all, h, st))
-    lines.map(l => fit(l, cols))

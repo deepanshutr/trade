@@ -42,12 +42,6 @@ object Screen:
     val fitted = if text.length > cols then text.replace("  ", " ") else text
     fitted.padTo(cols, ' ').take(cols)
 
-  def footerRows(footer: Vector[String], cols: Int): Vector[String] =
-    footer.take(4).padTo(4, "").map { line =>
-      val plain = Chart.plain(line)
-      plain.padTo(cols, ' ').take(cols)
-    }
-
   def render(
       s: Snapshot,
       cols: Int,
@@ -60,32 +54,39 @@ object Screen:
     if cols < Layout.minCols || rows < Layout.minRows then
       Vector(s"need ${Layout.minCols}x${Layout.minRows}, have ${cols}x$rows")
     else
-      val priceRows = Layout.priceRows(rows)
+      val references = s.referenceCoins.distinct.filterNot(_ == s.coin)
+      val priceRows = Layout.priceRows(rows, references.size)
       val cells = Layout.cells(cols)
-      val dots = cells * 2
-      val columns = Chart.columns(s, dots, now)
+      val count = Layout.dotCols(cols)
+      val columns = Chart.columns(s, count, now)
       val axis = Chart.axis(columns, s.book, priceRows)
       val mid = s.book.flatMap(midOf)
       val midRow = for a <- axis; m <- mid yield a.row(m.toDouble)
       val left = Chart.ladderRows(s.book, s.coarse, axis, priceRows, midRow, style)
-      val refs = State.refCoins.filterNot(_ == s.coin).flatMap { coin =>
-        s.refs.get(coin).map { r =>
-          val (keep, colour) =
-            if coin == "BTC" then (Chart.dash, style.btc) else (Chart.dotted, style.gold)
-          RefLine(Chart.refColumns(r, dots, s, now), keep, colour)
-        }
-      }
-      val chart = axis.fold(Vector.fill(priceRows)(" " * cells))(a => Chart.line(columns, a, refs))
+      val chart =
+        axis.fold(Vector.fill(priceRows)(" " * cells))(a => Chart.line(columns, a, Vector.empty))
       val scale = Chart.scaleRows(axis, priceRows, midRow, mid)
       val priceLines = (0 until priceRows).toVector.map(r => left(r) + chart(r) + scale(r))
-      val (vol, vmax) = Chart.volumeRows(columns, style)
-      val volLines = Vector(
-        Chart.rjust("volume", Layout.leftW - 1) + " " + vol(0) +
-          Chart.rjust("v " + short(vmax), Layout.scaleW),
-        " " * Layout.leftW + vol(1) + " " * Layout.scaleW
-      )
-      val (first, z) = Chart.window(s, dots, now)
+      val (volume, maximum) = Chart.volumeRows(columns, Style.mono)
+      val volumeLine = Chart.rjust("volume", Layout.leftW - 1) + " " + volume.head +
+        Chart.rjust("v " + short(maximum), Layout.scaleW)
+      val referenceLines = references.flatMap { coin =>
+        val data = s.refs.getOrElse(coin, Ref.empty)
+        val values = Chart.referenceColumns(data, count, s, now)
+        val ax = Chart.axis(values, None, Layout.referenceRows)
+        val ink = ax.fold(Vector.fill(Layout.referenceRows)(" " * cells))(a =>
+          Chart.line(values, a, Vector.empty)
+        )
+        val labels = Gauges.correlationRows(s, coin)
+        val prices = Chart.scaleRows(ax, Layout.referenceRows, None, None)
+        (0 until Layout.referenceRows).map(i => labels(i) + ink(i) + prices(i))
+      }
+      val (first, z) = Chart.window(s, count, now)
       val axisLine = Chart.rjust(State.zoomLabel(z) + "/col", Layout.leftW - 1) + " " +
-        Chart.axisRow(first, z, dots, zone) + " " * Layout.scaleW
-      (stats(s, now, cols) +: priceLines) ++ volLines ++ Vector(axisLine) ++
-        Gauges.rows(s, now, cols, style) ++ footerRows(footer, cols)
+        Chart.axisRow(first, z, count, zone) + " " * Layout.scaleW
+      val controls = footer
+        .take(Layout.footerRows)
+        .padTo(Layout.footerRows, "")
+        .map(Chart.fit(_, cols))
+      (stats(s, now, cols) +: priceLines) ++ Vector(volumeLine) ++ referenceLines ++
+        Vector(axisLine) ++ Gauges.rows(s, now, cols, style) ++ controls

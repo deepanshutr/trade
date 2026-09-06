@@ -90,7 +90,7 @@ class ScreenSpec extends munit.FunSuite:
 
   test("the price rows carry the mid marker on one row with the bold exact mid in the scale") {
     val frame = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour)
-    val priceRows = frame.slice(1, 11)
+    val priceRows = frame.slice(1, 12)
     val marked = priceRows.filter(l => plain(l).charAt(8) == '>')
     assertEquals(marked.size, 1)
     assert(
@@ -102,35 +102,22 @@ class ScreenSpec extends munit.FunSuite:
     assert(priceRows.count(_.contains("<528.045")) == 1)
   }
 
-  test("the golden frames render in colour at 100 by 30 and in greyscale at 120 by 40") {
+  test("the colour frame keeps side colours and reference plots read without them") {
     val colour = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour)
     val mono = Screen.render(Golden.snapshot, 120, 40, Golden.now, zone, Style.mono)
-    assert(
-      colour.exists(_.contains(Style.colour.bid)) && colour.exists(_.contains(Style.colour.ask)),
-      "no side colour"
-    )
-    assert(
-      colour.exists(_.contains(Style.colour.btc)) && colour.exists(_.contains(Style.colour.gold)),
-      "no reference colour"
-    )
-    assert(!mono.exists(_.contains(Screen.esc + "[3")), "greyscale frame carries a colour code")
+    assert(colour.exists(_.contains(Style.colour.bid)))
+    assert(colour.exists(_.contains(Style.colour.ask)))
+    assert(!colour.slice(12, 19).exists(_.contains(Screen.esc + "[3")))
+    assert(!mono.exists(_.contains(Screen.esc + "[3")))
     assert(mono.exists(_.contains(Screen.dim)))
   }
 
   test("the price rows carry braille bars on every visible row and no hash marks") {
     val frame = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    val bars = frame.slice(1, 11).map(_.slice(9, 30))
+    val bars = frame.slice(1, 12).map(_.slice(9, 30))
     assert(bars.count(_.trim.nonEmpty) >= 10, bars)
     assert(!frame.exists(_.contains("#")))
     assert(bars.exists(_.contains(Chart.FULL)))
-  }
-
-  test("the reference lines add ink to the chart area") {
-    val withRefs = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    val bare = Golden.snapshot.copy(refs = State.refCoins.map(_ -> Ref.empty).toMap)
-    val noRefs = Screen.render(bare, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    def ink(f: Vector[String]) = f.slice(1, 11).map(_.slice(30, 91).count(_ != ' ')).sum
-    assert(ink(withRefs) > ink(noRefs), (ink(withRefs), ink(noRefs)))
   }
 
   test("when the main market is itself a reference market, that reference draws no line") {
@@ -149,16 +136,15 @@ class ScreenSpec extends munit.FunSuite:
     assertEquals(withBtcRefData, withoutBtcRefData)
   }
 
-  test(
-    "the volume rows carry the caption and the largest volume, the axis row the zoom and clocks"
-  ) {
+  test("volume and shared clocks occupy their own rows") {
     val frame = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour).map(plain)
-    assert(frame(11).startsWith(" " * 23 + "volume "))
-    assert(frame(11).drop(91).trim.startsWith("v "), frame(11))
-    assert(frame(12).startsWith(" " * 30))
-    assert(frame(13).startsWith(" " * 23 + "1s/col "))
-    assert(frame(13).drop(30).take(8).matches("\\d\\d:\\d\\d:\\d\\d"))
-    assert(frame(13).drop(83).take(8).matches("\\d\\d:\\d\\d:\\d\\d"))
+    assert(frame(12).startsWith(" " * 23 + "volume "))
+    assert(frame(12).drop(91).trim.startsWith("v "))
+    assert(frame(13).startsWith("bitcoin"))
+    assert(frame(16).startsWith("gold"))
+    assert(frame(19).startsWith(" " * 23 + "1s/col "))
+    assert(frame(19).drop(30).take(8).matches("\\d\\d:\\d\\d:\\d\\d"))
+    assert(frame(19).drop(83).take(8).matches("\\d\\d:\\d\\d:\\d\\d"))
   }
 
   test("a coarse zoom draws the candles, the minute clocks and the candle volume") {
@@ -171,11 +157,11 @@ class ScreenSpec extends munit.FunSuite:
     val frame = Screen.render(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
     assertEquals(frame.size, 30)
     assert(frame.forall(_.length == 100), frame.map(_.length))
-    assert(frame(13).contains("1m/col"), frame(13))
-    assertEquals("""\d\d:\d\d""".r.findAllIn(frame(13)).size, 3, frame(13))
-    val braille = frame.slice(1, 11).filter(_.exists(c => c >= 0x2800 && c <= 0x28ff))
-    assert(braille.nonEmpty, frame.slice(1, 11).mkString("\n"))
-    assert(frame(11).endsWith("v 5.0"), frame(11))
+    assert(frame(19).contains("1m/col"), frame(19))
+    assertEquals("""\d\d:\d\d""".r.findAllIn(frame(19)).size, 3, frame(19))
+    val braille = frame.slice(1, 12).filter(_.exists(c => c >= 0x2800 && c <= 0x28ff))
+    assert(braille.nonEmpty, frame.slice(1, 12).mkString("\n"))
+    assert(frame(12).endsWith("v 5.0"), frame(12))
   }
 
   test("the volume label uses short form, not a raw decimal, for large volumes") {
@@ -187,38 +173,34 @@ class ScreenSpec extends munit.FunSuite:
     }
     val s = Golden.snapshot.copy(candles = Map("1m" -> candles), zoom = 5)
     val frame = Screen.render(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    assert(frame(11).endsWith("v 12.3k"), frame(11))
+    assert(frame(12).endsWith("v 12.3k"), frame(12))
   }
 
   test("a coarse zoom draws candles with dates on the axis and history from the series") {
     val s = Golden.snapshot.copy(zoom = State.zooms.indexOf(86400))
     val frame = Screen.render(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    assert(frame(13).startsWith(" " * 23 + "1d/col "), frame(13))
-    assert(frame(13).drop(30).take(10).matches("\\d{4}-\\d\\d-\\d\\d"), frame(13))
-    assert(frame.slice(1, 11).exists(_.slice(30, 91).exists(c => c >= 0x2800 && c <= 0x28ff)))
+    assert(frame(19).startsWith(" " * 23 + "1d/col "), frame(19))
+    assert(frame(19).drop(30).take(10).matches("\\d{4}-\\d\\d-\\d\\d"), frame(19))
+    assert(frame.slice(1, 12).exists(_.slice(30, 91).exists(c => c >= 0x2800 && c <= 0x28ff)))
   }
 
-  test("the gauge rows fill twelve lines above the controls") {
+  test("six rows carry all book and tape lenses above the controls") {
     val frame = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour).map(plain)
-    assertEquals(
-      frame.slice(14, 26).map(_.take(4)),
-      Vector.fill(6)("BOOK") ++ Vector.fill(6)("TAPE")
-    )
+    val rows = frame.slice(20, 26)
+    assertEquals(rows.map(_.take(4)), Vector.fill(6)("BOOK"))
+    assertEquals(rows.map(_.slice(50, 54)), Vector.fill(6)("TAPE"))
+    assertEquals(rows.map(_.slice(5, 9).trim), Gauges.bookLenses.map(_._1))
+    assertEquals(rows.map(_.slice(55, 59).trim), Gauges.tapeLenses.map(_._1))
   }
 
-  test("the gauge rows read the lenses and the stats line has no big token") {
+  test("the reference plots carry all six correlations for each market") {
     val frame = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour).map(plain)
-    assert(
-      frame(14).contains(" BTC  15m ") && frame(20).contains(" GOLD 15m "),
-      frame.slice(14, 26).mkString("\n")
-    )
-    val lensRows = frame.slice(14, 26)
-    val reading = ".*r([+-]\\d\\.\\d\\d|   --)\\s*"
-    assert(lensRows.forall(_.matches(reading)), lensRows.mkString("\n"))
-    assert(lensRows.count(_.matches(".*r[+-]\\d\\.\\d\\d\\s*")) >= 1, lensRows.mkString("\n"))
-    assert(!frame.head.contains("big"), frame.head)
-    assert(frame(11).drop(91).trim.startsWith("v "), frame(11))
-    assert(frame(13).startsWith(" " * 23 + "1s/col "), frame(13))
+    val labels = frame.slice(13, 19).map(_.take(30))
+    val readings = "r([+-]\\d\\.\\d\\d|   --)".r
+    assertEquals(labels.map(l => readings.findAllIn(l).size).sum, 12)
+    assert(labels.exists(l => "r[+-]\\d\\.\\d\\d".r.findFirstIn(l).nonEmpty))
+    assert(labels.head.startsWith("bitcoin") && labels(3).startsWith("gold"))
+    assert(!frame.head.contains("big"))
   }
 
   test("the screen reserves four footer rows in ordinary viewing mode") {

@@ -50,6 +50,9 @@ enum Event:
   case Key(command: Command)
   case Resize(cols: Int, rows: Int)
 
+enum ChartMode:
+  case Line, Candles
+
 final case class Snapshot(
     coin: String,
     book: Option[Book],
@@ -68,11 +71,20 @@ final case class Snapshot(
     cols: Int,
     rows: Int,
     coarse: Map[Int, Book],
-    refs: Map[String, Ref]
+    refs: Map[String, Ref],
+    chartMode: ChartMode = ChartMode.Line,
+    lineZoom: Int = 0,
+    referenceCoins: Vector[String] = State.refCoins
 )
 
 object Snapshot:
-  def initial(coin: String, now: Long): Snapshot =
+  def initial(
+      coin: String,
+      now: Long,
+      references: Vector[String] = State.refCoins
+  ): Snapshot =
+    val chosen = references.distinct
+    require(chosen.size <= 3, "choose at most three reference markets")
     Snapshot(
       coin,
       None,
@@ -91,7 +103,8 @@ object Snapshot:
       Layout.minCols,
       Layout.minRows,
       Map.empty,
-      State.refCoins.map(_ -> Ref.empty).toMap
+      chosen.map(_ -> Ref.empty).toMap,
+      referenceCoins = chosen
     )
 
 object State:

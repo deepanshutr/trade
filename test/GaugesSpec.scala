@@ -122,7 +122,7 @@ class GaugesSpec extends munit.FunSuite:
     assert(!Gauges.track(Some(1.0), 4, "").contains("#"))
   }
 
-  test("book rows carry the reading on the left and the bitcoin lens on the right") {
+  test("book rows carry the depth and quote readings") {
     val sec = now / 1000
     val s = s0.copy(
       book = Some(book("1", "1")),
@@ -130,13 +130,12 @@ class GaugesSpec extends munit.FunSuite:
       since = now - 15_000
     )
     val row = Gauges.bookRow(s, 0, now, 13, Style.mono)
-    assertEquals(row, s"BOOK  now ${tr(Some(0.0))} D+0.00 Q+0.00  BTC  15m ${tr(None)} r   --")
+    assertEquals(row, s"BOOK  now ${tr(Some(0.0))} D+0.00 Q+0.00 ")
     assertEquals(
       Gauges.bookRow(s, 2, now, 13, Style.mono),
-      s"BOOK ${Screen.dim} 30s${Screen.reset} ${tr(Some(-0.25))} D-0.25 Q-0.25  BTC   4h ${tr(None)} r   --"
+      s"BOOK ${Screen.dim} 30s${Screen.reset} ${tr(Some(-0.25))} D-0.25 Q-0.25 "
     )
     val coloured = Gauges.bookRow(s, 0, now, 13, Style.colour)
-    assert(coloured.contains(Style.colour.btc + "BTC " + Screen.reset), coloured)
     assert(
       coloured.contains(Style.colour.bid + FULL + Screen.reset) || coloured.contains(
         Style.colour.ask + FULL + Screen.reset
@@ -154,7 +153,7 @@ class GaugesSpec extends munit.FunSuite:
     )
     assertEquals(
       Gauges.bookRow(s, 1, now, 13, Style.mono),
-      s"BOOK  10s ${tr(Some(0.25))} D+0.25 Q+0.25  BTC   1h ${tr(None)} r   --"
+      s"BOOK  10s ${tr(Some(0.25))} D+0.25 Q+0.25 "
     )
   }
 
@@ -164,92 +163,73 @@ class GaugesSpec extends munit.FunSuite:
     assert(!line.contains(Screen.dim), line)
   }
 
-  test("tape rows carry the flow on the left and the gold lens on the right") {
+  test("tape rows carry the flow and trade count") {
     val s = s0.copy(
       tape = Vector(trade(5_000L, Side.Buy, "100", "1"), trade(30_000L, Side.Sell, "100", "3")),
       since = now - 1_000_000L
     )
     assertEquals(
       Gauges.tapeRow(s, 0, now, 13, Style.mono),
-      s"TAPE  10s ${tr(Some(1.0))} F+1.00 n=1     GOLD 15m ${tr(None)} r   --"
+      s"TAPE  10s ${tr(Some(1.0))} F+1.00 n=1    "
     )
     assertEquals(
       Gauges.tapeRow(s, 1, now, 13, Style.mono),
-      s"TAPE   1m ${tr(Some(-0.5))} F-0.50 n=2     GOLD  1h ${tr(None)} r   --"
+      s"TAPE   1m ${tr(Some(-0.5))} F-0.50 n=2    "
     )
     val coloured = Gauges.tapeRow(s, 1, now, 13, Style.colour)
     assert(coloured.contains(Style.colour.ask + FULL + Screen.reset), coloured)
-    assert(coloured.contains(Style.colour.gold + "GOLD" + Screen.reset), coloured)
   }
 
   test("the tape window edge is exclusive: a trade exactly secs old is left out") {
     val s = s0.copy(tape = Vector(trade(10_000L, Side.Buy, "100", "1")), since = now - 1_000_000L)
     assertEquals(
       Gauges.tapeRow(s, 0, now, 13, Style.mono),
-      s"TAPE  10s ${tr(None)} F   -- n=0     GOLD 15m ${tr(None)} r   --"
+      s"TAPE  10s ${tr(None)} F   -- n=0    "
     )
   }
 
-  test("rows gives twelve lines of the width with the lenses in order") {
-    val rows = Gauges.rows(s0, now, 100, Style.colour)
-    assertEquals(rows.size, 12)
-    assert(rows.map(Chart.plain).forall(_.length == 100), rows.map(Chart.plain).map(_.length))
-    assertEquals(
-      rows.map(r => Chart.plain(r).slice(50, 59)),
-      Vector(
-        " BTC  15m",
-        " BTC   1h",
-        " BTC   4h",
-        " BTC   1d",
-        " BTC   1w",
-        " BTC   1M",
-        " GOLD 15m",
-        " GOLD  1h",
-        " GOLD  4h",
-        " GOLD  1d",
-        " GOLD  1w",
-        " GOLD  1M"
-      )
-    )
-    for cols <- 100 to 170 do
-      assert(
-        Gauges.rows(s0, now, cols, Style.colour).map(Chart.plain).forall(_.length == cols),
-        cols
-      )
+  test("six rows retain every book and tape lens in separate halves") {
+    val rows = Gauges.rows(s0, now, 100, Style.colour).map(Chart.plain)
+    assertEquals(rows.size, 6)
+    assertEquals(rows.map(_.slice(5, 9).trim), Gauges.bookLenses.map(_._1))
+    assertEquals(rows.map(_.slice(55, 59).trim), Gauges.tapeLenses.map(_._1))
+    assert(rows.forall(_.length == 100))
+    assert(rows.forall(r => r.take(50).contains("D   --") && r.take(50).contains("Q   --")))
+    assert(rows.forall(_.drop(50).contains("F   --")))
   }
 
-  test("the left half stays fifty characters wide even when every reading is undefined") {
-    Gauges.bookLenses.indices.foreach { i =>
-      val row = Chart.plain(Gauges.bookRow(s0, i, now, 12, Style.mono))
-      assert(row.take(50).length == 50 && row.drop(50).startsWith(" BTC"), row)
-    }
-    Gauges.tapeLenses.indices.foreach { i =>
-      val row = Chart.plain(Gauges.tapeRow(s0, i, now, 12, Style.mono))
-      assert(row.take(50).length == 50 && row.drop(50).startsWith(" GOLD"), row)
-    }
+  test("each reference has six correlation readings in three label rows") {
+    val labels = Gauges.correlationRows(s0, "BTC")
+    assertEquals(labels.size, 3)
+    assert(labels.forall(_.length == 30))
+    assert(labels.head.startsWith("bitcoin 15m "))
+    assertEquals(labels.map(l => "r   --".r.findAllIn(l).size), Vector(2, 2, 2))
+    assert(labels(0).contains("15m") && labels(0).contains("1h"))
+    assert(labels(1).contains("4h") && labels(1).contains("1d"))
+    assert(labels(2).contains("1w") && labels(2).contains("1M"))
+    assert(Gauges.correlationRows(s0, "PAXG").head.startsWith("gold"))
+    assert(Gauges.correlationRows(s0, "ETH").head.startsWith("ETH"))
   }
 
-  test("every gauge row is exactly the width, from a hundred columns to a hundred and seventy") {
+  test("paired gauges fit every width and retain a six-digit trade count") {
     val deep = Book(
       (1 to 20).toVector.map(i => lvl((100 - i).toString, "10")),
       (1 to 20).toVector.map(i => lvl((101 + i).toString, "10")),
       1L
     )
-    val sec = now / 1000
     val tape =
       Vector.tabulate(100_000)(i => Trade(now - i.toLong * 9_999L / 100_000L, Side.Buy, "100", "1"))
     val s = s0.copy(
       book = Some(deep),
-      books = Vector((sec, deep)),
+      books = Vector(now / 1000 -> deep),
       tape = tape,
       since = now - 100_000_000L
     )
     for cols <- 100 to 170 do
-      val rows = Gauges.rows(s, now, cols, Style.colour)
-      assertEquals(rows.size, 12)
-      assertEquals(rows.map(r => Chart.plain(r).length).distinct, Vector(cols), s"at $cols columns")
-    val wide = Gauges.rows(s, now, 100, Style.colour)
-    assert(Chart.plain(wide(6)).contains("n=100000"), Chart.plain(wide(6)))
+      val rows = Gauges.rows(s, now, cols, Style.colour).map(Chart.plain)
+      assertEquals(rows.size, 6)
+      assertEquals(rows.map(_.length).distinct, Vector(cols))
+      assert(rows.head.drop(cols / 2).contains("n=100000"), rows.head)
   }
 
   test("a row too long for the width is cut and keeps its escapes whole") {
@@ -259,14 +239,14 @@ class GaugesSpec extends munit.FunSuite:
     assert(rows(1).contains(Screen.dim) && rows(1).contains(Screen.reset), rows(1))
   }
 
-  test("twelve gauge rows over a full tape and full series render in under 200 milliseconds") {
+  test("gauges and correlations over full retained data render within the existing limit") {
     val tape = Vector.tabulate(200_000)(i =>
       Trade(now - i.toLong * 70L, if i % 2 == 0 then Side.Buy else Side.Sell, "100", "1")
     )
     def full(seed: Double): Map[String, Vector[Candle]] =
-      Vector("1m", "5m", "15m", "1h", "4h").map { i =>
-        val ms = State.intervalMs(i)
-        i -> Vector.tabulate(State.seriesCap) { k =>
+      Vector("1m", "5m", "15m", "1h", "4h").map { interval =>
+        val ms = State.intervalMs(interval)
+        interval -> Vector.tabulate(State.seriesCap) { k =>
           val c = 100.0 + math.sin((k + seed) / 7.0)
           Candle(k * ms, c, c, c, c, 1.0)
         }
@@ -275,15 +255,18 @@ class GaugesSpec extends munit.FunSuite:
       book = Some(book("1", "1")),
       tape = tape,
       since = now - 100_000_000L,
-      candles = full(0.0),
-      refs = Map("BTC" -> Ref(Vector.empty, full(1.0)), "PAXG" -> Ref(Vector.empty, full(2.0)))
+      candles = full(0),
+      refs = Map("BTC" -> Ref(Vector.empty, full(1)), "PAXG" -> Ref(Vector.empty, full(2)))
     )
-    val _ = Gauges.rows(s, now, 100, Style.colour)
-    val _ = Gauges.rows(s, now, 100, Style.colour)
+    def render(): Vector[String] =
+      Gauges.rows(s, now, 100, Style.colour) ++
+        Gauges.correlationRows(s, "BTC") ++ Gauges.correlationRows(s, "PAXG")
+    val _ = render()
+    val _ = render()
     val started = System.nanoTime()
-    val rows = Gauges.rows(s, now, 100, Style.colour)
+    val rows = render()
     val elapsed = System.nanoTime() - started
     assertEquals(rows.size, 12)
-    assertEquals(rows.map(Chart.plain).count(_.matches(".*r[+-]\\d\\.\\d\\d\\s*")), 12)
+    assertEquals(rows.drop(6).map(l => "r[+-]\\d\\.\\d\\d".r.findAllIn(l).size).sum, 12)
     assert(elapsed < 2e8, s"took ${elapsed / 1e6} ms")
   }

@@ -302,3 +302,47 @@ class FeedSpec extends munit.FunSuite:
     assertEquals(seen.asScala.toVector, queue.asScala.toVector)
     assertEquals(seen.size(), 1)
   }
+
+  test("configured references control subscriptions and history without duplicates") {
+    val refs = Vector("BTC", "PAXG", "ETH", "ETH")
+    for (main, markets, count) <- Vector(
+        ("ETH", Set("ETH", "BTC", "PAXG"), 18),
+        ("XMR", Set("XMR", "ETH", "BTC", "PAXG"), 24)
+      )
+    do
+      val subscriptions = Feed.subscriptions(main, refs)
+      val decoded = subscriptions.map(ujson.read(_)("subscription"))
+      assertEquals(decoded.map(_("coin").str).toSet, markets)
+      assertEquals(subscriptions.distinct.size, subscriptions.size)
+      assertEquals(decoded.count(v => v("type").str == "candle"), count)
+      val rest = restAnswering()
+      val queue = new ConcurrentLinkedQueue[Event]()
+      val feed = new Feed(new FakeConnector, rest, queue, () => 10_000_000L, main, refs)
+      feed.fetchHistory()
+      val history = queue.asScala.toVector.collect { case Event.CandleHistory(c, i, _) => (c, i) }
+      assertEquals(history.toSet, markets.flatMap(c => State.intervals.map(c -> _)))
+      assertEquals(history.size, count)
+      assertEquals(rest.bodies.size, count)
+  }
+
+  test("a market switch retains the configured reference subscription set") {
+    val refs = Vector("BTC", "PAXG", "ETH")
+    val connector = new FakeConnector
+    val rest = restAnswering()
+    val queue = new ConcurrentLinkedQueue[Event]()
+    val feed = new Feed(connector, rest, queue, () => 10_000_000L, "XMR", refs)
+    val thread = startConnected(feed)
+    try
+      val socket = connector.sockets.peek()
+      socket.sent.clear()
+      rest.bodies.clear()
+      feed.setMarket("SOL")
+      assertEquals(
+        socket.sent.asScala.toVector,
+        Feed.unsubscriptions("XMR", refs) ++ Feed.subscriptions("SOL", refs)
+      )
+      assertEquals(rest.bodies.size, 6)
+    finally
+      connector.onClose()
+      thread.join(1000)
+  }

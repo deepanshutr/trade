@@ -51,6 +51,27 @@ object Chart:
 
   def plain(line: String): String = line.replaceAll(esc + "\\[[0-9;]*m", "")
 
+  def fit(line: String, cols: Int): String =
+    val visible = plain(line).length
+    if visible <= cols then line + " " * (cols - visible)
+    else
+      val (out, _, _) = line.foldLeft((StringBuilder(), 0, false)) { case ((sb, seen, inEsc), c) =>
+        if inEsc then (sb.append(c), seen, c != 'm')
+        else if c == Screen.esc.head then (sb.append(c), seen, true)
+        else if seen < cols then (sb.append(c), seen + 1, false)
+        else (sb, seen + 1, false)
+      }
+      out.toString
+
+  def referenceColumns(
+      r: Ref,
+      count: Int,
+      s: Snapshot,
+      now: Long
+  ): Vector[Option[Column]] =
+    val (first, z) = window(s, count, now)
+    columnsOf(r.samples, Vector.empty, r.candles, first, z, count)
+
   def styled(cells: Vector[(Char, String)]): String =
     val sb = new StringBuilder
     var current = ""

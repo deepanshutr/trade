@@ -7,8 +7,15 @@ object Layout:
   val labelW = 8
   val barW = 21
   val scaleW = 9
-  val volRows = 2
-  val gaugeRows = 12
+  val volRows = 1
+  val referenceRows = 3
+  val gaugeRows = 6
+  val footerRows = 4
+  val candleW = 4
   def cells(cols: Int): Int = cols - leftW - scaleW
   def dotCols(cols: Int): Int = cells(cols) * 2
-  def priceRows(rows: Int): Int = rows - 1 - volRows - 1 - gaugeRows - 4
+  def plotColumns(cols: Int, mode: ChartMode): Int = mode match
+    case ChartMode.Line    => dotCols(cols)
+    case ChartMode.Candles => cells(cols) / candleW
+  def priceRows(rows: Int, referenceCount: Int = 2): Int =
+    rows - 1 - volRows - referenceCount * referenceRows - 1 - gaugeRows - footerRows

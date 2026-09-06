@@ -182,9 +182,7 @@ object Main:
     val st = style(args, sys.env)
     val now = () => System.currentTimeMillis()
     val queue = new LinkedBlockingQueue[Event]()
-    val initial = Snapshot
-      .initial(args.coin, now())
-      .copy(refs = config.references.map(_ -> Ref.empty).toMap)
+    val initial = Snapshot.initial(args.coin, now(), config.references)
     val state = new AtomicReference(initial)
     val shownCoin = new AtomicReference(Option.empty[String])
     val pendingPrompts = new AtomicInteger(0)

@@ -403,21 +403,21 @@ class ChartSpec extends munit.FunSuite:
     assertEquals(scale(13).trim, ladder(13).take(Layout.labelW).trim)
   }
 
-  test("volume rows scale to the largest column with at least one dot") {
+  test("one volume row scales to the largest column with at least one dot") {
     val cs = Vector(col(1.0, 0.0), col(1.0, 7.0), col(1.0, 1.0), col(1.0, 14.0))
     val (lines, vmax) = Chart.volumeRows(cs, Style.mono)
     assertEquals(vmax, 14.0)
-    assertEquals(lines, Vector(" " + br(0xb0), br(0xb8) + br(0xf8)))
-    assertEquals(Chart.volumeRows(Vector(None, None), Style.mono), (Vector(" ", " "), 0.0))
+    assertEquals(lines, Vector(br(0xa0) + br(0xf0)))
+    assertEquals(Chart.volumeRows(Vector(None, None), Style.mono), (Vector(" "), 0.0))
   }
 
-  test("volume dots colour by column direction") {
+  test("volume colour remains available to its renderer but the screen uses plain ink") {
     val up = Some(Column(1.0, 1.0, 2.0, 2.0, 5.0))
     val down = Some(Column(2.0, 1.0, 2.0, 1.0, 5.0))
     val (lines, _) = Chart.volumeRows(Vector(up, up, down, down), Style.colour)
-    assert(lines(1).contains(Style.colour.bid) && lines(1).contains(Style.colour.ask), lines)
+    assert(lines.head.contains(Style.colour.bid) && lines.head.contains(Style.colour.ask))
     val (mono, _) = Chart.volumeRows(Vector(up, up, down, down), Style.mono)
-    assert(!mono(1).contains(Screen.esc))
+    assert(!mono.head.contains(Screen.esc))
   }
 
   test("the axis row prints three clocks at the first middle and last column") {
