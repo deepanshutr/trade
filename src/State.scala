@@ -237,9 +237,11 @@ object State:
     case Command.PromptSubmit      =>
       s.prompt match
         case Some(name) if name.nonEmpty && name != s.coin =>
-          val refs =
-            if s.refs.contains(s.coin) then s.refs.updated(s.coin, Ref(s.samples, s.candles))
-            else s.refs
+          val refs = s.refs.get(s.coin).fold(s.refs) { old =>
+            val samples = if s.samples.nonEmpty then s.samples else old.samples
+            val candles = old.candles ++ s.candles.filter(_._2.nonEmpty)
+            s.refs.updated(s.coin, Ref(samples, candles))
+          }
           s.copy(
             coin = name,
             refs = refs,

@@ -87,6 +87,16 @@ class GaugesSpec extends munit.FunSuite:
     assertEquals(Gauges.pearson(twoReturns, twoReturns), None)
   }
 
+  test("correlation pairs only the tails of both series") {
+    def minute(i: Int, c: Double): Candle = Candle(i * 60_000L, c, c, c, c, 1)
+    val main = (0 until 50).toVector.map(i => minute(i, 100 + (i % 7) * 1.5))
+    val sparse =
+      main.filter(c => (c.t / 60_000L) % 3 == 0).map(c => c.copy(c = c.c * 2, o = c.o * 2))
+    assertEquals(Gauges.correlation(main, sparse, 3), None)
+    val dense = main.map(c => c.copy(c = c.c * 2, o = c.o * 2))
+    assert(Gauges.correlation(main, dense, 3).isDefined)
+  }
+
   test("a lens reads the horizon's series and is undefined for the main market itself") {
     val closes = Vector(1.0, 1.1, 1.2, 1.1, 1.3, 1.4, 1.2, 1.5)
     val cs = closes.zipWithIndex.map((c, i) => Candle(i * 60_000L, c, c, c, c, 1))
