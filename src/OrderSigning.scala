@@ -204,6 +204,33 @@ object OrderSigning:
     )
     hash(Array[Byte](25, 1) ++ domainHash ++ message)
 
+  private[desk] def warm(
+      signOrder: (Array[Byte], ujson.Value, Long, Boolean, Option[Long]) => ujson.Value = sign
+  ): Unit =
+    val key = java.util.HexFormat
+      .of()
+      .parseHex(
+        "0123456789012345678901234567890123456789012345678901234567890123"
+      )
+    try
+      val action = ujson.Obj(
+        "type" -> "order",
+        "orders" -> ujson.Arr(
+          ujson.Obj(
+            "a" -> 32767,
+            "b" -> false,
+            "p" -> "546.05",
+            "s" -> "1.83",
+            "r" -> false,
+            "t" -> ujson.Obj("limit" -> ujson.Obj("tif" -> "Ioc")),
+            "c" -> "0x0123456789abcdef0123456789abcdef"
+          )
+        ),
+        "grouping" -> "na"
+      )
+      val _ = signOrder(key, action, 1788684358292L, false, Some(1788684359292L))
+    finally java.util.Arrays.fill(key, 0.toByte)
+
   def sign(
       secret: Array[Byte],
       action: ujson.Value,

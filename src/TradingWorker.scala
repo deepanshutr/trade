@@ -46,7 +46,8 @@ final class TradingWorker private[desk] (
     wall: () => Long,
     monotonic: () => Long,
     afterReserve: () => Unit = () => (),
-    beforeOrderSign: () => Unit = () => ()
+    beforeOrderSign: () => Unit = () => (),
+    warmSigning: () => Unit = () => OrderSigning.warm()
 ) extends AutoCloseable:
   private final case class Seen(book: Book, at: Long)
   private final case class Touch(bid: BigDecimal, ask: BigDecimal, time: Long, at: Long)
@@ -473,9 +474,24 @@ final class TradingWorker private[desk] (
       workers = Vector(
         daemon("orders") { while !closed.get() do execute(requests.take()) },
         daemon("account") {
-          while !closed.get() do
-            refresh()
-            Thread.sleep(1000)
+          val prepared =
+            if !enabled then true
+            else
+              try
+                warmSigning()
+                true
+              catch
+                case error: InterruptedException => throw error
+                case _: Exception                =>
+                  synchronized {
+                    fatal = true
+                    message = "Order signing could not be prepared. Restart to retry"
+                  }
+                  false
+          if prepared then
+            while !closed.get() do
+              refresh()
+              Thread.sleep(1000)
         }
       )
       workers.foreach(_.start())

@@ -96,3 +96,60 @@ class ExchangeSpec extends munit.FunSuite:
     assert(!guard.deliver(current) { value = "late data" })
     assertEquals(value, "new data")
   }
+
+  private def recoveredWith(field: String, value: String): Option[String] =
+    val order = ujson.Obj(
+      "cloid" -> saved.id,
+      "coin" -> saved.coin,
+      "side" -> "B",
+      "limitPx" -> saved.limit,
+      "origSz" -> saved.quantity
+    )
+    order(field) = ujson.Str(value)
+    Exchange.recovered(
+      Some(
+        ujson.Obj(
+          "status" -> "order",
+          "order" -> ujson.Obj("status" -> "filled", "order" -> order)
+        )
+      ),
+      saved
+    )
+
+  test(
+    "recovery rejects a mismatched original quantity with the same client identifier"
+  ) {
+    assertEquals(recoveredWith("origSz", "4"), None)
+    assertEquals(
+      recoveredWith("origSz", saved.quantity),
+      Some("XMR recovered filled")
+    )
+  }
+
+  test("recovery rejects a mismatched limit with the same client identifier") {
+    assertEquals(recoveredWith("limitPx", "100.2"), None)
+    assertEquals(
+      recoveredWith("limitPx", saved.limit),
+      Some("XMR recovered filled")
+    )
+  }
+
+  test("filled average prices respect both buy and sell saved limits") {
+    def fill(price: String): Option[ujson.Value] =
+      reply(
+        ujson.Obj(
+          "filled" -> ujson.Obj("totalSz" -> "1", "avgPx" -> price, "oid" -> 9)
+        )
+      )
+    assertEquals(Exchange.outcome(fill("100.2"), saved), None)
+    assertEquals(
+      Exchange.outcome(fill("100.1"), saved),
+      Some("XMR filled 1 at 100.1")
+    )
+    val sell = saved.copy(side = Side.Sell)
+    assertEquals(Exchange.outcome(fill("100"), sell), None)
+    assertEquals(
+      Exchange.outcome(fill("100.1"), sell),
+      Some("XMR filled 1 at 100.1")
+    )
+  }

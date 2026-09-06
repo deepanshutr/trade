@@ -19,7 +19,9 @@ class TradingWorkerSpec extends munit.FunSuite:
       beforeOrderSign: () => Unit = () => (),
       initialLeverage: Int = 5,
       loseLeverage: Boolean = false,
-      marginMode: String = "cross"
+      marginMode: String = "cross",
+      warmSigning: () => Unit = () => OrderSigning.warm(),
+      autoStart: Boolean = true
   ):
     private val key = Array.fill[Byte](32)(1)
     val agent = OrderSigning.address(key)
@@ -27,6 +29,8 @@ class TradingWorkerSpec extends munit.FunSuite:
     val config = TradingConfig(owner = Some(owner), agent = Some(agent))
     val clock = new AtomicLong(10000L)
     val loads = new AtomicInteger()
+    val journalOpens = new AtomicInteger()
+    val warmCalls = new AtomicInteger()
     val posts = new AtomicInteger()
     val orderPosts = new AtomicInteger()
     val roleReads = new AtomicInteger()
@@ -173,15 +177,24 @@ class TradingWorkerSpec extends munit.FunSuite:
       enabled,
       "XMR",
       exchange,
-      () => { loads.incrementAndGet(); key.clone() },
-      () => OrderJournal.open(directory, config.identity, beforeReplace, afterReplace),
+      () =>
+        loads.incrementAndGet()
+        key.clone()
+      ,
+      () =>
+        journalOpens.incrementAndGet()
+        OrderJournal.open(directory, config.identity, beforeReplace, afterReplace)
+      ,
       () => clock.get(),
       () => clock.get(),
       afterReserve,
-      beforeOrderSign
+      beforeOrderSign,
+      () =>
+        warmCalls.incrementAndGet()
+        warmSigning()
     )
     val worker = create()
-    worker.start()
+    if autoStart then worker.start()
     fresh(worker)
     def ready(): Unit = waitFor("worker never became ready")(worker.view.ready)
     def close(): Unit =
@@ -199,6 +212,8 @@ class TradingWorkerSpec extends munit.FunSuite:
       assert(f.worker.preview(buy).isRight)
       assert(!f.worker.submit(buy, "XMR"))
       assertEquals(f.loads.get(), 0)
+      assertEquals(f.warmCalls.get(), 0)
+      assertEquals(f.journalOpens.get(), 0)
       assertEquals(f.posts.get(), 0)
     finally f.close()
   }
@@ -584,4 +599,312 @@ class TradingWorkerSpec extends munit.FunSuite:
       assert(!f.worker.view.ready)
       assertEquals(f.leverage, 3)
     finally f.close()
+  }
+
+  test("held signing preparation leaves startup and view responsive before readiness") {
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val returned = new CountDownLatch(1)
+    val f = new Fixture(
+      warmSigning = () =>
+        entered.countDown()
+        release.await()
+      ,
+      autoStart = false
+    )
+    val caller = new Thread(() =>
+      f.worker.start()
+      returned.countDown()
+    )
+    val answers = new LinkedBlockingQueue[(TradingView, Boolean)]()
+    val reader = new Thread(() => answers.put((f.worker.view, f.worker.submit(buy, "XMR"))))
+    caller.setDaemon(true)
+    reader.setDaemon(true)
+    try
+      caller.start()
+      assert(entered.await(3, TimeUnit.SECONDS))
+      assert(returned.await(3, TimeUnit.SECONDS), "start waited for signing preparation")
+      reader.start()
+      val answer = answers.poll(3, TimeUnit.SECONDS)
+      assert(answer != null, "view or submit waited for signing preparation")
+      assert(!answer._1.ready)
+      assert(!answer._2)
+      assertEquals(f.loads.get(), 0)
+      assertEquals(f.journalOpens.get(), 0)
+      assertEquals(f.posts.get(), 0)
+      release.countDown()
+      f.ready()
+      assertEquals(f.warmCalls.get(), 1)
+    finally
+      release.countDown()
+      caller.join(3000)
+      reader.join(3000)
+      f.close()
+  }
+
+  test("signing preparation runs once and adds no order or saved entry") {
+    val f = new Fixture()
+    try
+      f.ready()
+      assertEquals(f.warmCalls.get(), 1)
+      assertEquals(f.loads.get(), 1)
+      assertEquals(f.journalOpens.get(), 1)
+      assertEquals(f.posts.get(), 0)
+      assert(!Files.exists(f.directory.resolve(f.config.identity + ".json")))
+      f.worker.start()
+      f.worker.observe(Event.SocketDown)
+      f.fresh(f.worker, time = 2000)
+      f.ready()
+      assertEquals(f.warmCalls.get(), 1)
+      assertEquals(f.posts.get(), 0)
+      assert(f.worker.submit(buy, "XMR"))
+      assert(f.entered.await(3, TimeUnit.SECONDS))
+      assertEquals(f.posts.get(), 1)
+      assertEquals(f.orderPosts.get(), 1)
+      assertEquals(f.warmCalls.get(), 1)
+    finally f.close()
+  }
+
+  test("failed signing preparation blocks trading before protected or saved state access") {
+    val accountThread = new AtomicReference[Thread]()
+    val f = new Fixture(warmSigning = () =>
+      accountThread.set(Thread.currentThread())
+      throw new IllegalStateException("test failure"))
+    try
+      waitFor("signing preparation failure was not shown")(
+        f.worker.view.message == "Order signing could not be prepared. Restart to retry"
+      )
+      val stopped = accountThread.get()
+      assert(stopped != null, "failed preparation did not run on the account thread")
+      stopped.join(3000)
+      assert(!stopped.isAlive, "account thread continued after signing preparation failed")
+      assert(!f.worker.view.ready)
+      assert(!f.worker.submit(buy, "XMR"))
+      f.worker.start()
+      f.worker.select("BTC")
+      f.fresh(f.worker, coin = "BTC", time = 2000)
+      assert(!f.worker.view.ready)
+      assertEquals(f.warmCalls.get(), 1)
+      assertEquals(f.loads.get(), 0)
+      assertEquals(f.journalOpens.get(), 0)
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
+
+  private def checkCapturedBoundary(
+      prepare: Fixture => Unit,
+      changed: Fixture => Unit
+  ): Unit =
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val f = new Fixture(beforeOrderSign = () =>
+      entered.countDown()
+      release.await())
+    try
+      f.ready()
+      prepare(f)
+      assert(f.worker.submit(buy, "XMR"))
+      assert(entered.await(3, TimeUnit.SECONDS))
+      changed(f)
+      release.countDown()
+      waitFor("captured press did not settle")(
+        f.worker.view.message.contains("canceled before sending") ||
+          f.worker.view.message.contains("filled 1 at 100")
+      )
+      assertEquals(f.orderPosts.get(), 0)
+      assert(f.worker.view.message.contains("canceled before sending"))
+    finally
+      release.countDown()
+      f.close()
+
+  test("a captured press cannot survive switching away and back") {
+    checkCapturedBoundary(
+      _ => (),
+      f =>
+        f.worker.select("BTC")
+        f.worker.select("XMR")
+        f.fresh(f.worker, time = 2000)
+        waitFor("new selected account was not received")(
+          f.worker.view.position.nonEmpty && f.worker.view.rules.nonEmpty &&
+            f.roleReads.get() >= 2
+        )
+    )
+  }
+
+  test("fresh exact depth cannot renew an older top quote receipt") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.worker.observe(
+        Event.BboUpdate(
+          "XMR",
+          Level("99.99", "20", 1),
+          Level("100", "20", 1),
+          2000
+        )
+      )
+      f.clock.addAndGet(1001)
+      f.fresh(f.worker, time = 1001)
+      assert(!f.worker.view.ready)
+      assert(!f.worker.submit(buy, "XMR"))
+      assertEquals(f.orderPosts.get(), 0)
+    finally f.close()
+  }
+
+  test("a same-time top quote cannot renew an old exact book receipt") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.clock.addAndGet(1001)
+      f.worker.observe(
+        Event.BboUpdate(
+          "XMR",
+          Level("99.99", "20", 1),
+          Level("100", "20", 1),
+          1000
+        )
+      )
+      assert(!f.worker.view.ready)
+      assert(!f.worker.submit(buy, "XMR"))
+      assertEquals(f.orderPosts.get(), 0)
+    finally f.close()
+  }
+
+  test("new current data cannot renew a captured old top quote") {
+    checkCapturedBoundary(
+      f =>
+        f.worker.observe(
+          Event.BboUpdate(
+            "XMR",
+            Level("99.99", "20", 1),
+            Level("100", "20", 1),
+            2000
+          )
+        )
+        f.clock.addAndGet(800)
+        f.fresh(f.worker, time = 1001)
+      ,
+      f =>
+        f.clock.addAndGet(201)
+        f.fresh(f.worker, time = 2001)
+    )
+  }
+
+  test("new current data cannot renew a captured old exact book") {
+    checkCapturedBoundary(
+      f =>
+        f.clock.addAndGet(800)
+        f.worker.observe(
+          Event.BboUpdate(
+            "XMR",
+            Level("99.99", "20", 1),
+            Level("100", "20", 1),
+            1000
+          )
+        )
+      ,
+      f =>
+        f.clock.addAndGet(201)
+        f.fresh(f.worker, time = 2001)
+    )
+  }
+
+  test("fresh market and active data cannot renew an old account position") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.holdAccount = true
+      assert(f.accountEntered.await(3, TimeUnit.SECONDS))
+      f.clock.addAndGet(2001)
+      f.sendActive()
+      f.fresh(f.worker, time = 3001)
+      assert(!f.worker.view.ready)
+      assert(!f.worker.submit(buy, "XMR"))
+      assertEquals(f.orderPosts.get(), 0)
+    finally f.close()
+  }
+
+  test("new current data cannot renew a captured old account position") {
+    checkCapturedBoundary(
+      f =>
+        f.holdAccount = true
+        assert(f.accountEntered.await(3, TimeUnit.SECONDS))
+        f.clock.addAndGet(1800)
+        f.sendActive()
+        f.fresh(f.worker, time = 2800)
+      ,
+      f =>
+        f.clock.addAndGet(201)
+        f.position = "7"
+        f.accountRelease.countDown()
+        waitFor("new account position was not received")(
+          f.worker.view.position.contains(BigDecimal("7"))
+        )
+    )
+  }
+
+  test("new current data cannot renew captured old active data") {
+    checkCapturedBoundary(
+      f =>
+        f.publishActive = false
+        f.clock.addAndGet(1800)
+        f.position = "7"
+        f.fresh(f.worker, time = 2800)
+        waitFor("new account position was not received")(
+          f.worker.view.position.contains(BigDecimal("7"))
+        )
+      ,
+      f =>
+        f.clock.addAndGet(201)
+        f.sendActive()
+    )
+  }
+
+  test("a fatal completion write cannot be healed by later terminal recovery") {
+    val writes = new AtomicInteger()
+    val f = new Fixture(beforeReplace =
+      () => if writes.incrementAndGet() == 2 then throw new java.io.IOException()
+    )
+    try
+      f.ready()
+      f.recoverFilled = true
+      assert(f.worker.submit(buy, "XMR"))
+      waitFor("completion failure was not latched")(
+        f.worker.view.message.contains("Restart to recover")
+      )
+      f.position = "7"
+      waitFor("later account read did not run")(
+        f.worker.view.position.contains(BigDecimal("7"))
+      )
+      Thread.sleep(1200)
+      assertEquals(f.recoveryReads.get(), 0)
+      assertEquals(writes.get(), 2)
+      assert(!f.worker.view.ready)
+      assert(f.worker.view.message.contains("Restart to recover"))
+    finally f.close()
+  }
+
+  test(
+    "a request cannot reach the exchange while durable reservation is held"
+  ) {
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val held = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val f = new Fixture(beforeReplace =
+      () =>
+        if held.compareAndSet(false, true) then
+          entered.countDown()
+          release.await()
+    )
+    try
+      f.ready()
+      f.hold = true
+      assert(f.worker.submit(buy, "XMR"))
+      assert(entered.await(3, TimeUnit.SECONDS))
+      assert(!f.entered.await(1500, TimeUnit.MILLISECONDS))
+      assertEquals(f.orderPosts.get(), 0)
+      assertEquals(release.getCount, 1L)
+    finally
+      release.countDown()
+      f.close()
   }
