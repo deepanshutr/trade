@@ -16,6 +16,9 @@ set desk "$env(HOME)/.local/bin/desk"
 spawn /bin/sh -c {
     /bin/stty rows 30 columns 100 || exit 2
     saved=$(/bin/stty -g) || exit 2
+    /bin/stty raw -echo || exit 2
+    /bin/stty "$saved" || exit 2
+    saved=$(/bin/stty -g) || exit 2
     "$1" XMR
     result=$?
     restored=$(/bin/stty -g) || exit 2

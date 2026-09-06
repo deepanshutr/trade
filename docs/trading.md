@@ -105,8 +105,9 @@ the existing order first.
 
 Readiness also needs recent account data. The account stream does not promise a steady
 update rate, so a quiet account can become unavailable even while market quotes continue.
-The status row explains the current block. A pending order is never resent to improve its
-price or work around a slow reply.
+The status row can show `unavailable` beside a retained fill, rejection or recovery
+message. That retained outcome may not explain the current block. A pending order is
+never resent to improve its price or work around a slow reply.
 
 After installing a new build, restart any already running `desk` process. It keeps the
 previous program until restarted.

@@ -452,7 +452,7 @@ class StateSpec extends munit.FunSuite:
     val hour = Candle(0L, 2, 2, 2, 2, 2)
     val start = Snapshot.initial("BTC", t0)
     val withOld = start.copy(refs =
-      start.refs.updated("BTC", Ref(Vector((1L, 5.0)), Map("1h" -> Vector(hour))))
+      start.refs.updated("BTC", Ref(Vector((t0 / 1000, 5.0)), Map("1h" -> Vector(hour))))
     )
     val busy = State.reduce(withOld, Event.CandleHistory("BTC", "1m", Vector(one)), t0)
     val typed = "XMR".foldLeft(press(busy, Command.StartMarketPrompt))((s, ch) =>
@@ -460,7 +460,7 @@ class StateSpec extends munit.FunSuite:
     )
     val switched = press(typed, Command.PromptSubmit, t0 + 5000)
     assertEquals(switched.refs("BTC").candles, Map("1h" -> Vector(hour), "1m" -> Vector(one)))
-    assertEquals(switched.refs("BTC").samples, Vector((1L, 5.0)))
+    assertEquals(switched.refs("BTC").samples, Vector((t0 / 1000, 5.0)))
     val fresh = press(
       "XMR".foldLeft(press(start, Command.StartMarketPrompt))((s, ch) =>
         press(s, Command.PromptChar(ch))

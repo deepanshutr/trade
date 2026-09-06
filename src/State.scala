@@ -260,8 +260,16 @@ object State:
       s.prompt match
         case Some(name) if name.nonEmpty && name != s.coin =>
           val refs = s.refs.get(s.coin).fold(s.refs) { old =>
-            val samples = if s.samples.nonEmpty then s.samples else old.samples
-            val candles = old.candles ++ s.candles.filter(_._2.nonEmpty)
+            val samples = (old.samples ++ s.samples).toMap.toVector
+              .filter(_._1 >= now / 1000 - samplesMs / 1000)
+              .sortBy(_._1)
+            val candles = s.candles.foldLeft(old.candles) { case (merged, (interval, cs)) =>
+              if cs.isEmpty then merged
+              else
+                val combined = merged.getOrElse(interval, Vector.empty) ++ cs
+                val kept = combined.map(c => c.t -> c).toMap.values.toVector.sortBy(_.t)
+                merged.updated(interval, kept.takeRight(seriesCap))
+            }
             s.refs.updated(s.coin, Ref(samples, candles))
           }
           s.copy(
