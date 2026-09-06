@@ -36,10 +36,38 @@ object Main:
         sys.exit(64)
       case Right(args) => run(args)
 
-  private def daemon(name: String)(body: => Unit): Unit =
-    val t = new Thread(() => body, name)
+  private def daemon(name: String)(body: => Unit): Thread =
+    val t = new Thread(
+      () => {
+        try body
+        catch case _: InterruptedException => Thread.currentThread().interrupt()
+      },
+      name
+    )
     t.setDaemon(true)
     t.start()
+    t
+
+  def startFold(
+      queue: LinkedBlockingQueue[Event],
+      state: AtomicReference[Snapshot],
+      feed: Feed,
+      now: () => Long
+  ): Vector[Thread] =
+    val switches = new LinkedBlockingQueue[String]()
+    val market = daemon("market") {
+      while true do feed.setMarket(switches.take())
+    }
+    val fold = daemon("fold") {
+      while true do
+        val event = queue.take()
+        val before = state.get()
+        val after = State.reduce(before, event, now())
+        state.set(after)
+        if after.coin != before.coin then
+          val _ = switches.offer(after.coin)
+    }
+    Vector(market, fold)
 
   def run(args: Args): Unit =
     val st = style(args, sys.env)
@@ -89,14 +117,7 @@ object Main:
         }
         b = System.in.read()
     }
-    daemon("fold") {
-      while true do
-        val event = queue.take()
-        val before = state.get()
-        val after = State.reduce(before, event, now())
-        state.set(after)
-        if after.coin != before.coin then feed.setMarket(after.coin)
-    }
+    val _ = startFold(queue, state, feed, now)
     var last: Snapshot = null
     var lastFrameAt = 0L
     var size = Term.size()
