@@ -172,7 +172,44 @@ object Main:
     }
     Vector(market, fold)
 
-  def run(args: Args): Unit =
+  def startTradingFold(
+      queue: LinkedBlockingQueue[Event],
+      state: AtomicReference[Snapshot],
+      feed: Feed,
+      now: () => Long,
+      pendingPrompts: AtomicInteger,
+      targetLock: Object,
+      target: AtomicReference[Option[(Side, BigDecimal)]],
+      select: String => Unit
+  ): Vector[Thread] =
+    startFold(
+      queue,
+      state,
+      feed,
+      now,
+      coin =>
+        targetLock.synchronized {
+          target.set(None)
+          select(coin)
+        },
+      () => {
+        val _ = pendingPrompts.decrementAndGet()
+      }
+    )
+
+  def writeMarketFrame(
+      coin: String,
+      size: (Int, Int),
+      shownCoin: AtomicReference[Option[String]],
+      output: () => Unit
+  ): Unit =
+    val visible = size._1 >= Layout.minCols && size._2 >= Layout.minRows
+    writeFrame(Option.when(visible)(coin), shownCoin, output)
+
+  def run(
+      args: Args,
+      sources: TradingConfig => (SocketConnector, EndpointRest) = publicSources
+  ): Unit =
     val home = Path.of(System.getProperty("user.home"))
     val config = TradingConfig.load(configPath(args, home)) match
       case Right(value)  => value
@@ -188,9 +225,9 @@ object Main:
     val pendingPrompts = new AtomicInteger(0)
     val target = new AtomicReference(Option.empty[(Side, BigDecimal)])
     val targetLock = new Object
+    val (connector, rest) = sources(config)
     val worker =
       TradingWorker.create(config, args.trade, args.coin, home.resolve(".local/state/desk"))
-    val (connector, rest) = publicSources(config)
     val feed = new Feed(connector, rest, queue, now, args.coin, config.references, worker.observe)
     val zone = java.time.ZoneId.systemDefault()
     val saved = scala.util.Try(Term.enterRaw()).getOrElse {
@@ -264,19 +301,15 @@ object Main:
             command.foreach(emit)
           Thread.sleep(10)
     }
-    val _ = startFold(
+    val _ = startTradingFold(
       queue,
       state,
       feed,
       now,
-      coin =>
-        targetLock.synchronized {
-          target.set(None)
-          worker.select(coin)
-        },
-      () => {
-        val _ = pendingPrompts.decrementAndGet()
-      }
+      pendingPrompts,
+      targetLock,
+      target,
+      worker.select
     )
     var last: Snapshot = null
     var lastView: TradingView = null
@@ -317,9 +350,9 @@ object Main:
           val preview: OrderIntent => Either[String, OrderPlan] =
             if matching then worker.preview else _ => Left("changing market")
           val footer = TradingScreen.rows(shown, selected, preview, config.sizes)
-          val visible = size._1 >= Layout.minCols && size._2 >= Layout.minRows
-          writeFrame(
-            Option.when(visible)(snapshot.coin),
+          writeMarketFrame(
+            snapshot.coin,
+            size,
             shownCoin,
             () => Term.write(Screen.render(snapshot, size._1, size._2, time, zone, st, footer))
           )
