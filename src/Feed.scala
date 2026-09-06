@@ -126,7 +126,9 @@ final class Feed(
 
   def fetchHistoryFor(c: String): Unit =
     State.intervals.foreach { i =>
-      rest.post(Feed.historyBody(c, i, clock())).flatMap(Events.parseRestCandles) match
+      def attempt(): Option[Vector[Candle]] =
+        rest.post(Feed.historyBody(c, i, clock())).flatMap(Events.parseRestCandles)
+      attempt().orElse(attempt()) match
         case Some(cs) => push(Event.CandleHistory(c, i, cs))
         case None     => push(Event.CandleHistoryFailed)
     }

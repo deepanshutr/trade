@@ -144,6 +144,23 @@ class FeedSpec extends munit.FunSuite:
     assert(body.contains("\"endTime\":1000000000"), body)
     assertEquals(Feed.coarseBody("XMR", 3), """{"type":"l2Book","coin":"XMR","nSigFigs":3}""")
   }
+  test("a failed history request is retried once before it counts as bad") {
+    var failed = false
+    val rest = FakeRest {
+      case b if b.contains("candleSnapshot") =>
+        if !failed then
+          failed = true
+          "not json"
+        else candlesBody
+    }
+    val (feed, queue) = newFeed(new FakeConnector, rest)
+    feed.fetchHistory()
+    assertEquals(rest.bodies.size, 19)
+    val events = queue.asScala.toVector
+    assertEquals(events.count { case Event.CandleHistory(_, _, _) => true; case _ => false }, 18)
+    assertEquals(events.count(_ == Event.CandleHistoryFailed), 0)
+  }
+
   test("fetching history sends eighteen requests and tags every series") {
     val rest = restAnswering()
     val (feed, queue) = newFeed(new FakeConnector, rest, () => 10_000_000L)
