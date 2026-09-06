@@ -18,6 +18,27 @@ final class Canvas(val cells: Int, val rows: Int):
       else if clear then styles(y / 4)(x / 2) = ""
   def run(x: Int, y0: Int, y1: Int, style: String = "", clear: Boolean = false): Unit =
     for y <- (y0 min y1) to (y0 max y1) do dot(x, y, style, clear)
+  def segment(x0: Int, y0: Int, x1: Int, y1: Int): Unit =
+    var x = x0
+    var y = y0
+    val dx = math.abs(x1 - x0)
+    val dy = -math.abs(y1 - y0)
+    val sx = if x0 < x1 then 1 else -1
+    val sy = if y0 < y1 then 1 else -1
+    var error = dx + dy
+    var finished = false
+    while !finished do
+      dot(x, y)
+      if x == x1 && y == y1 then finished = true
+      else
+        val twice = 2 * error
+        if twice >= dy then
+          error += dy
+          x += sx
+        if twice <= dx then
+          error += dx
+          y += sy
+
   def restyle(cell: Int, row: Int, style: String): Unit =
     if cell >= 0 && cell < cells && row >= 0 && row < rows then styles(row)(cell) = style
   def lines: Vector[String] =
@@ -31,8 +52,6 @@ final class Canvas(val cells: Int, val rows: Int):
 final case class Column(first: Double, low: Double, high: Double, last: Double, volume: Double)
 
 final case class Span(lo: Double, hi: Double, size: Double, bid: Boolean)
-
-final case class RefLine(values: Vector[Option[Double]], keep: Int => Boolean, style: String)
 
 final case class Axis(lo: Double, hi: Double, rows: Int):
   private def place(p: Double, n: Int): Int =
@@ -85,10 +104,6 @@ object Chart:
     if current.nonEmpty then sb.append(Screen.reset)
     sb.toString
 
-  def dash(x: Int): Boolean = x % 4 < 2
-
-  def dotted(x: Int): Boolean = x % 3 == 0
-
   def window(s: Snapshot, dotCols: Int, now: Long): (Long, Int) =
     val z = State.zooms(s.zoom)
     val lastCol = Math.floorDiv(now / 1000 - s.offsetSec, z.toLong)
@@ -109,10 +124,6 @@ object Chart:
   def columns(s: Snapshot, dotCols: Int, now: Long): Vector[Option[Column]] =
     val (first, z) = window(s, dotCols, now)
     columnsOf(s.samples, s.tape, s.candles, first, z, dotCols)
-
-  def refColumns(r: Ref, dotCols: Int, s: Snapshot, now: Long): Vector[Option[Double]] =
-    val (first, z) = window(s, dotCols, now)
-    columnsOf(r.samples, Vector.empty, r.candles, first, z, dotCols).map(_.map(_.last))
 
   private def bucket(sec: Long, first: Long, z: Int): Int =
     (Math.floorDiv(sec, z.toLong) - first).toInt
@@ -175,33 +186,64 @@ object Chart:
     val digits = if hi < 1 then 0 else hi.toLong.toString.length
     (5 - digits).max(0)
 
-  def line(columns: Vector[Option[Column]], a: Axis, refs: Vector[RefLine]): Vector[String] =
+  def line(columns: Vector[Option[Column]], a: Axis): Vector[String] =
     val cv = Canvas(columns.size / 2, a.rows)
-    val i0 = columns.indexWhere(_.isDefined)
-    if i0 >= 0 then
-      val m0 = columns(i0).get.first
-      refs.foreach { ref =>
-        ref.values.drop(i0).flatten.headOption.foreach { b0 =>
-          ref.values.zipWithIndex.foreach { (v, x) =>
-            v.foreach { vv =>
-              val p = m0 * vv / b0
-              if ref.keep(x) && p >= a.lo && p <= a.hi then cv.dot(x, a.dot(p), ref.style)
-            }
-          }
-        }
-      }
-    var prev: Option[Double] = None
+    var previous: Option[(Int, Int)] = None
     var newest: Option[(Int, Int)] = None
-    columns.zipWithIndex.foreach { (col, x) =>
-      col.foreach { c =>
-        cv.run(x, a.dot(prev.getOrElse(c.first)), a.dot(c.first), clear = true)
-        cv.run(x, a.dot(c.low), a.dot(c.high), clear = true)
-        prev = Some(c.last)
-        newest = Some((x / 2, a.dot(c.last) / 4))
-      }
+    columns.zipWithIndex.foreach { (column, x) =>
+      column match
+        case None    => previous = None
+        case Some(c) =>
+          val y = a.dot(c.last)
+          previous match
+            case Some((px, py)) => cv.segment(px, py, x, y)
+            case None           => cv.dot(x, y)
+          previous = Some((x, y))
+          newest = Some((x / 2, y / 4))
     }
     newest.foreach((cell, row) => cv.restyle(cell, row, Screen.bold))
     cv.lines
+
+  def candleRows(
+      columns: Vector[Option[Column]],
+      a: Axis,
+      cells: Int
+  ): Vector[String] =
+    val out = Array.fill(a.rows, cells)(' ')
+    def put(x: Int, y: Int, text: String): Unit =
+      if y >= 0 && y < a.rows then
+        text.zipWithIndex.foreach { (ch, i) =>
+          if x + i >= 0 && x + i < cells then out(y)(x + i) = ch
+        }
+    columns.zipWithIndex.foreach { (column, i) =>
+      column.foreach { c =>
+        val x = i * Layout.candleW
+        val high = a.row(c.high)
+        val low = a.row(c.low)
+        val open = a.row(c.first)
+        val close = a.row(c.last)
+        val top = open min close
+        val bottom = open max close
+        for row <- high to low do put(x + 1, row, "│")
+        if c.first == c.last then put(x, open, "───")
+        else if c.last < c.first then for row <- top to bottom do put(x, row, "███")
+        else if top == bottom then put(x + 1, top, "□")
+        else
+          put(x, top, "┌─┐")
+          for row <- top + 1 until bottom do put(x, row, "│ │")
+          put(x, bottom, "└─┘")
+      }
+    }
+    out.toVector.map(row => new String(row))
+
+  def plot(
+      columns: Vector[Option[Column]],
+      a: Axis,
+      cells: Int,
+      mode: ChartMode
+  ): Vector[String] = mode match
+    case ChartMode.Line    => line(columns, a)
+    case ChartMode.Candles => candleRows(columns, a, cells)
 
   def width(p: Double, k: Int): Double = math.pow(10, math.floor(math.log10(p)) + 1 - k)
 
@@ -316,34 +358,54 @@ object Chart:
       }
     }
 
-  def volumeRows(columns: Vector[Option[Column]], style: Style): (Vector[String], Double) =
-    val vmax = columns.map(_.fold(0.0)(_.volume)).maxOption.getOrElse(0.0)
-    val cv = Canvas(columns.size / 2, Layout.volRows)
-    columns.zipWithIndex.foreach { (col, x) =>
-      col.foreach { c =>
+  def volumeRows(
+      columns: Vector[Option[Column]],
+      style: Style,
+      mode: ChartMode = ChartMode.Line,
+      cells: Int = 0
+  ): (Vector[String], Double) =
+    val maximum = columns.map(_.fold(0.0)(_.volume)).maxOption.getOrElse(0.0)
+    val width = if cells > 0 then cells else columns.size / 2
+    val cv = Canvas(width, Layout.volRows)
+    columns.zipWithIndex.foreach { (column, i) =>
+      column.foreach { c =>
         if c.volume > 0 then
-          val d = Screen.round(c.volume / vmax * (cv.h - 1)).toInt.max(1)
-          cv.run(x, cv.h - d, cv.h - 1, if c.last >= c.first then style.bid else style.ask)
+          val depth = Screen.round(c.volume / maximum * (cv.h - 1)).toInt.max(1)
+          val colour = if c.last >= c.first then style.bid else style.ask
+          if mode == ChartMode.Candles then
+            val x = (i * Layout.candleW + 1) * 2
+            cv.run(x, cv.h - depth, cv.h - 1, colour)
+            cv.run(x + 1, cv.h - depth, cv.h - 1, colour)
+          else cv.run(i, cv.h - depth, cv.h - 1, colour)
       }
     }
-    (cv.lines, vmax)
+    (cv.lines, maximum)
 
-  def axisRow(first: Long, z: Int, dotCols: Int, zone: ZoneId): String =
-    val cells = dotCols / 2
-    val (pattern, width) =
+  def axisRow(
+      first: Long,
+      z: Int,
+      count: Int,
+      zone: ZoneId,
+      width: Int = 0
+  ): String =
+    val cells = if width > 0 then width else count / 2
+    val (pattern, clockWidth) =
       if z < 60 then ("HH:mm:ss", 8)
       else if z < 3600 then ("HH:mm", 5)
       else if z < 86400 then ("MM-dd HH:mm", 11)
       else ("yyyy-MM-dd", 10)
     val fmt = DateTimeFormatter.ofPattern(pattern).withZone(zone)
-    def clock(col: Long): String = fmt.format(Instant.ofEpochSecond((first + col) * z))
+    def clock(column: Long): String =
+      fmt.format(Instant.ofEpochSecond((first + column) * z))
     val out = Array.fill(cells)(' ')
     val spots = Vector(
       (0, clock(0)),
-      (cells / 2 - width / 2, clock(dotCols / 2)),
-      (cells - width, clock(dotCols - 1))
+      (cells / 2 - clockWidth / 2, clock(count / 2)),
+      (cells - clockWidth, clock(count - 1))
     )
-    spots.foreach((at, text) =>
-      text.zipWithIndex.foreach((ch, i) => if at + i < cells then out(at + i) = ch)
-    )
+    spots.foreach { (at, text) =>
+      text.zipWithIndex.foreach { (ch, i) =>
+        if at + i >= 0 && at + i < cells then out(at + i) = ch
+      }
+    }
     new String(out)

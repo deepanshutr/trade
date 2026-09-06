@@ -24,10 +24,15 @@ to the screen and its account and market data are ready.
 | Enter | Submit the selected target |
 | Escape | Cancel target selection or the market prompt |
 | `m` | Open the market prompt and cancel target selection |
-| `c` | Reserved for the coming candle chart control |
+| `c` | Switch the main and reference charts between lines and candles |
 | Up and down arrows without a target | Zoom in or out |
 | Left and right arrows without a target | Move backward or forward through the chart |
 | `q` or Control with `c` | Quit |
+
+Candle mode starts at one minute. Hollow bodies close above their opening price, filled
+bodies close below it, and a flat body closes unchanged. Wicks show the high and low.
+Missing candles stay blank. Returning to lines restores the saved line zoom. Each reference
+has its own price scale, so their heights do not show equal percentage changes.
 
 Hard and Best keys are ignored while a target is selected. Left and right arrows do not
 change a target. Market prompt text has no trading meaning. Complete bracketed paste is

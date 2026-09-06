@@ -122,6 +122,8 @@ object State:
   val zooms: Vector[Int] =
     Vector(1, 2, 5, 10, 30, 60, 120, 300, 900, 1800, 3600, 14400, 43200, 86400, 259200, 604800)
 
+  val candleMinZoom: Int = zooms.indexOf(60)
+
   def seriesFor(zoom: Int): Option[String] =
     if zoom < 60 then None
     else if zoom < 300 then Some("1m")
@@ -181,7 +183,8 @@ object State:
   private def sampleRef(r: Ref, mid: Double, sec: Long): Ref =
     r.copy(samples = keep(r.samples, sec, samplesMs) :+ (sec, mid))
 
-  private def step(s: Snapshot): Long = Layout.dotCols(s.cols) / 4L * zooms(s.zoom)
+  private def step(s: Snapshot): Long =
+    Layout.plotColumns(s.cols, s.chartMode) / 4L * zooms(s.zoom)
 
   def reduce(s: Snapshot, e: Event, now: Long): Snapshot = e match
     case Event.BookUpdate(coin, book, fromSocket) =>
@@ -246,7 +249,7 @@ object State:
 
   private def key(s: Snapshot, cmd: Command, now: Long): Snapshot = cmd match
     case Command.PlaceOrder(_) | Command.SelectTarget(_) | Command.SubmitTarget |
-        Command.CancelTarget | Command.ToggleCandles =>
+        Command.CancelTarget =>
       s
     case Command.Quit              => s.copy(quit = true)
     case Command.StartMarketPrompt => s.copy(prompt = Some(""))
@@ -276,7 +279,15 @@ object State:
             offsetSec = 0L
           )
         case _ => s.copy(prompt = None)
-    case Command.ZoomOut      => s.copy(zoom = (s.zoom + 1).min(zooms.size - 1))
-    case Command.ZoomIn       => s.copy(zoom = (s.zoom - 1).max(0))
+    case Command.ZoomOut => s.copy(zoom = (s.zoom + 1).min(zooms.size - 1))
+    case Command.ZoomIn  =>
+      val minimum = if s.chartMode == ChartMode.Candles then candleMinZoom else 0
+      s.copy(zoom = (s.zoom - 1).max(minimum))
+    case Command.ToggleCandles =>
+      s.chartMode match
+        case ChartMode.Line =>
+          s.copy(chartMode = ChartMode.Candles, lineZoom = s.zoom, zoom = s.zoom.max(candleMinZoom))
+        case ChartMode.Candles =>
+          s.copy(chartMode = ChartMode.Line, zoom = s.lineZoom)
     case Command.ScrubBack    => s.copy(offsetSec = s.offsetSec + step(s))
     case Command.ScrubForward => s.copy(offsetSec = (s.offsetSec - step(s)).max(0L))

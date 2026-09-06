@@ -276,3 +276,11 @@ class TradingKeysSpec extends munit.FunSuite:
       assertEquals(sent.toVector, Vector.empty)
       assertEquals(target, None)
   }
+
+  test("the candle toggle reaches the chart without submitting or moving a selected target") {
+    val command = Keys.step(Vector.empty, 99, false)._2.get
+    for target <- Vector(None, Some(Side.Buy -> BigDecimal("546.71"))) do
+      assertEquals(invoke(command, target = target), ((false, target), Vector.empty))
+      val changed = State.reduce(snapshot, Event.Key(command), now)
+      assertEquals(changed.chartMode, ChartMode.Candles)
+  }

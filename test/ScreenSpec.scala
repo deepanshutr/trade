@@ -142,7 +142,7 @@ class ScreenSpec extends munit.FunSuite:
     assert(frame(12).drop(91).trim.startsWith("v "))
     assert(frame(13).startsWith("bitcoin"))
     assert(frame(16).startsWith("gold"))
-    assert(frame(19).startsWith(" " * 23 + "1s/col "))
+    assert(frame(19).startsWith(" " * 16 + "c line 1s/col "))
     assert(frame(19).drop(30).take(8).matches("\\d\\d:\\d\\d:\\d\\d"))
     assert(frame(19).drop(83).take(8).matches("\\d\\d:\\d\\d:\\d\\d"))
   }
@@ -179,7 +179,7 @@ class ScreenSpec extends munit.FunSuite:
   test("a coarse zoom draws candles with dates on the axis and history from the series") {
     val s = Golden.snapshot.copy(zoom = State.zooms.indexOf(86400))
     val frame = Screen.render(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    assert(frame(19).startsWith(" " * 23 + "1d/col "), frame(19))
+    assert(frame(19).startsWith(" " * 16 + "c line 1d/col "), frame(19))
     assert(frame(19).drop(30).take(10).matches("\\d{4}-\\d\\d-\\d\\d"), frame(19))
     assert(frame.slice(1, 12).exists(_.slice(30, 91).exists(c => c >= 0x2800 && c <= 0x28ff)))
   }
@@ -228,21 +228,33 @@ class ScreenSpec extends munit.FunSuite:
     assert(!frame.exists(_.contains("discard this fifth row")))
   }
 
+  private def frames: Vector[(String, Snapshot, Int, Int, Style)] = Vector(
+    ("frame_100x30.txt", Golden.snapshot, 100, 30, Style.colour),
+    ("frame_120x40.txt", Golden.snapshot, 120, 40, Style.mono),
+    (
+      "candles_100x30.txt",
+      Golden.snapshot.copy(chartMode = ChartMode.Candles, zoom = State.candleMinZoom),
+      100,
+      30,
+      Style.mono
+    )
+  )
+
   test("write the golden frames when asked") {
     assume(sys.env.contains("WRITE_GOLDEN"), "set WRITE_GOLDEN=1 to regenerate the frames")
     java.nio.file.Files.createDirectories(java.nio.file.Paths.get("golden"))
-    for (cols, rows, style) <- Seq((100, 30, Style.colour), (120, 40, Style.mono)) do
+    for (name, snapshot, cols, rows, style) <- frames do
       val frame =
-        Screen.render(Golden.snapshot, cols, rows, Golden.now, zone, style, Golden.tradingRows)
-      val path = java.nio.file.Paths.get("golden", s"frame_${cols}x$rows.txt")
+        Screen.render(snapshot, cols, rows, Golden.now, zone, style, Golden.tradingRows)
+      val path = java.nio.file.Paths.get("golden", name)
       val bytes = (frame.mkString("\n") + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)
       java.nio.file.Files.write(path, bytes)
   }
 
-  test("render matches the golden frames with trading controls at both sizes") {
-    for (cols, rows, style) <- Seq((100, 30, Style.colour), (120, 40, Style.mono)) do
+  test("render matches the line and candle golden frames with trading controls") {
+    for (name, snapshot, cols, rows, style) <- frames do
       val frame =
-        Screen.render(Golden.snapshot, cols, rows, Golden.now, zone, style, Golden.tradingRows)
+        Screen.render(snapshot, cols, rows, Golden.now, zone, style, Golden.tradingRows)
       assertEquals(frame.size, rows)
       assert(frame.forall(l => plain(l).length == cols), frame.map(plain).map(_.length))
       assert(frame(rows - 4).contains("Hard 1 buy") && frame(rows - 4).contains("4 sell"))
@@ -253,7 +265,7 @@ class ScreenSpec extends munit.FunSuite:
       assert(frame(rows - 4).contains("position long 1"))
       assert(frame(rows - 3).contains("press estimate long"))
       assert(frame.last.startsWith("pending | XMR submitting"))
-      val path = java.nio.file.Paths.get("golden", s"frame_${cols}x$rows.txt")
+      val path = java.nio.file.Paths.get("golden", name)
       assertEquals(
         frame.mkString("\n") + "\n",
         java.nio.file.Files.readString(path, java.nio.charset.StandardCharsets.UTF_8)

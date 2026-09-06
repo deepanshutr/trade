@@ -136,19 +136,18 @@ class ChartSpec extends munit.FunSuite:
     )
   }
 
-  test("columns pick the series of the zoom and reference columns take the last value") {
-    val c5 = Candle(0L, 2, 3, 1, 2.5, 1)
+  test("columns pick the zoom series and references retain the same complete candle") {
+    val candle = Candle(0L, 2, 3, 1, 2.5, 1)
     val s = s0.copy(
-      candles = Map("5m" -> Vector(c5), "1m" -> Vector(Candle(0L, 9, 9, 9, 9, 9))),
+      candles = Map("5m" -> Vector(candle), "1m" -> Vector(Candle(0L, 9, 9, 9, 9, 9))),
       zoom = State.zooms.indexOf(300)
     )
-    assertEquals(Chart.columns(s, 2, 599_000L), Vector(Some(Column(2.0, 1.0, 3.0, 2.5, 1.0)), None))
-    val r = Ref(Vector((999L, 1.0)), Map.empty)
-    assertEquals(Chart.refColumns(r, 2, s0, 1_000_000L), Vector(Some(1.0), Some(1.0)))
-    assertEquals(
-      Chart.refColumns(Ref(Vector.empty, Map("5m" -> Vector(c5))), 2, s, 599_000L),
-      Vector(Some(2.5), None)
-    )
+    val expected = Vector(Some(Column(2.0, 1.0, 3.0, 2.5, 1.0)), None)
+    assertEquals(Chart.columns(s, 2, 599_000L), expected)
+    val ref = Ref(Vector.empty, Map("5m" -> Vector(candle)))
+    assertEquals(Chart.referenceColumns(ref, 2, s, 599_000L), expected)
+    val sampled = Ref(Vector(999L -> 1.0), Map.empty)
+    assertEquals(Chart.referenceColumns(sampled, 2, s0, 1_000_000L), Vector(col(1), col(1)))
   }
 
   test("the axis pads five percent around the columns and the book and maps rows and dots") {
@@ -177,57 +176,11 @@ class ChartSpec extends munit.FunSuite:
     assertEquals(Chart.decimals(123456.0), 0)
   }
 
-  test("the line joins consecutive columns and bolds the newest cell") {
-    val a = Axis(1.0, 3.0, 1)
-    val lines = Chart.line(Vector(col(1.0), col(3.0)), a, Vector.empty)
-    assertEquals(lines, Vector(Screen.bold + br(0xf8) + Screen.reset))
-    assertEquals(Chart.line(Vector(None, None), a, Vector.empty), Vector(" "))
-  }
-
-  test("a reference line normalizes to the first visible main value and keeps its pattern") {
-    val a = Axis(90.0, 120.0, 1)
-    val main = Vector(col(100.0), col(100.0), col(100.0), col(100.0))
-    val ref = Vector(Some(50.0), Some(55.0), Some(60.0), None)
-    val lines = Chart.line(main, a, Vector(RefLine(ref, Chart.dash, Style.colour.btc)))
-    val cells = Chart.plain(lines.head)
-    assertEquals(cells.length, 2)
-    assertEquals(a.dot(110.0), 1)
-    assertEquals(a.dot(100.0), 2)
-    assertEquals(lines, Vector(br(0x34) + Screen.bold + br(0x24) + Screen.reset))
-    assertEquals(Chart.dash(0) && Chart.dash(1) && !Chart.dash(2) && !Chart.dash(3), true)
-    assertEquals(
-      (0 to 6).map(Chart.dotted).toVector,
-      Vector(true, false, false, true, false, false, true)
-    )
-    val alone = Chart.line(main, a, Vector.empty)
-    assert(Chart.plain(alone.head) != cells)
-  }
-
-  test("the main line clears the style of every cell it inks, the reference keeps the rest") {
-    val a = Axis(90.0, 120.0, 1)
-    val main = Vector(col(100.0), col(100.0), None, None, col(100.0), col(100.0))
-    val ref = RefLine(Vector.fill(6)(Some(50.0)), _ => true, "S")
-    val lines = Chart.line(main, a, Vector(ref))
-    assertEquals(
-      lines,
-      Vector(
-        br(0x24) + "S" + br(0x24) + Screen.reset + Screen.bold + br(0x24) + Screen.reset
-      )
-    )
-  }
-
-  test("a reference value outside the axis draws nothing") {
-    val a = Axis(90.0, 120.0, 1)
-    val main = Vector(col(100.0), None, None, None)
-    def drawn(v: Double): Vector[String] =
-      Chart.line(main, a, Vector(RefLine(Vector(Some(50.0), None, Some(v), None), _ => true, "S")))
-    val onlyMain = Screen.bold + br(0x04) + Screen.reset + " "
-    assertEquals(drawn(70.0), Vector(onlyMain))
-    assertEquals(drawn(20.0), Vector(onlyMain))
-    assertEquals(
-      drawn(55.0),
-      Vector(Screen.bold + br(0x04) + Screen.reset + "S" + br(0x02) + Screen.reset)
-    )
+  test("the line joins closing points and bolds the newest cell") {
+    val axis = Axis(1.0, 3.0, 1)
+    val lines = Chart.line(Vector(col(1.0), col(3.0)), axis)
+    assertEquals(lines, Vector(Screen.bold + br(0x5c) + Screen.reset))
+    assertEquals(Chart.line(Vector(None, None), axis), Vector(" "))
   }
 
   test("a bucket width follows the significant figures") {
