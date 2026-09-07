@@ -28,7 +28,7 @@ object Events:
               d("coin").str,
               level(sides(0)),
               level(sides(1)),
-              d("time").num.toLong
+              integer(d("time"), Long.MaxValue.toDouble)
             )
           )
       case "trades" =>
@@ -44,37 +44,62 @@ object Events:
       case "subscriptionResponse" => None
       case other                  => Some(Event.Bad(s"channel $other"))
 
-  private def level(v: ujson.Value): Level = Level(v("px").str, v("sz").str, v("n").num.toInt)
+  private def number(v: ujson.Value, zero: Boolean = false, signed: Boolean = false): String =
+    val text = v.str
+    val value = BigDecimal(text)
+    val magnitude = text.toDouble.abs
+    require(
+      (zero && value.signum == 0) ||
+        ((signed || value.signum > 0) && magnitude >= 1e-100 && magnitude <= 1e100)
+    )
+    text
+
+  private def integer(v: ujson.Value, limit: Double): Long =
+    val value = v.num
+    require(value >= 0 && value < limit && value.isWhole)
+    value.toLong
+
+  private def level(v: ujson.Value): Level =
+    Level(number(v("px")), number(v("sz"), zero = true), integer(v("n"), 2147483648d).toInt)
 
   private def book(d: ujson.Value): Book =
     val levels = d("levels").arr
-    Book(levels(0).arr.toVector.map(level), levels(1).arr.toVector.map(level), d("time").num.toLong)
+    Book(
+      levels(0).arr.toVector.map(level),
+      levels(1).arr.toVector.map(level),
+      integer(d("time"), Long.MaxValue.toDouble)
+    )
 
   private def trade(v: ujson.Value): Trade =
     val side = v("side").str match
       case "B" => Side.Buy
       case "A" => Side.Sell
       case s   => throw new IllegalArgumentException(s"side $s")
-    Trade(v("time").num.toLong, side, v("px").str, v("sz").str)
+    Trade(
+      integer(v("time"), Long.MaxValue.toDouble),
+      side,
+      number(v("px")),
+      number(v("sz"), zero = true)
+    )
 
   private def candle(v: ujson.Value): Candle =
     Candle(
-      v("t").num.toLong,
-      v("o").str.toDouble,
-      v("h").str.toDouble,
-      v("l").str.toDouble,
-      v("c").str.toDouble,
-      v("v").str.toDouble
+      integer(v("t"), Long.MaxValue.toDouble),
+      number(v("o")).toDouble,
+      number(v("h")).toDouble,
+      number(v("l")).toDouble,
+      number(v("c")).toDouble,
+      number(v("v"), zero = true).toDouble
     )
 
   private def ctx(c: ujson.Value): Ctx =
-    val mid = c.obj.get("midPx").filterNot(_.isNull).map(_.str)
+    val mid = c.obj.get("midPx").filterNot(_.isNull).map(number(_))
     Ctx(
-      c("markPx").str,
-      c("oraclePx").str,
-      c("funding").str,
-      c("openInterest").str,
-      c("dayNtlVlm").str,
-      c("prevDayPx").str,
+      number(c("markPx")),
+      number(c("oraclePx")),
+      number(c("funding"), zero = true, signed = true),
+      number(c("openInterest"), zero = true),
+      number(c("dayNtlVlm"), zero = true),
+      number(c("prevDayPx")),
       mid
     )

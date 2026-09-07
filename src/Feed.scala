@@ -2,7 +2,7 @@ package desk
 
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse, WebSocket}
-import java.util.concurrent.{CompletionStage, CountDownLatch}
+import java.util.concurrent.{CompletableFuture, CompletionStage, CountDownLatch, TimeUnit}
 import scala.util.Try
 
 trait Socket:
@@ -68,7 +68,10 @@ final class Feed(
     observer: Event => Unit = _ => ()
 ):
   @volatile var coin: String = coin0
-  @volatile private var socket: Option[Socket] = None
+  private final class Connection:
+    val closed = new CountDownLatch(1)
+    var socket: Option[Socket] = None
+  private var current: Option[Connection] = None
   @volatile private var lastHistoryAt: Long = 0L
   private val sendLock = new Object
 
@@ -79,30 +82,54 @@ final class Feed(
     observer(e)
     val _ = queue.add(e)
 
-  def send(text: String): Unit = sendLock.synchronized {
-    socket.foreach(_.send(text))
+  private def end(c: Connection): Unit = synchronized {
+    if current.contains(c) then
+      current = None
+      try push(Event.SocketDown)
+      finally
+        c.closed.countDown()
+        c.socket.foreach(s => { val _ = Try(s.close()) })
   }
 
-  /** One connection. True once the socket opened and later closed, false if it never opened. */
+  private def transmit(c: Connection, text: String): Unit =
+    val socket = synchronized { if current.contains(c) then c.socket else None }
+    socket.foreach(s => if Try(s.send(text)).isFailure then end(c))
+
   def connectOnce(): Boolean =
-    val closed = new CountDownLatch(1)
-    val opened = Try(
-      connector.connect(text => Events.parse(text).foreach(push), () => closed.countDown())
-    ).toOption
-    opened match
-      case None    => false
-      case Some(s) =>
-        socket = Some(s)
-        Feed.subscriptions(coin, references).foreach(send)
-        push(Event.SocketUp)
-        val t = clock()
-        if lastHistoryAt == 0L || t - lastHistoryAt >= Feed.historyEveryMs then
-          lastHistoryAt = t
-          fetchHistory()
-        closed.await()
-        socket = None
-        push(Event.SocketDown)
-        true
+    val c = new Connection
+    synchronized {
+      current.foreach(end)
+      current = Some(c)
+    }
+    def receive(text: String): Unit = synchronized {
+      if current.contains(c) && c.socket.nonEmpty then Events.parse(text).foreach(push)
+    }
+    try
+      Try(connector.connect(receive, () => end(c))).toOption match
+        case None    => false
+        case Some(s) =>
+          val opened = sendLock.synchronized {
+            val accepted = synchronized {
+              if current.contains(c) then
+                c.socket = Some(s)
+                true
+              else false
+            }
+            if accepted then
+              Feed.subscriptions(coin, references).foreach(transmit(c, _))
+              synchronized { if current.contains(c) then push(Event.SocketUp) }
+            else { val _ = Try(s.close()) }
+            accepted
+          }
+          val t = clock()
+          if synchronized(current.contains(c)) &&
+            (lastHistoryAt == 0L || t - lastHistoryAt >= Feed.historyEveryMs)
+          then
+            lastHistoryAt = t
+            fetchHistory()
+          c.closed.await()
+          opened
+    finally end(c)
 
   def runForever(sleep: Long => Unit): Unit =
     var attempt = 0
@@ -111,7 +138,9 @@ final class Feed(
       attempt = if opened then 1 else attempt + 1
       sleep(Feed.backoffMs(attempt))
 
-  def heartbeat(): Unit = send(Feed.ping)
+  def heartbeat(): Unit = sendLock.synchronized {
+    synchronized(current).foreach(transmit(_, Feed.ping))
+  }
 
   def poll(): Unit =
     val c = coin
@@ -143,20 +172,37 @@ final class Feed(
     (c +: references.filterNot(_ == c)).foreach(fetchHistoryFor)
 
   def setMarket(newCoin: String): Unit =
-    if newCoin != coin then
-      val old = coin
-      coin = newCoin
-      Feed.unsubscriptions(old, references).foreach(send)
-      Feed.subscriptions(newCoin, references).foreach(send)
-      fetchHistoryFor(newCoin)
+    val changed = sendLock.synchronized {
+      if newCoin == coin then false
+      else
+        val old = coin
+        coin = newCoin
+        synchronized(current).foreach { c =>
+          Feed.unsubscriptions(old, references).foreach(transmit(c, _))
+          Feed.subscriptions(newCoin, references).foreach(transmit(c, _))
+        }
+        true
+    }
+    if changed then fetchHistoryFor(newCoin)
 
-final class SocketConnector(val url: String) extends Connector:
+final class SocketConnector(val url: String, waitMs: Long = 5000L) extends Connector:
   private val client = HttpClient.newHttpClient()
 
   def connect(onText: String => Unit, onClose: () => Unit): Socket =
+    connectWith(
+      onText,
+      onClose,
+      listener => client.newWebSocketBuilder().buildAsync(URI.create(url), listener)
+    )
+
+  private def await[A](future: CompletableFuture[A]): A = future.get(waitMs, TimeUnit.MILLISECONDS)
+
+  private[desk] def connectWith(
+      deliver: String => Unit,
+      closed: () => Unit,
+      open: WebSocket.Listener => CompletableFuture[WebSocket]
+  ): Socket =
     val joiner = new Joiner
-    val deliver = onText
-    val closed = onClose
     val listener = new WebSocket.Listener:
       override def onText(ws: WebSocket, data: CharSequence, last: Boolean): CompletionStage[?] =
         joiner.append(data.toString, last).foreach(deliver)
@@ -166,12 +212,15 @@ final class SocketConnector(val url: String) extends Connector:
         closed()
         null
       override def onError(ws: WebSocket, error: Throwable): Unit = closed()
-    val ws = client.newWebSocketBuilder().buildAsync(URI.create(url), listener).join()
-    new Socket:
-      def send(text: String): Unit =
-        val _ = ws.sendText(text, true).join()
-      def close(): Unit =
-        val _ = ws.sendClose(WebSocket.NORMAL_CLOSURE, "bye")
+    val pending = open(listener)
+    var accepted = false
+    try
+      val ws = await(pending)
+      accepted = true
+      new Socket:
+        def send(text: String): Unit = { val _ = await(ws.sendText(text, true)) }
+        def close(): Unit = ws.abort()
+    finally if !accepted then { val _ = pending.thenAccept(_.abort()) }
 
 final class EndpointRest(val url: String) extends Rest:
   private val client = HttpClient.newHttpClient()
