@@ -7,16 +7,19 @@ import scala.util.Try
 
 final case class TradingView(
     coin: String,
-    position: Option[BigDecimal],
+    position: Option[BigDecimal] = None,
     message: String,
-    ready: Boolean,
-    pending: Boolean,
-    rules: Option[MarketRules],
-    bid: Option[BigDecimal],
-    ask: Option[BigDecimal],
-    lastPlan: Option[OrderPlan]
+    ready: Boolean = false,
+    pending: Boolean = false,
+    rules: Option[MarketRules] = None,
+    bid: Option[BigDecimal] = None,
+    ask: Option[BigDecimal] = None,
+    lastPlan: Option[OrderPlan] = None
 ):
   def reference(side: Side): Option[BigDecimal] = if side == Side.Buy then ask else bid
+  def forMarket(current: String): TradingView =
+    if coin == current then this
+    else TradingView(current, message = "changing market", pending = true)
 
 object TradingWorker:
   def create(

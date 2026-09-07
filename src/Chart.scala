@@ -11,13 +11,12 @@ final class Canvas(val cells: Int, val rows: Int):
   private val styles = Array.fill(rows, cells)("")
   private val bit =
     Array(Array(0x01, 0x08), Array(0x02, 0x10), Array(0x04, 0x20), Array(0x40, 0x80))
-  def dot(x: Int, y: Int, style: String = "", clear: Boolean = false): Unit =
+  def dot(x: Int, y: Int, style: String = ""): Unit =
     if x >= 0 && x < w && y >= 0 && y < h then
       bits(y / 4)(x / 2) |= bit(y % 4)(x % 2)
       if style.nonEmpty then styles(y / 4)(x / 2) = style
-      else if clear then styles(y / 4)(x / 2) = ""
-  def run(x: Int, y0: Int, y1: Int, style: String = "", clear: Boolean = false): Unit =
-    for y <- (y0 min y1) to (y0 max y1) do dot(x, y, style, clear)
+  def run(x: Int, y0: Int, y1: Int, style: String = ""): Unit =
+    for y <- (y0 min y1) to (y0 max y1) do dot(x, y, style)
   def segment(x0: Int, y0: Int, x1: Int, y1: Int): Unit =
     var x = x0
     var y = y0

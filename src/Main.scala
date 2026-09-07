@@ -334,19 +334,7 @@ object Main:
         if (snapshot ne last) || view != lastView || selected != lastTarget || time - lastFrameAt >= 1000
         then
           val matching = view.coin == snapshot.coin
-          val shown = if matching then view
-          else
-            view.copy(
-              coin = snapshot.coin,
-              position = None,
-              ready = false,
-              pending = true,
-              rules = None,
-              bid = None,
-              ask = None,
-              lastPlan = None,
-              message = "changing market"
-            )
+          val shown = view.forMarket(snapshot.coin)
           val preview: OrderIntent => Either[String, OrderPlan] =
             if matching then worker.preview else _ => Left("changing market")
           val footer = TradingScreen.rows(shown, selected, preview, config.sizes)

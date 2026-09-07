@@ -26,8 +26,6 @@ final class Joiner:
     else None
 
 object Feed:
-  val url = "wss://api.hyperliquid.xyz/ws"
-  val restUrl = "https://api.hyperliquid.xyz/info"
   val ping = """{"method":"ping"}"""
   val historyEveryMs = 60_000L
 
@@ -189,12 +187,3 @@ final class EndpointRest(val url: String) extends Rest:
     if response.statusCode() == 200 then response.body()
     else throw new RuntimeException(s"http ${response.statusCode()}")
   }.toOption
-
-object JdkConnector extends Connector:
-  private val delegate = new SocketConnector(Feed.url)
-  def connect(onText: String => Unit, onClose: () => Unit): Socket =
-    delegate.connect(onText, onClose)
-
-object JdkRest extends Rest:
-  private val delegate = new EndpointRest(Feed.restUrl)
-  def post(body: String): Option[String] = delegate.post(body)

@@ -27,6 +27,21 @@ class TradingScreenSpec extends munit.FunSuite:
     BigDecimal("2.5")
   )
 
+  test("changing market clears every old display field while matching keeps the same view") {
+    for (wasReady, wasPending) <- Vector((true, false), (false, true)) do
+      val old = ready.copy(
+        message = "XMR filled 1 at 100",
+        ready = wasReady,
+        pending = wasPending,
+        lastPlan = Some(plan)
+      )
+      assert(old.forMarket("XMR") eq old)
+      assertEquals(
+        old.forMarket("BTC"),
+        TradingView("BTC", None, "changing market", false, true, None, None, None, None)
+      )
+  }
+
   test("four rows retain separate actions and the configured hard dollar sizes") {
     val rows = TradingScreen.rows(
       ready,

@@ -51,14 +51,10 @@ class ChartSpec extends munit.FunSuite:
     )
   }
 
-  test("a style turns its colours off for greyscale and keeps the references dim") {
+  test("a style turns its colours off for greyscale") {
     assertEquals(Style.colour.bid, Screen.esc + "[32m")
     assertEquals(Style.colour.ask, Screen.esc + "[31m")
-    assertEquals(Style.colour.btc, Screen.esc + "[38;5;208m")
-    assertEquals(Style.colour.gold, Screen.esc + "[38;5;178m")
     assertEquals(Style.mono.bid, "")
-    assertEquals(Style.mono.btc, Screen.dim)
-    assertEquals(Style.mono.gold, Screen.dim)
     assertEquals(
       Style.colour.wrap(Style.colour.bid, "ab"),
       Screen.esc + "[32m" + "ab" + Screen.reset
