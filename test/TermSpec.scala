@@ -38,7 +38,13 @@ class TermSpec extends munit.FunSuite:
       val shown = new java.util.concurrent.atomic.AtomicReference[Option[String]](Some("XMR"))
       try
         intercept[java.io.IOException] {
-          Main.writeFrame(Some("BTC"), shown, () => Term.write(Vector("BTC"), output))
+          Main.writeMarketFrame(
+            "BTC",
+            (100, 30),
+            shown,
+            () => Term.write(Vector("BTC"), output),
+            complete = true
+          )
         }
         assert(output.checkError())
         assertEquals(shown.get(), None)
@@ -53,7 +59,13 @@ class TermSpec extends munit.FunSuite:
     canvas.dot(0, 0)
     val lines = Vector("XMR " + canvas.lines.head)
     try
-      Main.writeFrame(Some("XMR"), shown, () => Term.write(lines, output))
+      Main.writeMarketFrame(
+        "XMR",
+        (100, 30),
+        shown,
+        () => Term.write(lines, output),
+        complete = true
+      )
       assertEquals(shown.get(), Some("XMR"))
       assertEquals(sink.toByteArray.toVector, Term.bytes(lines).toVector)
     finally output.close()

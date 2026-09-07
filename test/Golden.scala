@@ -37,7 +37,9 @@ object Golden:
     )
     rest.foldLeft(folded)((s, e) => State.reduce(s, e, now - 300))
 
-  def tradingRows: Vector[String] =
+  def tradingRows: Vector[String] = tradingRowsAt(100)
+
+  def tradingRowsAt(cols: Int): Vector[String] =
     val book = snapshot.book.get
     val rules = MarketRules(0, 3, 5)
     val currentPosition = BigDecimal(1)
@@ -64,4 +66,4 @@ object Golden:
       )
     val last = preview(OrderIntent(Side.Buy, OrderKind.Hard))
       .fold(message => throw new IllegalStateException(message), identity)
-    TradingScreen.rows(view.copy(lastPlan = Some(last)), None, preview)
+    TradingScreen.rows(view.copy(lastPlan = Some(last)), None, preview, cols = cols)

@@ -62,7 +62,7 @@ proc wait_for {pattern seconds label} {
 
 proc select_target {} {
     global spawn_id timeout
-    set selected {Target 9 buy 0 sell | buy $}
+    set selected {Target BTC buy limit $}
     set timeout 1
     for {set attempt 0} {$attempt < 20} {incr attempt} {
         send "9"
@@ -79,7 +79,7 @@ proc select_target {} {
     exit 2
 }
 
-wait_for "live " 20 "live "
+wait_for "connection active " 20 "active public connection"
 
 send -- "${esc}\[B"
 wait_for " 2s/col " 10 "zoom out to two seconds per column"
@@ -98,20 +98,28 @@ send "c"
 wait_for "1s/col " 10 "line mode restores its fine zoom"
 
 send "mBTC\rmBTC\r"
-wait_for "${esc}\[HBTC " 15 "line starting with BTC "
+wait_for "  BTC  " 15 "BTC market header"
 
 select_target
 send -- $esc
-wait_for "Target 9 buy 0 sell | arrows set price" 10 "target cancelled by lone Escape"
+wait_for "Target 9 buy 0 sell | up/down zoom" 10 "target cancelled by lone Escape"
 
 exec stty rows 29 columns 99 < $terminal
 wait_for "need 100x30, have 99x29" 10 "undersized terminal message"
 exec stty rows 30 columns 100 < $terminal
-wait_for "${esc}\[HBTC " 10 "normal frame after restoring terminal size"
+wait_for "  BTC  " 10 "normal frame after restoring terminal size"
 wait_for "Hard 1 buy" 10 "controls after restoring terminal size"
 select_target
 send -- $esc
-wait_for "Target 9 buy 0 sell | arrows set price" 10 "target cancelled after terminal resize"
+wait_for "Target 9 buy 0 sell | up/down zoom" 10 "target cancelled after terminal resize"
+
+exec stty rows 40 columns 120 < $terminal
+wait_for "  BTC  " 10 "wide frame"
+select_target
+send -- $esc
+wait_for "Target 9 buy 0 sell | up/down zoom" 10 "target cancelled at wide size"
+exec stty rows 30 columns 100 < $terminal
+wait_for "  BTC  " 10 "minimum frame before soak"
 
 if {$soak > 0} {
     set deadline [expr {[clock seconds] + $soak}]
@@ -120,8 +128,12 @@ if {$soak > 0} {
         if {$remain < 1} { set remain 1 }
         set timeout $remain
         expect {
-            -ex "STALE" {
-                puts stderr "BLOCKED: STALE appeared during the soak window"
+            -ex "connection stale " {
+                puts stderr "BLOCKED: stale connection during the soak window"
+                exit 3
+            }
+            -ex "connection disconnected " {
+                puts stderr "BLOCKED: disconnected connection during the soak window"
                 exit 3
             }
             timeout { }
@@ -150,6 +162,10 @@ if {$soak > 0} {
         exit 3
     }
     set lastStats [string range $full $afterH [expr {$kIdx - 1}]]
+    if {[string first "connection active " $lastStats] < 0} {
+        puts stderr "BLOCKED: last connection state is not active: $lastStats"
+        exit 3
+    }
     if {[string first "bad" $lastStats] >= 0} {
         puts stderr "BLOCKED: last stats line after the soak contains bad: $lastStats"
         exit 3

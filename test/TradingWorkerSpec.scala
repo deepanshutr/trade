@@ -238,7 +238,7 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.worker.observe(Event.BboUpdate("BTC", Level("1", "1", 1), Level("2", "1", 1), 2001))
       f.worker.observe(Event.BboUpdate("XMR", Level("99.99", "20", 1), Level("100", "20", 1), 2001))
       assert(!f.worker.view.ready)
-      assertEquals(f.worker.view.message, "Waiting for fresh selected-market depth")
+      assertEquals(f.worker.view.block, Some("selected depth stale"))
       assert(!f.worker.submit(buy, "XMR"))
       assertEquals(f.posts.get(), 0)
     finally f.close()
@@ -907,4 +907,69 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally
       release.countDown()
       f.close()
+  }
+
+  test("a retained fill cannot hide current selected depth or account freshness failures") {
+    val f = new Fixture()
+    try
+      f.ready()
+      assert(f.worker.submit(buy, "XMR"))
+      waitFor("fill missing")(f.worker.view.message.contains("filled 1 at 100"))
+      f.ready()
+      f.publishActive = false
+      f.clock.addAndGet(2001)
+      f.worker.observe(Event.Pong)
+      f.worker.observe(Event.BboUpdate("BTC", Level("1", "1", 1), Level("2", "1", 1), 3001))
+      val depth = TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
+      assert(depth.contains("selected depth stale"), depth)
+      assert(depth.contains("XMR filled 1 at 100"), depth)
+      f.fresh(f.worker, time = 3001)
+      val account = TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
+      assert(account.contains("account data stale"), account)
+      assert(account.contains("XMR filled 1 at 100"), account)
+      f.readFailure = true
+      waitFor("failed refresh not observed")(
+        f.worker.view.message == "Waiting for market or account data"
+      )
+      val failed = TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
+      assert(failed.contains("account data stale"), failed)
+      assert(failed.contains("XMR filled 1 at 100"), failed)
+      assert(!f.worker.view.ready)
+      assert(!f.worker.submit(buy, "XMR"))
+      f.worker.observe(Event.SocketDown)
+      val down = TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
+      assert(down.contains("connection disconnected"), down)
+      assert(down.contains("XMR filled 1 at 100"), down)
+      assertEquals(f.orderPosts.get(), 1)
+    finally f.close()
+  }
+
+  test("a new failed attempt replaces an earlier fill while blocked input preserves it") {
+    val f = new Fixture()
+    try
+      f.ready()
+      assert(f.worker.submit(buy, "XMR"))
+      waitFor("fill missing")(f.worker.view.message.contains("filled 1 at 100"))
+      f.ready()
+      assert(!f.worker.submit(buy, "BTC"))
+      assert(
+        TradingScreen
+          .rows(f.worker.view, None, f.worker.preview)
+          .mkString
+          .contains("XMR filled 1 at 100")
+      )
+      f.worker.observe(
+        Event.BookUpdate(
+          "XMR",
+          Book(Vector(Level("999999999", "20", 1)), Vector(Level("1000000000", "20", 1)), 2000),
+          true
+        )
+      )
+      assert(f.worker.view.ready)
+      assert(!f.worker.submit(buy, "XMR"))
+      val text = TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
+      assert(text.contains("No visible quantity fits this order"), text)
+      assert(!text.contains("filled 1 at 100"), text)
+      assertEquals(f.orderPosts.get(), 1)
+    finally f.close()
   }

@@ -65,15 +65,6 @@ object Main:
       case _ => ()
     queue.put(Event.Key(command))
 
-  def writeFrame(
-      coin: Option[String],
-      shownCoin: AtomicReference[Option[String]],
-      output: () => Unit
-  ): Unit =
-    shownCoin.set(None)
-    output()
-    shownCoin.set(coin)
-
   def handleTrade(
       command: Command,
       snapshot: Snapshot,
@@ -201,10 +192,13 @@ object Main:
       coin: String,
       size: (Int, Int),
       shownCoin: AtomicReference[Option[String]],
-      output: () => Unit
+      output: () => Unit,
+      complete: Boolean = true
   ): Unit =
-    val visible = size._1 >= Layout.minCols && size._2 >= Layout.minRows
-    writeFrame(Option.when(visible)(coin), shownCoin, output)
+    val visible = size._1 >= Layout.minCols && size._2 >= Layout.minRows && complete
+    shownCoin.set(None)
+    output()
+    shownCoin.set(Option.when(visible)(coin))
 
   def run(
       args: Args,
@@ -337,12 +331,13 @@ object Main:
           val shown = view.forMarket(snapshot.coin)
           val preview: OrderIntent => Either[String, OrderPlan] =
             if matching then worker.preview else _ => Left("changing market")
-          val footer = TradingScreen.rows(shown, selected, preview, config.sizes)
+          val footer = TradingScreen.rows(shown, selected, preview, config.sizes, size._1)
           writeMarketFrame(
             snapshot.coin,
             size,
             shownCoin,
-            () => Term.write(Screen.render(snapshot, size._1, size._2, time, zone, st, footer))
+            () => Term.write(Screen.render(snapshot, size._1, size._2, time, zone, st, footer)),
+            complete = footer.size == Layout.footerRows && footer.forall(_.length <= size._1)
           )
           last = snapshot
           lastView = view

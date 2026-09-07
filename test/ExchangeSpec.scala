@@ -153,3 +153,25 @@ class ExchangeSpec extends munit.FunSuite:
       Some("XMR filled 1 at 100.1")
     )
   }
+
+  test(
+    "validated fill text fits long markets and marks rounded numbers without changing the fill guards"
+  ) {
+    val long = saved.copy(
+      coin = "X" * 40,
+      quantity = "99999999999999999999999999999999999999",
+      limit = "99999999999999999999999999999999999999"
+    )
+    val quantity = "123456789012345678901234567890"
+    val price = "234567890123456789012345678901"
+    val filled =
+      ujson.Obj("filled" -> ujson.Obj("totalSz" -> quantity, "avgPx" -> price, "oid" -> 9))
+    val shown = Exchange.outcome(reply(filled), long).get
+    assert(shown.startsWith(long.coin + " filled ~"), shown)
+    assert(shown.contains(" at ~"), shown)
+    assert(shown.length <= 64, shown)
+    assertEquals(BigDecimal(quantity), BigDecimal(filled("filled")("totalSz").str))
+    assertEquals(BigDecimal(price), BigDecimal(filled("filled")("avgPx").str))
+    assertEquals(Exchange.outcome(reply(filled), long.copy(quantity = "1")), None)
+    assertEquals(Exchange.outcome(reply(filled), long.copy(limit = "1")), None)
+  }

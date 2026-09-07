@@ -53,6 +53,38 @@ object Trading:
 
   def format(value: BigDecimal): String = value.bigDecimal.stripTrailingZeros().toPlainString()
 
+  def displayExact(value: BigDecimal): String =
+    val decimal = value.bigDecimal.stripTrailingZeros()
+    Vector(decimal.toPlainString, decimal.toString.replace("E+", "e").replace("E", "e"))
+      .minBy(_.length)
+
+  def display(value: BigDecimal, width: Int = 8): String =
+    val exact = format(value)
+    if exact.length <= width then exact
+    else
+      (7 to 1 by -1).iterator
+        .map { precision =>
+          val rounded = value.bigDecimal
+            .round(new MathContext(precision, RoundingMode.DOWN))
+            .stripTrailingZeros()
+            .toString
+          "~" + rounded.replace("E+", "e").replace("E", "e")
+        }
+        .find(_.length <= width)
+        .getOrElse(
+          "~" + value.bigDecimal
+            .round(new MathContext(1, RoundingMode.DOWN))
+            .toString
+            .replace("E+", "e")
+            .replace("E", "e")
+        )
+
+  def action(index: Int): OrderIntent = OrderIntent(
+    if index % 4 < 2 then Side.Buy else Side.Sell,
+    if index < 4 then OrderKind.Hard else OrderKind.Best,
+    big = index % 2 == 1
+  )
+
   private def validDecimals(rules: MarketRules): Boolean =
     rules.szDecimals >= 0 && rules.szDecimals <= 6
 

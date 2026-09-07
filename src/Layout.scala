@@ -1,6 +1,7 @@
 package desk
 
 object Layout:
+  val marketLabelWidth = 40
   val minCols = 100
   val minRows = 30
   val leftW = 30

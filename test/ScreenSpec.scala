@@ -23,36 +23,35 @@ class ScreenSpec extends munit.FunSuite:
     val s = Snapshot.initial("XMR", t0).copy(ctx = Some(ctx), feed = Health.Live(t0 - 300))
     val line = Screen.stats(s, t0, 110)
     assertEquals(line.length, 110)
-    val expected = "XMR  522.26  mark 522.28  orc 521.515  24h -1.4%  fund 0.0130%  " +
-      "OI 210.2k  vol 31.2M  live 0.3s"
-    assert(line.startsWith(expected), line)
+    assert(line.startsWith("connection active 0.3s  XMR  mid 522.26"), line)
+    assert(line.contains("mark 522.28") && line.contains("oracle 521.515"), line)
     val down = s.copy(feed = Health.Down(t0 - 12_000, t0 - 12_300), bad = 3)
     val staleLine = Screen.stats(down, t0, 110)
     assertEquals(staleLine.length, 110)
-    assert(staleLine.contains("STALE 12s"), staleLine)
+    assert(staleLine.contains("connection disconnected 12.3s"), staleLine)
     assert(staleLine.contains("bad 3"), staleLine)
-    assert(Screen.stats(s.copy(prompt = Some("BT")), t0, 110).startsWith("market: BT_"))
+    assert(Screen.stats(s.copy(prompt = Some("BT")), t0, 110).contains("market: BT_"))
     val bare = Snapshot.initial("XMR", t0).copy(feed = Health.Live(t0))
-    assert(Screen.stats(bare, t0, 110).startsWith("XMR  -  live 0.0s"))
+    assert(Screen.stats(bare, t0, 110).startsWith("connection active 0.0s  XMR  mid unavailable"))
   }
   test("the stats line prints the book mid, falling back to the context mid without a book") {
     val ctx =
       Ctx("522.28", "521.515", "0.0001302411", "210160.16", "31202156.16", "529.78", Some("522.26"))
     val book = Book(Vector(lv("500.10", "1")), Vector(lv("500.20", "1")), t0)
     val s = Snapshot.initial("XMR", t0).copy(ctx = Some(ctx), feed = Health.Live(t0))
-    assert(Screen.stats(s, t0, 110).startsWith("XMR  522.26  "), "no book")
+    assert(Screen.stats(s, t0, 110).contains("mid 522.26"), "no book")
     val withBook = Screen.stats(s.copy(book = Some(book)), t0, 110)
-    assert(withBook.startsWith("XMR  500.15  "), withBook)
+    assert(withBook.contains("mid 500.15"), withBook)
   }
   test("the feed is stale past five seconds, not six") {
     val s = Snapshot.initial("XMR", t0).copy(feed = Health.Live(t0 - 5500))
     val line = Screen.stats(s, t0, 100)
-    assert(line.contains("STALE"), line)
+    assert(line.contains("connection stale"), line)
   }
   test("the socket age never goes negative, even if the last message is ahead of now") {
     val s = Snapshot.initial("X", t0).copy(feed = Health.Live(t0 + 400))
     val line = Screen.stats(s, t0, 100)
-    assert(line.contains("live 0.0s"), line)
+    assert(line.contains("connection active 0.0s"), line)
   }
   test("a stats line never exceeds the terminal width") {
     val ctx =
@@ -62,7 +61,7 @@ class ScreenSpec extends munit.FunSuite:
       .copy(ctx = Some(ctx), feed = Health.Down(t0 - 12_000, t0 - 12_300), bad = 3)
     val line = Screen.stats(s, t0, 100)
     assertEquals(line.length, 100)
-    assert(line.contains("STALE 12s"), line)
+    assert(line.contains("connection disconnected 12.3s"), line)
   }
   test("short numbers use k, M and B with one decimal") {
     assertEquals(Screen.short(31_022_816.0), "31.0M")
@@ -245,7 +244,7 @@ class ScreenSpec extends munit.FunSuite:
     java.nio.file.Files.createDirectories(java.nio.file.Paths.get("golden"))
     for (name, snapshot, cols, rows, style) <- frames do
       val frame =
-        Screen.render(snapshot, cols, rows, Golden.now, zone, style, Golden.tradingRows)
+        Screen.render(snapshot, cols, rows, Golden.now, zone, style, Golden.tradingRowsAt(cols))
       val path = java.nio.file.Paths.get("golden", name)
       val bytes = (frame.mkString("\n") + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)
       java.nio.file.Files.write(path, bytes)
@@ -254,16 +253,14 @@ class ScreenSpec extends munit.FunSuite:
   test("render matches the line and candle golden frames with trading controls") {
     for (name, snapshot, cols, rows, style) <- frames do
       val frame =
-        Screen.render(snapshot, cols, rows, Golden.now, zone, style, Golden.tradingRows)
+        Screen.render(snapshot, cols, rows, Golden.now, zone, style, Golden.tradingRowsAt(cols))
       assertEquals(frame.size, rows)
       assert(frame.forall(l => plain(l).length == cols), frame.map(plain).map(_.length))
-      assert(frame(rows - 4).contains("Hard 1 buy") && frame(rows - 4).contains("4 sell"))
-      assert(frame(rows - 3).contains("Best 5 buy") && frame(rows - 3).contains("8 sell"))
-      assert(frame(rows - 2).contains("Target 9 buy 0 sell"))
-      assert(frame(rows - 2).contains("request") && frame(rows - 2).contains("estimate"))
-      assert(frame(rows - 2).contains("value $") && frame(rows - 2).contains("average $"))
-      assert(frame(rows - 4).contains("position long 1"))
-      assert(frame(rows - 3).contains("press estimate long"))
+      assert(frame(rows - 4).startsWith("Hard XMR buy limit $"))
+      assert(frame(rows - 3).contains("request") && frame(rows - 3).contains("estimate"))
+      assert(frame(rows - 3).contains("value $") && frame(rows - 3).contains("average $"))
+      assert(frame(rows - 2).contains("position long 1"))
+      assert(frame(rows - 2).contains("press estimate long"))
       assert(frame.last.startsWith("pending | XMR submitting"))
       val path = java.nio.file.Paths.get("golden", name)
       assertEquals(

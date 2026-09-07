@@ -142,13 +142,15 @@ class TradingKeysSpec extends munit.FunSuite:
     val feed = new Feed(connector, rest, queue, () => now, "XMR")
     val workers = Main.startFold(queue, state, feed, () => now)
     val writer = new Thread(() =>
-      Main.writeFrame(
-        Some("BTC"),
+      Main.writeMarketFrame(
+        "BTC",
+        (100, 30),
         shown,
         () => {
           entered.countDown()
           val _ = release.await(3, java.util.concurrent.TimeUnit.SECONDS)
-        }
+        },
+        complete = true
       )
     )
     writer.start()
@@ -190,10 +192,16 @@ class TradingKeysSpec extends munit.FunSuite:
   test("a failed write or small-terminal message cannot publish a trading market") {
     val shown = new java.util.concurrent.atomic.AtomicReference[Option[String]](Some("XMR"))
     intercept[java.io.IOException] {
-      Main.writeFrame(Some("BTC"), shown, () => throw new java.io.IOException("held"))
+      Main.writeMarketFrame(
+        "BTC",
+        (100, 30),
+        shown,
+        () => throw new java.io.IOException("held"),
+        complete = true
+      )
     }
     assertEquals(shown.get(), None)
-    Main.writeFrame(None, shown, () => ())
+    Main.writeMarketFrame("BTC", (99, 30), shown, () => (), complete = true)
     assertEquals(shown.get(), None)
     assert(invoke(Command.PlaceOrder(buy), shownCoin = shown.get())._2.isEmpty)
   }

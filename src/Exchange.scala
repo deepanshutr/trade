@@ -227,7 +227,7 @@ object Exchange:
           )
           require(if saved.side == Side.Buy then price <= BigDecimal(saved.limit)
           else price >= BigDecimal(saved.limit))
-          s"${saved.coin} filled ${Trading.format(quantity)} at ${Trading.format(price)}"
+          s"${saved.coin} filled ${Trading.display(quantity, 6)} at ${Trading.display(price, 6)}"
       }.toOption
     )
 

@@ -1,4 +1,4 @@
-XMR  528.045  mark 527.78  orc 526.393  24h +3.2%  fund 0.0214%  OI 188.5k  vol 56.2M  live 0.3s    
+connection active 0.3s  XMR  mid 528.045  mark 527.78  oracle 526.393  24h +3.2%  fund 0.0214%      
   531.02 [31m                   ⢸⣿[0m         ⢀⣀⣀⠤⣀⣀⣀⣀                                               531.02
   530.55                             ⡀⣀⠎       ⠉⠒⠒⢆                                                 
   530.08 [31m            ⣿⣿⣿⣿⣿⣿⣿⣿⣿[0m⠉⠑⠒⠊⠉⠉⠉⠈            ⠈⠦⣀⣀⡰⢄⣀⣀⡀  ⢀⡠⡠⠤⠤⠤⠤⡀                               
@@ -24,7 +24,7 @@ BOOK  30s ..........[31m⣿[0m|........... D-0.06 Q-0.02   TAPE [2m  5m[0m .
 BOOK   1m ..........[31m⣿[0m|........... D-0.09 Q-0.00   TAPE [2m 15m[0m ...........|[32m⣿[0m.......... F+0.12 n=435    
 BOOK [2m  5m[0m ...........[31m⣿[0m........... D-0.02 Q+0.02   TAPE [2m  1h[0m ...........|[32m⣿[0m.......... F+0.12 n=435    
 BOOK [2m 15m[0m ...........[31m⣿[0m........... D-0.02 Q+0.02   TAPE [2m  4h[0m ...........|[32m⣿[0m.......... F+0.12 n=435    
-Hard 1 buy $500 2 buy $1000 3 sell $500 4 sell $1000 | position long 1                              
-Best 5 buy $499.14 6 buy $998.83 7 sell $499.84 8 sell $999.66 | press estimate long 1.946          
-Target 9 buy 0 sell | Hard buy request 0.946 estimate 0.946 value $~499.6 average $528.2            
+Hard XMR buy limit $528.72                                                                          
+request 0.946 estimate 0.946 value $~499.6 average $528.2                                           
+position long 1 | press estimate long 1.946 | 1-8 and 9/0 inactive                                  
 pending | XMR submitting                                                                            

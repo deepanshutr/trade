@@ -14,7 +14,9 @@ final case class TradingView(
     rules: Option[MarketRules] = None,
     bid: Option[BigDecimal] = None,
     ask: Option[BigDecimal] = None,
-    lastPlan: Option[OrderPlan] = None
+    lastPlan: Option[OrderPlan] = None,
+    block: Option[String] = None,
+    outcome: Option[String] = None
 ):
   def reference(side: Side): Option[BigDecimal] = if side == Side.Buy then ask else bid
   def forMarket(current: String): TradingView =
@@ -86,6 +88,7 @@ final class TradingWorker private[desk] (
   private var maximums = Vector(BigDecimal(0), BigDecimal(0))
   private var lastPlan = Option.empty[OrderPlan]
   private var message = if enabled then "Preparing trading" else "View only"
+  private var outcome = Option.empty[String]
   private var fatal = false
   private var waitingRefresh = false
   private var accountVersion = 0L
@@ -113,21 +116,30 @@ final class TradingWorker private[desk] (
         (roleGeneration.contains(generation) && fresh(roleAt, 60000L)))
 
   def view: TradingView = synchronized {
-    val shown = if message != "Ready" then message
-    else if !marketReady then "Waiting for fresh selected-market depth"
-    else if !accountReady then "Waiting for fresh account data"
-    else message
+    val block =
+      if !enabled then Some("View only")
+      else if fatal || !config.configured then Some(message)
+      else if !connected then Some("connection disconnected")
+      else if rules.isEmpty then Some("waiting for market data")
+      else if exact.isEmpty || touch.isEmpty then Some("waiting for selected depth")
+      else if !touch.exists(t => t.bid > 0 && t.ask > t.bid) then Some("invalid selected quote")
+      else if !marketReady then Some("selected depth stale")
+      else if secret.isEmpty then Some(message)
+      else if !accountReady || waitingRefresh then Some("account data stale")
+      else None
     TradingView(
       coin,
       position,
-      shown,
+      message,
       enabled && !fatal && !busy
         .get() && !waitingRefresh && secret.nonEmpty && marketReady && accountReady,
       busy.get() || saved.nonEmpty,
       rules,
       touch.map(_.bid),
       touch.map(_.ask),
-      lastPlan
+      lastPlan,
+      block,
+      outcome
     )
   }
 
@@ -201,6 +213,7 @@ final class TradingWorker private[desk] (
   def submit(intent: OrderIntent, expectedCoin: String): Boolean = synchronized {
     if expectedCoin != coin || !view.ready || !busy.compareAndSet(false, true) then false
     else
+      outcome = None
       estimate(intent) match
         case Left(reason) =>
           message = reason
@@ -242,6 +255,7 @@ final class TradingWorker private[desk] (
       synchronized {
         saved = None
         message = text
+        outcome = Some(text)
         waitingRefresh = true
         accountVersion += 1
         accountAt = Long.MinValue

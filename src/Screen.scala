@@ -25,22 +25,43 @@ object Screen:
       .toPlainString()
 
   def stats(s: Snapshot, now: Long, cols: Int): String =
-    val text = s.prompt match
-      case Some(p) => s"market: ${p}_"
-      case None    =>
-        val mid = s.book.flatMap(midOf).orElse(s.ctx.flatMap(_.mid))
-        val age = (now - State.lastMsgAt(s.feed)).max(0L)
-        val fresh = if age > 5000 then s"STALE ${age / 1000}s" else f"live ${age / 1000.0}%.1fs"
-        val badPart = if s.bad > 0 then s"  bad ${s.bad}" else ""
-        s.ctx match
-          case Some(c) =>
+    val age = (now - State.lastMsgAt(s.feed)).max(0L) / 1000.0
+    val health = s.feed match
+      case Health.Down(_, _) => "disconnected"
+      case _ if age > 5      => "stale"
+      case _                 => "active"
+    val bad = if s.bad > 0 then s" bad ${s.bad}" else ""
+    val status = f"connection $health $age%.1fs$bad"
+    val promptRoom = if s.prompt.nonEmpty then 24 else 0
+    val marketWidth = (cols - status.length - 2 - promptRoom).min(Layout.marketLabelWidth).max(3)
+    val coin = if s.coin.length <= marketWidth then s.coin else s.coin.take(marketWidth - 3) + "..."
+    val prefix = status + "  " + coin
+    val mid = s.book.flatMap(midOf).orElse(s.ctx.flatMap(_.mid))
+    val fields = s.prompt match
+      case Some(p) =>
+        val width = (cols - prefix.length - 11).max(0)
+        val shown = if p.length <= width then p else "..." + p.takeRight((width - 3).max(0))
+        Vector(s"market: ${shown}_")
+      case None =>
+        Vector(
+          "mid " + mid.map(v => Trading.display(BigDecimal(v), 12)).getOrElse("unavailable")
+        ) ++
+          s.ctx.toVector.flatMap { c =>
             val pct = mid.map(m => (m.toDouble / c.prevDayPx.toDouble - 1) * 100).getOrElse(0.0)
-            f"${s.coin}  ${mid.getOrElse("-")}  mark ${c.mark}  orc ${c.oracle}  24h $pct%+.1f%%  " +
-              f"fund ${c.funding.toDouble * 100}%.4f%%  OI ${short(c.openInterest.toDouble)}  " +
-              f"vol ${short(c.dayVolume.toDouble)}  $fresh$badPart"
-          case None => s"${s.coin}  ${mid.getOrElse("-")}  $fresh$badPart"
-    val fitted = if text.length > cols then text.replace("  ", " ") else text
-    fitted.padTo(cols, ' ').take(cols)
+            Vector(
+              s"mark ${c.mark}",
+              s"oracle ${c.oracle}",
+              f"24h $pct%+.1f%%",
+              f"fund ${c.funding.toDouble * 100}%.4f%%",
+              "open interest " + short(c.openInterest.toDouble),
+              "volume " + short(c.dayVolume.toDouble)
+            )
+          }
+    fields
+      .foldLeft(prefix) { (line, field) =>
+        if line.length + field.length + 2 <= cols then line + "  " + field else line
+      }
+      .padTo(cols, ' ')
 
   def render(
       s: Snapshot,
@@ -85,7 +106,8 @@ object Screen:
       val (first, z) = Chart.window(s, count, now)
       val unit = if s.chartMode == ChartMode.Candles then "/candle" else "/col"
       val mode = if s.chartMode == ChartMode.Candles then "candles" else "line"
-      val caption = "c " + mode + " " + State.zoomLabel(z) + unit
+      val caption = "c " + mode + " " + State.zoomLabel(z) + unit +
+        (if s.offsetSec > 0 then " history" else "")
       val axisLine = Chart.rjust(caption, Layout.leftW - 1) + " " +
         Chart.axisRow(first, z, count, zone, cells) + " " * Layout.scaleW
       val controls = footer

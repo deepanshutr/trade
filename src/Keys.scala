@@ -101,12 +101,8 @@ object Keys:
     case 13 | 10                 => Some(Command.SubmitTarget)
     case 57                      => Some(Command.SelectTarget(Side.Buy))
     case 48                      => Some(Command.SelectTarget(Side.Sell))
-    case n if n >= 49 && n <= 56 =>
-      val index = n - 49
-      val side = if index % 4 < 2 then Side.Buy else Side.Sell
-      val kind = if index < 4 then OrderKind.Hard else OrderKind.Best
-      Some(Command.PlaceOrder(OrderIntent(side, kind, big = index % 2 == 1)))
-    case _ => None
+    case n if n >= 49 && n <= 56 => Some(Command.PlaceOrder(Trading.action(n - 49)))
+    case _                       => None
 
   private def arrow(byte: Int): Option[Command] = byte match
     case 65 => Some(Command.ZoomIn)

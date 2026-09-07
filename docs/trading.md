@@ -82,20 +82,38 @@ use the same selected network. The configured owner must own the approved delega
 signing address on that network. This guide does not create an account, grant approval,
 fund a position or submit an order.
 
-The current account position appears beside Hard. A pending press or selected Target has
-a separate position estimate beside Best. A press estimate was captured when the key was
-pressed and may differ from a later account position. It is labelled `press estimate`.
-A selected Target is labelled `target estimate`. Neither appears for an unknown position.
+The idle Hard and Best rows keep their keys in fixed columns as amounts change. The
+confirmed account position appears beside Hard. The next row shows the Target selectors
+and viewing keys. Connection activity and its age stay at the start of the header, even
+while the market prompt is open. An active connection does not establish order readiness.
+Selected market depth and account freshness have separate checks in the footer.
+A long market label ends in `...`. The footer then keeps the full name, or disables order
+keys if that name cannot fit. The prompt keeps its latest input and cursor visible.
 
-The third row shows requested tokens, estimated filled tokens, gross dollars and average
-while a Target is selected or a press is pending. The last row is reserved for readiness
-and the worker message, including rejection, actual fill or recovery. Once a press resolves,
-its old estimate disappears. The confirmed account position and outcome remain visible.
-A new Target can show a preview while that outcome stays on the last row.
+Selecting Target uses the same four rows for its market, side, exact limit, requested
+tokens, estimated filled tokens, gross dollars and average. Enter says whether it can
+send, and Escape cancels selection. Keys 1 through 8 and left and right arrows are visibly
+inactive. A failed preview keeps its actual reason. A pending press shows the captured
+Hard, Best or Target plan in these rows. Its estimate does not change with later quotes.
 
-A leading `~` marks a rounded display number. Calculations keep full precision. Preview
-figures are before fees and are not confirmed fills. An immediate order may fill partly
-or not at all as prices and available volume change.
+Confirmed position stays separate from `target estimate` or `press estimate`. A press
+estimate can differ from a later confirmed position. An unknown position stays unavailable
+and has no resulting position estimate. A zero estimated fill has no average.
+
+The current blocking reason and last completed outcome remain visible together. A new
+permitted press replaces the previous outcome, including when planning rejects that new
+attempt. A blocked key or failed account refresh keeps the completed outcome. Resolved
+press estimates disappear. A new Target can show a preview beside the retained outcome.
+Long exact limits or result labels can use spare space elsewhere in the four rows.
+A limit that fills a whole row sits directly below its `limit $` label. If required text
+cannot fit, a width message appears and order keys stay disabled until a complete frame
+has been written. Optional viewing help yields first. The chart caption says `history`
+when scrubbed, while the book and midpoint continue to use current data.
+
+A leading `~` marks a rounded display number. Calculations keep full precision. Very large
+exact limits can use scientific notation without that marker. For example, `1e100` is one
+followed by one hundred zeros. Preview figures are before fees and are not confirmed fills.
+An immediate order may fill partly or not at all as prices and available volume change.
 
 Local order state is stored under `~/.local/state/desk`, separated by network and delegated
 signing address. One process holds the corresponding state lock. An uncertain order blocks
@@ -105,8 +123,8 @@ the existing order first.
 
 Readiness also needs recent account data. The account stream does not promise a steady
 update rate, so a quiet account can become unavailable even while market quotes continue.
-The status row can show `unavailable` beside a retained fill, rejection or recovery
-message. That retained outcome may not explain the current block. A pending order is
+The footer shows the current blocking reason beside a retained fill, rejection or recovery
+message. The outcome names its original market after a market switch. A pending order is
 never resent to improve its price or work around a slow reply.
 
 After installing a new build, restart any already running `desk` process. It keeps the
