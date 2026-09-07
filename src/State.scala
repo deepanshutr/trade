@@ -5,7 +5,8 @@ enum Side:
 
 final case class Level(px: String, sz: String, n: Int)
 final case class Book(bids: Vector[Level], asks: Vector[Level], time: Long)
-final case class Trade(time: Long, side: Side, px: String, sz: String)
+final case class Trade(time: Long, side: Side, px: String, sz: String):
+  val displaySize: Double = sz.toDouble
 final case class Candle(t: Long, o: Double, h: Double, l: Double, c: Double, v: Double)
 final case class Ctx(
     mark: String,

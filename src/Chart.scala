@@ -139,7 +139,7 @@ object Chart:
     val vol = Array.fill(n)(0.0)
     tape.foreach { t =>
       val k = bucket(t.time / 1000, first, z)
-      if k >= 0 && k < n then vol(k) += t.sz.toDouble
+      if k >= 0 && k < n then vol(k) += t.displaySize
     }
     val inside =
       samples.filter((sec, _) => sec >= lo && sec < hi).groupBy((sec, _) => bucket(sec, first, z))

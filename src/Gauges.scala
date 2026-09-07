@@ -92,7 +92,7 @@ object Gauges:
     val sell = Array.fill(n)(0.0)
     val count = Array.fill(n)(0)
     tape.foreach { x =>
-      val sz = x.sz.toDouble
+      val sz = x.displaySize
       val isBuy = x.side == Side.Buy
       var k = 0
       while k < n do
