@@ -1,3 +1,4 @@
 .scala-build/
 .bsp/
 bin/
+__pycache__/

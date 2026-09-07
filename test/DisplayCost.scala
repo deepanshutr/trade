@@ -156,6 +156,12 @@ object DisplayCost:
     val firstFrame = once(Screen.render(cap, 100, 30, Golden.now, ZoneOffset.UTC, Style.colour))
     val rows = Vector(
       createAndDraw,
+      bench("render_short_100x30")(
+        Screen.render(seed, 100, 30, Golden.now, ZoneOffset.UTC, Style.colour)
+      ),
+      bench("render_short_120x40")(
+        Screen.render(seed, 120, 40, Golden.now, ZoneOffset.UTC, Style.mono)
+      ),
       bench("tape_stats")(Gauges.tapeStats(cap.tape, Golden.now, lenses)),
       bench("render_100x30")(
         Screen.render(cap, 100, 30, Golden.now, ZoneOffset.UTC, Style.colour)

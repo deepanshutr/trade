@@ -202,7 +202,9 @@ object Main:
 
   def run(
       args: Args,
-      sources: TradingConfig => (SocketConnector, EndpointRest) = publicSources
+      sources: TradingConfig => (Connector, Rest) = publicSources,
+      createWorker: (TradingConfig, Boolean, String, Path) => TradingWorker = TradingWorker.create,
+      queue: LinkedBlockingQueue[Event] = new LinkedBlockingQueue[Event]()
   ): Unit =
     val home = Path.of(System.getProperty("user.home"))
     val config = TradingConfig.load(configPath(args, home)) match
@@ -212,7 +214,6 @@ object Main:
         sys.exit(64)
     val st = style(args, sys.env)
     val now = () => System.currentTimeMillis()
-    val queue = new LinkedBlockingQueue[Event]()
     val initial = Snapshot.initial(args.coin, now(), config.references)
     val state = new AtomicReference(initial)
     val shownCoin = new AtomicReference(Option.empty[String])
@@ -221,7 +222,7 @@ object Main:
     val targetLock = new Object
     val (connector, rest) = sources(config)
     val worker =
-      TradingWorker.create(config, args.trade, args.coin, home.resolve(".local/state/desk"))
+      createWorker(config, args.trade, args.coin, home.resolve(".local/state/desk"))
     val feed = new Feed(connector, rest, queue, now, args.coin, config.references, worker.observe)
     val zone = java.time.ZoneId.systemDefault()
     val saved = scala.util.Try(Term.enterRaw()).getOrElse {
