@@ -29,6 +29,11 @@ def frame():
     global wide
     cols, rows = os.get_terminal_size(fd)
     wide = wide or cols == 120
+    if cols == 120:
+        if mode in ('resize_stuck', 'wrong_width'):
+            cols = 100
+        if mode in ('resize_stuck', 'wrong_height'):
+            rows = 30
     health = 'active 0.1s'
     if wide and selections >= 3 and not target and cols == 100:
         if mode == 'stale':
@@ -51,7 +56,8 @@ def frame():
                       'Target 9 buy 0 sell | up/down zoom left/right history m market c chart q quit',
                       'View only']
         lines = [line.ljust(cols) for line in lines]
-    sys.stdout.write(esc + '[H' + (esc + '[K\r\n').join(lines) + esc + '[K')
+    end = '' if mode == 'missing_end' else esc + '[J'
+    sys.stdout.write(esc + '[H' + (esc + '[K\r\n').join(lines) + esc + '[K' + end)
     sys.stdout.flush()
 
 try:

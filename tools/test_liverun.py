@@ -8,7 +8,8 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parent
-cases = {'healthy': 0, 'stale': 3, 'disconnected': 3, 'restoration_failure': 3, 'child_failure': 7}
+cases = {'resize_stuck': 2, 'wrong_height': 2, 'wrong_width': 2, 'missing_end': 2, 'healthy': 0,
+         'stale': 3, 'disconnected': 3, 'restoration_failure': 3, 'child_failure': 7}
 records = []
 evidence = Path(os.environ.get('DESK_CHECK_EVIDENCE', str(root.parent / 'driver-evidence')))
 evidence.mkdir(exist_ok=True, parents=True)
@@ -28,7 +29,10 @@ with tempfile.TemporaryDirectory(prefix='desk-driver-') as temporary:
         records.append({'case': case, 'expected': expected, 'actual': result.returncode})
         assert result.returncode == expected, (case, expected, result.returncode, result.stdout[-1000:])
         text = result.stdout.decode(errors='replace')
-        if case == 'healthy':
+        if case in ('resize_stuck', 'wrong_height', 'wrong_width', 'missing_end'):
+            size = '100x30' if case == 'missing_end' else '120x40'
+            assert f'BLOCKED: timed out after 10s waiting for: complete {size} viewing frame' in text
+        elif case == 'healthy':
             assert 'last stats line after soak: connection active 0.1s  BTC' in text
             assert '\x1b[?2004l\x1b[?25h\x1b[?1049l' in text
             assert 'terminal settings restored\r\n' in text

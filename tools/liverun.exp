@@ -8,7 +8,6 @@ set logfile [lindex $argv 0]
 set soak 0
 if {$argc >= 2} { set soak [lindex $argv 1] }
 log_file -noappend $logfile
-match_max 1000000
 
 set esc \x1b
 set desk "$env(HOME)/.local/bin/desk"
@@ -31,6 +30,7 @@ spawn /bin/sh -c {
     exit "$result"
 } desk-live-check $desk
 set terminal $spawn_out(slave,name)
+match_max 1000000
 
 proc exit_with_child_status {fallback} {
     global spawn_id
@@ -44,11 +44,11 @@ proc exit_with_child_status {fallback} {
     exit $fallback
 }
 
-proc wait_for {pattern seconds label} {
+proc wait_for {pattern seconds label {kind -ex}} {
     global spawn_id timeout
     set timeout $seconds
     expect {
-        -ex $pattern { }
+        $kind $pattern { }
         timeout {
             puts stderr "BLOCKED: timed out after ${seconds}s waiting for: $label"
             exit 2
@@ -58,6 +58,13 @@ proc wait_for {pattern seconds label} {
             exit_with_child_status 2
         }
     }
+}
+
+proc wait_for_size {cols rows} {
+    global esc
+    set cell [format {(?:[^\r\n%s]|%s\[[0-9;]*m)} $esc $esc]
+    set pattern [format {%s\[H(?:%s*%s\[K\r\n){%d}%s%s\[K%s\[J} $esc $cell $esc [expr {$rows - 1}] [format {%-*s} $cols {View only}] $esc $esc]
+    wait_for $pattern 10 "complete ${cols}x${rows} viewing frame" -re
 }
 
 proc select_target {} {
@@ -107,19 +114,19 @@ wait_for "Target 9 buy 0 sell | up/down zoom" 10 "target cancelled by lone Escap
 exec stty rows 29 columns 99 < $terminal
 wait_for "need 100x30, have 99x29" 10 "undersized terminal message"
 exec stty rows 30 columns 100 < $terminal
-wait_for "  BTC  " 10 "normal frame after restoring terminal size"
+wait_for_size 100 30
 wait_for "Hard 1 buy" 10 "controls after restoring terminal size"
 select_target
 send -- $esc
 wait_for "Target 9 buy 0 sell | up/down zoom" 10 "target cancelled after terminal resize"
 
 exec stty rows 40 columns 120 < $terminal
-wait_for "  BTC  " 10 "wide frame"
+wait_for_size 120 40
 select_target
 send -- $esc
 wait_for "Target 9 buy 0 sell | up/down zoom" 10 "target cancelled at wide size"
 exec stty rows 30 columns 100 < $terminal
-wait_for "  BTC  " 10 "minimum frame before soak"
+wait_for_size 100 30
 
 if {$soak > 0} {
     set deadline [expr {[clock seconds] + $soak}]
