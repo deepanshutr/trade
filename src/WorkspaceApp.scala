@@ -6,6 +6,15 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReferenc
 import scala.util.Try
 
 object WorkspaceApp:
+  private[desk] def enqueueInput(
+      command: Command,
+      size: (Int, Int),
+      queue: LinkedBlockingQueue[Event],
+      pendingPrompts: AtomicInteger
+  ): Unit =
+    queue.put(Event.Resize(size._1, size._2))
+    Main.queueInput(command, queue, pendingPrompts)
+
   private[desk] def dispatchInput(
       command: Command,
       controller: DeskController,
@@ -253,7 +262,7 @@ object WorkspaceApp:
           actualSize.set(measured)
           if !handled then
             marketPrompt = Main.nextPromptOpen(marketPrompt, command)
-            Main.queueInput(command, queue, pendingPrompts)
+            enqueueInput(command, measured, queue, pendingPrompts)
           if command == Command.Quit then quitting = true
         }
         while !quitting && !state.get().quit do
@@ -281,8 +290,11 @@ object WorkspaceApp:
       }
       val zone = java.time.ZoneId.systemDefault()
       val style = Main.style(args, sys.env)
-      var size = actualSize.get()
-      if size != (0, 0) then queue.put(Event.Resize(size._1, size._2))
+      var size = inputLock.synchronized {
+        val measured = actualSize.get()
+        if measured != (0, 0) then queue.put(Event.Resize(measured._1, measured._2))
+        measured
+      }
       var sizeAt = 0L
       var statusAt = 0L
       var lastOutcome = Option.empty[String]
@@ -297,10 +309,12 @@ object WorkspaceApp:
               actualSize.set(measured)
             }
             sizeAt = time
-          val measured = actualSize.get()
-          if measured != size then
-            size = measured
-            Main.sizeEvent((state.get().cols, state.get().rows), size).foreach(queue.put)
+          inputLock.synchronized {
+            val measured = actualSize.get()
+            if measured != size then
+              size = measured
+              Main.sizeEvent((state.get().cols, state.get().rows), size).foreach(queue.put)
+          }
           val market = state.get()
           val view = worker.view.forMarket(market.coin)
           if view.outcome != lastOutcome then
