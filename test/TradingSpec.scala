@@ -284,7 +284,7 @@ class TradingSpec extends munit.FunSuite:
         rules.copy(asset = -1),
         rules.copy(szDecimals = -1),
         rules.copy(szDecimals = 7),
-        rules.copy(maxLeverage = 4)
+        rules.copy(maxLeverage = 0)
       )
     do assert(result(intent, market = market).isLeft)
     for amounts <- Vector(
@@ -344,4 +344,12 @@ class TradingSpec extends munit.FunSuite:
     assertEquals(p.quantity, d("3"))
     assertEquals(p.estimatedValue, d("302"))
     assertEquals(Trading.format(p.average.get), "100.6666666666666666666666666666667")
+  }
+
+  test("positive market leverage below five does not change order planning") {
+    val intent = OrderIntent(Side.Buy, OrderKind.Hard)
+    val usual = result(intent, book()).toOption.get
+    (1 to 4).foreach { maximum =>
+      assertEquals(result(intent, book(), market = rules.copy(maxLeverage = maximum)), Right(usual))
+    }
   }

@@ -33,6 +33,7 @@ object Events:
           )
       case "trades" =>
         val raw = j("data").arr.toVector
+        require(raw.map(_("coin").str).distinct.size <= 1)
         raw.headOption.map(first => Event.Trades(first("coin").str, raw.map(trade)))
       case "candle" =>
         val d = j("data")
@@ -79,7 +80,8 @@ object Events:
       integer(v("time"), Long.MaxValue.toDouble),
       side,
       number(v("px")),
-      number(v("sz"), zero = true)
+      number(v("sz"), zero = true),
+      v.obj.get("tid").map(integer(_, 9007199254740992d))
     )
 
   private def candle(v: ujson.Value): Candle =

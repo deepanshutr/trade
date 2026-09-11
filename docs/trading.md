@@ -1,131 +1,80 @@
-# Use the trading controls
+# Configure live trading
 
-Run `desk XMR` to view the market. Trading stays disabled unless you start
-`desk XMR --trade` with the required account settings. A missing position is shown as
-unavailable. Public market data cannot establish that an account is flat.
+The [workspace guide](workspace.md) describes the layout, paper account, text
+assistant and trade buttons. Every live order needs a visible review and an
+explicit Send. Starting the program preserves observed leverage and margin mode.
 
-The screen needs at least 100 columns and 30 rows. The bottom four rows hold the order
-controls. A market switch disables those controls until the new market has been written
-to the screen and its account and market data are ready.
+The default settings file is `~/.config/desk/config.json`. `--config /path` selects
+another file. It must be a private regular file with permissions `600`. An absent
+default file permits public viewing and paper trading with these defaults:
 
-| Key | Action |
-|---|---|
-| `1` | Hard small buy |
-| `2` | Hard big buy |
-| `3` | Hard small sell |
-| `4` | Hard big sell |
-| `5` | Best small buy |
-| `6` | Best big buy |
-| `7` | Best small sell |
-| `8` | Best big sell |
-| `9` | Select a Target buy price |
-| `0` | Select a Target sell price |
-| Up and down arrows | Raise or lower the selected target price by one valid step |
-| Enter | Submit the selected target |
-| Escape | Cancel target selection or the market prompt |
-| `m` | Open the market prompt and cancel target selection |
-| `c` | Switch the main and reference charts between lines and candles |
-| Up and down arrows without a target | Zoom in or out |
-| Left and right arrows without a target | Move backward or forward through the chart |
-| `q` or Control with `c` | Quit |
+```json
+{
+  "small": "500",
+  "big": "1000",
+  "target": "1000",
+  "network": "mainnet",
+  "references": ["BTC", "PAXG"],
+  "paperBalance": "10000",
+  "paperFee": "0.0005"
+}
+```
 
-Candle mode starts at one minute. Hollow bodies close above their opening price, filled
-bodies close below it, and a flat body closes unchanged. Wicks show the high and low.
-Missing candles stay blank. Returning to lines restores the saved line zoom. Each reference
-has its own price scale, so their heights do not show equal percentage changes.
+Amounts and age limits are quoted numeric strings. Small and big are total order
+value before fees. Target has its own value ceiling.
+Paper balance applies when creating an account. Existing saved balances remain
+in place. Paper fee is the fraction charged on each simulated fill.
 
-Hard and Best keys are ignored while a target is selected. Left and right arrows do not
-change a target. Market prompt text has no trading meaning. Complete bracketed paste is
-ignored, including numeric text. A terminal which sends plain pasted bytes cannot be
-distinguished from typed keys. Check actual paste behaviour before enabling trading there.
-Control with `c` still quits inside an unfinished paste or terminal response.
-Escape sequences with intermediate bytes and mouse reports are consumed completely.
-Some older mouse-report bytes can also form a UTF-8 character. In that ambiguous case,
-the guard can consume a later typed key while finishing the report.
-After submitting or cancelling a market prompt, orders stay blocked until that prompt's
-state change has been applied. Enter alone does not release orders against an older screen.
+Live setup requires the public `owner` address and its approved delegated `agent`
+address on the selected network. Both use the `0x` prefix followed by 40 hexadecimal
+characters. Add those public addresses to the settings. Keep the private signing
+key out of the settings, command line, files and chat.
 
-The default settings file is `~/.config/desk/config.json`. If that file is absent, viewing
-uses the defaults. `--config /path/to/config.json` selects another file. Create a private
-regular file manually and set its permissions with `chmod 600 ~/.config/desk/config.json`.
-This viewing example contains no account addresses:
+Create a generic password item through the Mac system key store. Its service is
+`desk`, its account is the delegated agent address, and its password is that
+agent's private hexadecimal signing key. A custom `keyService` setting changes
+the service name. Use the protected store's on-screen interface for this step.
+A denied or timed-out read leaves signing unavailable. Desk verifies that the
+loaded key matches the agent and that the venue reports delegation to the owner.
 
-    {
-      "small": "500",
-      "big": "1000",
-      "target": "1000",
-      "network": "mainnet",
-      "references": ["BTC", "PAXG"]
-    }
+Start `desk XMR --trade`, or select Live and confirm its account mode. XMR is the
+venue's Monero symbol. The panel names the network and shortened owner address.
+Check the full owner and agent in the local settings before enabling this mode.
+Test network access uses `"network": "testnet"`. Public feeds and the live worker
+use the same network. An account, delegation, funding and any real order remain
+separate user actions.
 
-Dollar amounts and optional age limits must be quoted numeric strings. The small and big
-amounts are total order value before fees, not margin. Target has its own dollar ceiling.
-The defaults are $500, $1000 and $1000. Orders require five times leverage. An opposite
-fill reduces an existing position before any remainder opens the other direction.
+Observed leverage must be a positive integer within the market's limit. Its
+margin mode and leverage are captured in each review and rechecked before sending.
+Changing them at the venue invalidates a pending review. Missing or stale position
+data remains unavailable and is never interpreted as a flat account.
 
-Hard uses the configured dollar size and a price limit no more than 0.1 percent from the
-captured best quote. Best chooses a smaller size with a price limit strictly inside that
-range. The displayed Best amounts follow the visible book. Target takes available volume
-through the selected limit, subject to its dollar ceiling. Visible depth is limited and
-an estimate does not promise that every order at the venue has been seen.
+Hard uses its configured value and a price limit no more than 0.1 percent from the
+captured best quote. Best chooses a smaller size with a limit strictly inside that
+range. Target takes visible volume through its selected price, within the target
+value ceiling. All three are immediate orders that can fill partly or not at all.
+Visible depth does not promise a fill. An opposite fill reduces an existing
+position before its remainder opens the other direction.
 
-To enable trading, add the `owner` public address and its approved delegated `agent` public
-address to the settings. Keep the signing key out of that file. The protected password
-item uses the `keyService` setting, which defaults to `desk`. Manually create a generic
-password item in the system key store with service `desk`, account equal to the `agent`
-address, and the private hexadecimal signing key as its password. Set this up through the
-protected store, never by placing the key in a command line or a file. The protected store
-may ask for access. A denied or timed out read leaves trading disabled.
+The review shows exact quantity and limit. Its maximum value excludes fees. The
+live account's fee rate is not currently loaded, so the review states that limit.
+Paper mode shows its configured fee estimate. A leading `~` denotes a rounded
+display number. Calculations retain full precision. Very large exact numbers
+can use scientific notation.
 
-Use `network` set to `testnet` for the test network. The public feeds and trading account
-use the same selected network. The configured owner must own the approved delegated
-signing address on that network. This guide does not create an account, grant approval,
-fund a position or submit an order.
+Live orders keep durable recovery state under the chosen state directory,
+separated by network and delegated signer. One process holds each account lock.
+The accepted review is compared against the current full plan before it is queued
+and again immediately before its signed request is sent. An uncertain response
+blocks further orders while status is checked. The pending order is not resent.
+Do not delete saved recovery state to release this block. Resolve it using the
+account's order history.
 
-The idle Hard and Best rows keep their keys in fixed columns as amounts change. The
-confirmed account position appears beside Hard. The next row shows the Target selectors
-and viewing keys. Connection activity and its age stay at the start of the header, even
-while the market prompt is open. An active connection does not establish order readiness.
-Selected market depth and account freshness have separate checks in the footer.
-A long market label ends in `...`. The footer then keeps the full name, or disables order
-keys if that name cannot fit. The prompt keeps its latest input and cursor visible.
+Quoted prices and book depth normally expire after one second. Position and active
+account data normally expire after two seconds. Optional `quoteAgeMs` and
+`positionAgeMs` accept 100 to 5,000 milliseconds. A healthy public socket
+does not establish account readiness. The blocking reason and final order outcome
+remain visible in the controls and message history.
 
-Selecting Target uses the same four rows for its market, side, exact limit, requested
-tokens, estimated filled tokens, gross dollars and average. Enter says whether it can
-send, and Escape cancels selection. Keys 1 through 8 and left and right arrows are visibly
-inactive. A failed preview keeps its actual reason. A pending press shows the captured
-Hard, Best or Target plan in these rows. Its estimate does not change with later quotes.
-
-Confirmed position stays separate from `target estimate` or `press estimate`. A press
-estimate can differ from a later confirmed position. An unknown position stays unavailable
-and has no resulting position estimate. A zero estimated fill has no average.
-
-The current blocking reason and last completed outcome remain visible together. A new
-permitted press replaces the previous outcome, including when planning rejects that new
-attempt. A blocked key or failed account refresh keeps the completed outcome. Resolved
-press estimates disappear. A new Target can show a preview beside the retained outcome.
-Long exact limits or result labels can use spare space elsewhere in the four rows.
-A limit that fills a whole row sits directly below its `limit $` label. If required text
-cannot fit, a width message appears and order keys stay disabled until a complete frame
-has been written. Optional viewing help yields first. The chart caption says `history`
-when scrubbed, while the book and midpoint continue to use current data.
-
-A leading `~` marks a rounded display number. Calculations keep full precision. Very large
-exact limits can use scientific notation without that marker. For example, `1e100` is one
-followed by one hundred zeros. Preview figures are before fees and are not confirmed fills.
-An immediate order may fill partly or not at all as prices and available volume change.
-
-Local order state is stored under `~/.local/state/desk`, separated by network and delegated
-signing address. One process holds the corresponding state lock. An uncertain order blocks
-another submission until a matching final status is found. Do not delete or reset that
-state blindly to make the controls available. Check the account order history and resolve
-the existing order first.
-
-Readiness also needs recent account data. The account stream does not promise a steady
-update rate, so a quiet account can become unavailable even while market quotes continue.
-The footer shows the current blocking reason beside a retained fill, rejection or recovery
-message. The outcome names its original market after a market switch. A pending order is
-never resent to improve its price or work around a slow reply.
-
-After installing a new build, restart any already running `desk` process. It keeps the
-previous program until restarted.
+Restart an already running Desk after installing a new build. It continues using
+its previous loaded program until restarted.

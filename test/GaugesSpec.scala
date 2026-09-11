@@ -70,11 +70,7 @@ class GaugesSpec extends munit.FunSuite:
     val gapped = main.filterNot(_.t == 250 * 60_000L)
     assertEquals(gapped.size, 299)
     assertEqualsDouble(Gauges.correlation(gapped, ref, 15).get, whole(gapped, ref, 15).get, 1e-12)
-    assertEqualsDouble(
-      Gauges.correlation(main, ref.filterNot(_.t == 290 * 60_000L), 15).get,
-      whole(main, ref.filterNot(_.t == 290 * 60_000L), 15).get,
-      1e-12
-    )
+    assertEquals(Gauges.correlation(main, ref.filterNot(_.t == 290 * 60_000L), 15), None)
   }
 
   test("correlation reads n returns from n plus one closes") {

@@ -5,7 +5,7 @@ enum Side:
 
 final case class Level(px: String, sz: String, n: Int)
 final case class Book(bids: Vector[Level], asks: Vector[Level], time: Long)
-final case class Trade(time: Long, side: Side, px: String, sz: String):
+final case class Trade(time: Long, side: Side, px: String, sz: String, id: Option[Long] = None):
   val displaySize: Double = sz.toDouble
 final case class Candle(t: Long, o: Double, h: Double, l: Double, c: Double, v: Double)
 final case class Ctx(
@@ -30,6 +30,13 @@ enum Health:
 enum Command:
   case Quit, StartMarketPrompt, PromptBackspace, PromptCancel, PromptSubmit
   case PromptChar(c: Char)
+  case PromptText(text: String)
+  case Pointer(x: Int, y: Int, button: Int)
+  case PointerPress(x: Int, y: Int, button: Int)
+  case Ask
+  case Mode(name: String)
+  case Feedback(accepted: Boolean)
+  case ScrollMessages(lines: Int)
   case ZoomIn, ZoomOut, ScrubBack, ScrubForward
   case PlaceOrder(intent: OrderIntent)
   case SelectTarget(side: Side)
@@ -41,7 +48,12 @@ enum Event:
   case BboUpdate(coin: String, bid: Level, ask: Level, time: Long)
   case Trades(coin: String, trades: Vector[Trade])
   case CandleUpdate(coin: String, interval: String, candle: Candle)
-  case CandleHistory(coin: String, interval: String, candles: Vector[Candle])
+  case CandleHistory(
+      coin: String,
+      interval: String,
+      candles: Vector[Candle],
+      requestedAt: Long = 0L
+  )
   case CandleHistoryFailed
   case CtxUpdate(coin: String, ctx: Ctx)
   case Pong
@@ -75,7 +87,9 @@ final case class Snapshot(
     refs: Map[String, Ref] = Map.empty,
     chartMode: ChartMode = ChartMode.Line,
     lineZoom: Int = 0,
-    referenceCoins: Vector[String] = State.refCoins
+    referenceCoins: Vector[String] = State.refCoins,
+    candleReceipts: Map[(String, String), Map[Long, Long]] = Map.empty,
+    workspace: Boolean = false
 )
 
 object Snapshot:
@@ -163,15 +177,21 @@ object State:
   private def setHistory(
       map: Map[String, Vector[Candle]],
       interval: String,
-      cs: Vector[Candle]
+      cs: Vector[Candle],
+      receipts: Map[Long, Long],
+      requestedAt: Long
   ): Map[String, Vector[Candle]] =
-    map.updated(interval, cs.sortBy(_.t).takeRight(seriesCap))
+    val previous = map.getOrElse(interval, Vector.empty)
+    val protectedValues = previous.filter(c => receipts.get(c.t).exists(_ >= requestedAt))
+    val merged = (previous ++ cs ++ protectedValues).map(c => c.t -> c).toMap
+    map.updated(interval, merged.values.toVector.sortBy(_.t).takeRight(seriesCap))
 
   private def sampleRef(r: Ref, mid: Double, sec: Long): Ref =
     r.copy(samples = keep(r.samples, sec, samplesMs) :+ (sec, mid))
 
   private def step(s: Snapshot): Long =
-    Layout.plotColumns(s.cols, s.chartMode) / 4L * zooms(s.zoom)
+    val width = if s.workspace then Layout.workspaceMarketWidth(s.cols) else s.cols
+    (Layout.plotColumns(width, s.chartMode) / 4L).max(1L) * zooms(s.zoom)
 
   def reduce(s: Snapshot, e: Event, now: Long): Snapshot = e match
     case Event.BookUpdate(coin, book, fromSocket) =>
@@ -199,11 +219,19 @@ object State:
       val fresh = s.copy(feed = Health.Live(now))
       if coin != s.coin then fresh
       else
-        fresh.copy(tape =
-          (ts.sortBy(-_.time) ++ s.tape).filter(_.time >= now - tapeMs).take(tapeCap)
-        )
+        val seen = scala.collection.mutable.HashSet.empty[(Long, Long)]
+        val tape = (s.tape ++ ts)
+          .filter(_.time >= now - tapeMs)
+          .filter(t => t.id.forall(id => seen.add((t.time, id))))
+          .sortBy(-_.time)
+          .take(tapeCap)
+        fresh.copy(tape = tape)
     case Event.CandleUpdate(coin, interval, c) =>
-      val fresh = s.copy(feed = Health.Live(now))
+      val key = (coin, interval)
+      val updated = s.candleReceipts.getOrElse(key, Map.empty) + (c.t -> now)
+      val times = if updated.size <= seriesCap then updated else updated - updated.keys.min
+      val fresh =
+        s.copy(feed = Health.Live(now), candleReceipts = s.candleReceipts.updated(key, times))
       if coin == s.coin then fresh.copy(candles = addCandle(s.candles, interval, c))
       else
         s.refs
@@ -213,14 +241,19 @@ object State:
               s.refs.updated(coin, r.copy(candles = addCandle(r.candles, interval, c)))
             )
           )
-    case Event.CandleHistory(coin, interval, cs) =>
-      if coin == s.coin then s.copy(candles = setHistory(s.candles, interval, cs))
+    case Event.CandleHistory(coin, interval, cs, requestedAt) =>
+      val receipts = s.candleReceipts.getOrElse((coin, interval), Map.empty)
+      if coin == s.coin then
+        s.copy(candles = setHistory(s.candles, interval, cs, receipts, requestedAt))
       else
         s.refs
           .get(coin)
           .fold(s)(r =>
             s.copy(refs =
-              s.refs.updated(coin, r.copy(candles = setHistory(r.candles, interval, cs)))
+              s.refs.updated(
+                coin,
+                r.copy(candles = setHistory(r.candles, interval, cs, receipts, requestedAt))
+              )
             )
           )
     case Event.CandleHistoryFailed => s.copy(bad = s.bad + 1)
@@ -236,7 +269,9 @@ object State:
 
   private def key(s: Snapshot, cmd: Command, now: Long): Snapshot = cmd match
     case Command.PlaceOrder(_) | Command.SelectTarget(_) | Command.SubmitTarget |
-        Command.CancelTarget =>
+        Command.CancelTarget | Command.Pointer(_, _, _) | Command.PointerPress(_, _, _) |
+        Command.Ask | Command.Mode(_) | Command.Feedback(_) | Command.ScrollMessages(_) |
+        Command.PromptText(_) =>
       s
     case Command.Quit              => s.copy(quit = true)
     case Command.StartMarketPrompt => s.copy(prompt = Some(""))

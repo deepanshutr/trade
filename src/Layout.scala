@@ -13,6 +13,7 @@ object Layout:
   val gaugeRows = 6
   val footerRows = 4
   val candleW = 4
+  def workspaceMarketWidth(cols: Int): Int = (cols * 3 / 5).min(cols - 47)
   def cells(cols: Int): Int = cols - leftW - scaleW
   def dotCols(cols: Int): Int = cells(cols) * 2
   def plotColumns(cols: Int, mode: ChartMode): Int = mode match

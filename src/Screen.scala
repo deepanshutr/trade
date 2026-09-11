@@ -70,13 +70,20 @@ object Screen:
       now: Long,
       zone: java.time.ZoneId,
       style: Style,
-      footer: Vector[String] = Vector.empty
+      footer: Vector[String] = Vector.empty,
+      marketOnly: Boolean = false,
+      reservedRows: Int = Layout.gaugeRows + Layout.footerRows
   ): Vector[String] =
-    if cols < Layout.minCols || rows < Layout.minRows then
-      Vector(s"need ${Layout.minCols}x${Layout.minRows}, have ${cols}x$rows")
+    if cols < (if marketOnly then Layout.leftW + Layout.scaleW + 4
+               else Layout.minCols) || rows < Layout.minRows
+    then Vector(s"need ${Layout.minCols}x${Layout.minRows}, have ${cols}x$rows")
     else
       val references = s.referenceCoins.distinct.filterNot(_ == s.coin)
-      val priceRows = Layout.priceRows(rows, references.size)
+      val priceRows = Layout.priceRows(
+        rows,
+        references.size
+      ) + Layout.gaugeRows + Layout.footerRows - reservedRows
+      require(priceRows >= 3)
       val cells = Layout.cells(cols)
       val count = Layout.plotColumns(cols, s.chartMode)
       val columns = Chart.columns(s, count, now)
@@ -99,7 +106,9 @@ object Screen:
         val ink = ax.fold(Vector.fill(Layout.referenceRows)(" " * cells))(a =>
           Chart.plot(values, a, cells, s.chartMode)
         )
-        val labels = Gauges.correlationRows(s, coin)
+        val labels = if marketOnly then
+          Vector(Chart.fit(coin, Layout.leftW)).padTo(Layout.referenceRows, " " * Layout.leftW)
+        else Gauges.correlationRows(s, coin)
         val prices = Chart.scaleRows(ax, Layout.referenceRows, None, None)
         (0 until Layout.referenceRows).map(i => labels(i) + ink(i) + prices(i))
       }
@@ -114,5 +123,8 @@ object Screen:
         .take(Layout.footerRows)
         .padTo(Layout.footerRows, "")
         .map(Chart.fit(_, cols))
-      (stats(s, now, cols) +: priceLines) ++ Vector(volumeLine) ++ referenceLines ++
-        Vector(axisLine) ++ Gauges.rows(s, now, cols, style) ++ controls
+      val market =
+        (stats(s, now, cols) +: priceLines) ++ Vector(volumeLine) ++ referenceLines ++ Vector(
+          axisLine
+        )
+      if marketOnly then market else market ++ Gauges.rows(s, now, cols, style) ++ controls

@@ -46,14 +46,24 @@ object Gauges:
       val syy = ys.take(n).map(y => (y - my) * (y - my)).sum
       if sxx <= 0 || syy <= 0 then None else Some(sxy / math.sqrt(sxx * syy))
 
-  def correlation(main: Vector[Candle], ref: Vector[Candle], n: Int): Option[Double] =
+  def correlation(
+      main: Vector[Candle],
+      ref: Vector[Candle],
+      n: Int,
+      step: Long = 60000L
+  ): Option[Double] =
     val tail = 2 * (n + 1)
     val a = main.takeRight(tail).map(c => c.t -> c.c).toMap
     val b = ref.takeRight(tail).map(c => c.t -> c.c).toMap
     val ts = (a.keySet & b.keySet).toVector.sorted.takeRight(n + 1)
-    val ra = ts.zip(ts.drop(1)).map((t1, t2) => math.log(a(t2) / a(t1)))
-    val rb = ts.zip(ts.drop(1)).map((t1, t2) => math.log(b(t2) / b(t1)))
-    pearson(ra, rb)
+    val pairs = ts.zip(ts.drop(1))
+    if n < 3 || ts.size != n + 1 || !pairs.forall((t1, t2) => t2 - t1 == step) ||
+      !ts.forall(t => a(t) > 0 && a(t).isFinite && b(t) > 0 && b(t).isFinite)
+    then None
+    else
+      val ra = pairs.map((t1, t2) => math.log(a(t2) / a(t1)))
+      val rb = pairs.map((t1, t2) => math.log(b(t2) / b(t1)))
+      pearson(ra, rb)
 
   def lens(s: Snapshot, coin: String, interval: String, n: Int): Option[Double] =
     if coin == s.coin then None
@@ -62,7 +72,7 @@ object Gauges:
         r <- s.refs.get(coin)
         m <- s.candles.get(interval)
         c <- r.candles.get(interval)
-        v <- correlation(m, c, n)
+        v <- correlation(m, c, n, State.intervalMs(interval))
       yield v
 
   def track(v: Option[Double], h: Int, style: String): String =

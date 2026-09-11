@@ -169,6 +169,17 @@ class PlaybackSpec(unittest.TestCase):
             playback.validate_result({**good, "queue": {"samples": []}}, "send")
 
 
+    def test_shutdown_can_interrupt_held_work_only_after_quit(self):
+        events = ("key Quit", "key PromptSubmit", "key ZoomOut", "quote ETH")
+        result = {"forbidden": [], "metadata_calls": 1, "held_work": True,
+                  "hold_finished": True, "hold_finished_ns": "11", "hold_released": False,
+                  "queue": {"samples": [{"event": event, "age_ns": "1", "entered_ns": "10",
+                      "method": "offer" if event.startswith("quote ") else "put"} for event in events]}}
+        playback.validate_result(result, "send")
+        for ended in ("0", "9"):
+            with self.assertRaises(AssertionError):
+                playback.validate_result({**result, "hold_finished_ns": ended}, "send")
+
     @staticmethod
     def displays():
         # Header and footer rows extracted from the retained original and contextual frames.

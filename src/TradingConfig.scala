@@ -13,7 +13,9 @@ final case class TradingConfig(
     keyService: String = "desk",
     references: Vector[String] = State.refCoins,
     quoteAgeMs: Long = 1000L,
-    positionAgeMs: Long = 2000L
+    positionAgeMs: Long = 2000L,
+    paperBalance: BigDecimal = BigDecimal("10000"),
+    paperFee: BigDecimal = BigDecimal("0.0005")
 ):
   def configured: Boolean = owner.nonEmpty && agent.nonEmpty
   def baseUrl: String =
@@ -33,7 +35,9 @@ object TradingConfig:
     "keyService",
     "references",
     "quoteAgeMs",
-    "positionAgeMs"
+    "positionAgeMs",
+    "paperBalance",
+    "paperFee"
   )
   private val forbidden = Set(
     PosixFilePermission.GROUP_READ,
@@ -93,6 +97,10 @@ object TradingConfig:
         )
         val service = string("keyService", "desk")
         require(service.matches("[A-Za-z0-9._-]{1,80}"), "invalid key service")
+        val balance = decimal("paperBalance", BigDecimal("10000"))
+        val fee = decimal("paperFee", BigDecimal("0.0005"))
+        require(balance > 0 && balance <= BigDecimal("1000000000"), "invalid paper balance")
+        require(fee >= 0 && fee <= BigDecimal("0.01"), "invalid paper fee")
         TradingConfig(
           sizes,
           network,
@@ -101,6 +109,8 @@ object TradingConfig:
           service,
           refs,
           millis("quoteAgeMs", 1000L),
-          millis("positionAgeMs", 2000L)
+          millis("positionAgeMs", 2000L),
+          balance,
+          fee
         )
       }.toEither.left.map(_ => "invalid or unreadable trading settings")

@@ -18,6 +18,7 @@ class TradingWorkerSpec extends munit.FunSuite:
       afterReplace: () => Unit = () => (),
       beforeOrderSign: () => Unit = () => (),
       initialLeverage: Int = 5,
+      marketMaximum: Int = 5,
       loseLeverage: Boolean = false,
       marginMode: String = "cross",
       warmSigning: () => Unit = () => OrderSigning.warm(),
@@ -83,7 +84,7 @@ class TradingWorkerSpec extends munit.FunSuite:
               Some(
                 ujson.Obj(
                   "universe" -> ujson.Arr(
-                    ujson.Obj("name" -> "XMR", "szDecimals" -> 3, "maxLeverage" -> 5),
+                    ujson.Obj("name" -> "XMR", "szDecimals" -> 3, "maxLeverage" -> marketMaximum),
                     ujson.Obj("name" -> "BTC", "szDecimals" -> 5, "maxLeverage" -> 40)
                   )
                 )
@@ -197,6 +198,16 @@ class TradingWorkerSpec extends munit.FunSuite:
     if autoStart then worker.start()
     fresh(worker)
     def ready(): Unit = waitFor("worker never became ready")(worker.view.ready)
+    def review(intent: OrderIntent = buy, lifetime: Long = 1000L): OrderReview =
+      val current = worker.view
+      OrderReview(
+        intent,
+        worker.preview(intent).toOption.get,
+        clock.get(),
+        clock.get() + lifetime,
+        current.leverage,
+        current.marginMode
+      )
     def close(): Unit =
       release.countDown()
       accountRelease.countDown()
@@ -429,18 +440,6 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("five times preparation keeps the confirmed margin mode") {
-    val f = new Fixture(initialLeverage = 3, marginMode = "isolated")
-    try
-      f.ready()
-      val action = f.lastPost.get()("action")
-      assertEquals(action("type").str, "updateLeverage")
-      assertEquals(action("leverage").num, 5.0)
-      assertEquals(action("isCross").bool, false)
-      assertEquals(f.posts.get(), 1)
-    finally f.close()
-  }
-
   test("changed leverage after capture cancels the order before sending") {
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)
@@ -459,7 +458,7 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.sendActive()
       release.countDown()
       waitFor("changed leverage did not cancel the captured press")(
-        f.worker.view.message.contains("canceled before sending")
+        f.orderPosts.get() != 0 || f.worker.view.message.contains("canceled before sending")
       )
       assertEquals(f.orderPosts.get(), 0)
     finally
@@ -494,43 +493,6 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  private def checkLeverageCanceled(change: Fixture => Unit): Unit =
-    val entered = new CountDownLatch(1)
-    val release = new CountDownLatch(1)
-    val held = new java.util.concurrent.atomic.AtomicBoolean(false)
-    val f = new Fixture(
-      initialLeverage = 3,
-      beforeReplace = () =>
-        if held.compareAndSet(false, true) then
-          entered.countDown()
-          release.await()
-    )
-    try
-      assert(entered.await(3, TimeUnit.SECONDS))
-      f.publishActive = false
-      change(f)
-      release.countDown()
-      waitFor("held leverage preparation did not finish")(!f.worker.view.pending)
-      assertEquals(f.posts.get(), 0)
-    finally
-      release.countDown()
-      f.close()
-
-  test("held leverage preparation cannot post for the previous market") {
-    checkLeverageCanceled(_.worker.select("BTC"))
-  }
-
-  test("held leverage preparation cannot post after the active mode changes") {
-    checkLeverageCanceled { f =>
-      f.activeMode = "isolated"
-      f.sendActive()
-    }
-  }
-
-  test("held leverage preparation cannot post using expired active data") {
-    checkLeverageCanceled(_.clock.addAndGet(2001))
-  }
-
   test("recovery cannot complete a current submission twice") {
     val signingEntered = new CountDownLatch(1)
     val signingRelease = new CountDownLatch(1)
@@ -560,45 +522,6 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally
       signingRelease.countDown()
       f.close()
-  }
-
-  test("known unsent leverage preparation can resume when fresh data returns") {
-    val entered = new CountDownLatch(1)
-    val release = new CountDownLatch(1)
-    val held = new java.util.concurrent.atomic.AtomicBoolean(false)
-    val f = new Fixture(
-      initialLeverage = 3,
-      beforeReplace = () =>
-        if held.compareAndSet(false, true) then
-          entered.countDown()
-          release.await()
-    )
-    try
-      assert(entered.await(3, TimeUnit.SECONDS))
-      f.clock.addAndGet(2001)
-      release.countDown()
-      waitFor("stale leverage preparation did not finish")(!f.worker.view.pending)
-      assertEquals(f.posts.get(), 0)
-      f.fresh(f.worker, time = 3001)
-      f.sendActive()
-      f.ready()
-      assertEquals(f.posts.get(), 1)
-      assertEquals(f.lastPost.get()("action")("leverage").num, 5.0)
-    finally
-      release.countDown()
-      f.close()
-  }
-
-  test("an uncertain leverage post is never repeated by later account reads") {
-    val f = new Fixture(initialLeverage = 3, loseLeverage = true)
-    try
-      assert(f.entered.await(3, TimeUnit.SECONDS))
-      waitFor("the next account cycle did not run")(f.roleReads.get() >= 2)
-      Thread.sleep(1200)
-      assertEquals(f.posts.get(), 1)
-      assert(!f.worker.view.ready)
-      assertEquals(f.leverage, 3)
-    finally f.close()
   }
 
   test("held signing preparation leaves startup and view responsive before readiness") {
@@ -972,4 +895,291 @@ class TradingWorkerSpec extends munit.FunSuite:
       assert(!text.contains("filled 1 at 100"), text)
       assertEquals(f.orderPosts.get(), 1)
     finally f.close()
+  }
+
+  test("startup observes leverage and margin without an account mutation or nonce write") {
+    val writes = new AtomicInteger()
+    val f = new Fixture(
+      initialLeverage = 3,
+      marginMode = "isolated",
+      beforeReplace = () => { writes.incrementAndGet(); () }
+    )
+    try
+      f.ready()
+      Thread.sleep(1200)
+      assertEquals(f.posts.get(), 0)
+      assertEquals(writes.get(), 0)
+      assertEquals(f.leverage, 3)
+      assertEquals(f.worker.view.leverage, Some(3))
+      assertEquals(f.worker.view.marginMode, Some("isolated"))
+    finally f.close()
+  }
+
+  test("positive observed leverage below five is valid within the market maximum") {
+    val f = new Fixture(initialLeverage = 1, marketMaximum = 2)
+    try
+      f.ready()
+      assertEquals(f.worker.view.leverage, Some(1))
+      assertEquals(f.posts.get(), 0)
+      assert(f.worker.preview(buy).isRight)
+    finally f.close()
+  }
+
+  test("invalid leverage never becomes ready and never triggers a corrective post") {
+    Vector(0, 6).foreach { leverage =>
+      val f = new Fixture(initialLeverage = leverage, loseLeverage = true)
+      try
+        waitFor("account was not observed")(f.worker.view.position.nonEmpty)
+        Thread.sleep(100)
+        assert(!f.worker.view.ready)
+        assertEquals(f.worker.view.leverage, None)
+        assertEquals(f.posts.get(), 0)
+      finally f.close()
+    }
+  }
+
+  test("an unchanged review submits exactly its reviewed signed order fields") {
+    val f = new Fixture()
+    try
+      f.ready()
+      val review = f.review()
+      assert(f.worker.submitReviewed(review))
+      assert(f.entered.await(3, TimeUnit.SECONDS))
+      val action = f.lastPost.get()("action")
+      val order = action("orders")(0)
+      assertEquals(action("type").str, "order")
+      assertEquals(order("a").num.toInt, review.plan.asset)
+      assertEquals(order("b").bool, review.plan.side == Side.Buy)
+      assertEquals(order("s").str, Trading.format(review.plan.quantity))
+      assertEquals(order("p").str, Trading.format(review.plan.limit))
+      assertEquals(order("t")("limit")("tif").str, "Ioc")
+      assertEquals(order("r").bool, false)
+      assertEquals(f.worker.view.lastPlan, Some(review.plan))
+      assertEquals(f.orderPosts.get(), 1)
+    finally f.close()
+  }
+
+  test("review equality covers every plan field and the intent") {
+    val f = new Fixture()
+    try
+      f.ready()
+      val review = f.review()
+      val p = review.plan
+      val changes = Vector(
+        p.copy(coin = "BTC"),
+        p.copy(asset = p.asset + 1),
+        p.copy(side = Side.Sell),
+        p.copy(kind = OrderKind.Best),
+        p.copy(quantity = p.quantity + 1),
+        p.copy(limit = p.limit + 1),
+        p.copy(reference = p.reference + 1),
+        p.copy(estimatedQuantity = p.estimatedQuantity + 1),
+        p.copy(estimatedValue = p.estimatedValue + 1),
+        p.copy(average = None),
+        p.copy(positionAfter = p.positionAfter + 1)
+      )
+      changes.foreach { changed =>
+        assert(!f.worker.submitReviewed(review.copy(plan = changed)), changed.toString)
+      }
+      assert(!f.worker.submitReviewed(review.copy(intent = buy.copy(side = Side.Sell))))
+      assertEquals(f.posts.get(), 0)
+      assert(f.worker.submitReviewed(review))
+    finally f.close()
+  }
+
+  test("expired and future-dated reviews are refused before any reservation") {
+    val writes = new AtomicInteger()
+    val f = new Fixture(beforeReplace = () => { writes.incrementAndGet(); () })
+    try
+      f.ready()
+      val review = f.review()
+      assert(!f.worker.submitReviewed(review.copy(expiresAt = f.clock.get())))
+      assert(!f.worker.submitReviewed(review.copy(createdAt = f.clock.get() + 1)))
+      assert(!f.worker.submitReviewed(review.copy(expiresAt = review.createdAt - 1)))
+      assertEquals(writes.get(), 0)
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
+
+  test("a fresh changed quote requires a new review") {
+    val f = new Fixture()
+    try
+      f.ready()
+      val review = f.review()
+      f.worker.observe(
+        Event.BboUpdate("XMR", Level("100", "20", 1), Level("100.01", "20", 1), 1001)
+      )
+      assert(f.worker.view.ready)
+      assert(!f.worker.submitReviewed(review))
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
+
+  test("fresh position changes require a new review even when signed size and limit stay equal") {
+    val f = new Fixture()
+    try
+      f.ready()
+      val review = f.review()
+      f.position = "7"
+      waitFor("new position was not observed")(f.worker.view.position.contains(BigDecimal(7)))
+      assert(f.worker.view.ready)
+      assertEquals(f.worker.preview(buy).toOption.get.quantity, review.plan.quantity)
+      assert(!f.worker.submitReviewed(review))
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
+
+  test("review captures observed leverage and margin mode including missing snapshots") {
+    val f = new Fixture()
+    try
+      f.ready()
+      val review = f.review()
+      assert(!f.worker.submitReviewed(review.copy(leverage = None)))
+      assert(!f.worker.submitReviewed(review.copy(marginMode = None)))
+      f.leverage = 3
+      f.sendActive()
+      assert(f.worker.view.ready)
+      assert(!f.worker.submitReviewed(review))
+      f.leverage = 5
+      f.activeMode = "isolated"
+      f.sendActive()
+      assert(f.worker.view.ready)
+      assert(!f.worker.submitReviewed(review))
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
+
+  private def heldReviewed(change: Fixture => Unit): Unit =
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val f = new Fixture(beforeOrderSign = () => { entered.countDown(); release.await() })
+    try
+      f.ready()
+      assert(f.worker.submitReviewed(f.review(lifetime = 500L)))
+      assert(entered.await(3, TimeUnit.SECONDS))
+      assertEquals(f.posts.get(), 0)
+      change(f)
+      release.countDown()
+      waitFor("reviewed order was not canceled")(
+        f.orderPosts.get() != 0 || f.worker.view.message.contains("canceled before sending")
+      )
+      assertEquals(f.posts.get(), 0)
+    finally
+      release.countDown()
+      f.close()
+
+  test("review expiry is rechecked after durable reservation and signing delay") {
+    heldReviewed(_.clock.addAndGet(500L))
+  }
+
+  test("margin mode is rechecked after durable reservation and signing delay") {
+    heldReviewed { f => f.activeMode = "isolated"; f.sendActive() }
+  }
+
+  test("a supplied review cannot extend the controller's thirty second lifetime") {
+    val writes = new AtomicInteger()
+    val f = new Fixture(beforeReplace = () => { writes.incrementAndGet(); () })
+    try
+      f.ready()
+      assert(!f.worker.submitReviewed(f.review(lifetime = 30001L)))
+      assertEquals(writes.get(), 0)
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
+
+  test("extreme timestamp subtraction cannot turn an oversized review into a valid one") {
+    val f = new Fixture()
+    try
+      f.ready()
+      val oversized = f.review().copy(createdAt = Long.MinValue, expiresAt = Long.MaxValue)
+      assert(!f.worker.submitReviewed(oversized))
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
+
+  test("a review at the thirty second boundary remains valid") {
+    val f = new Fixture()
+    try
+      f.ready()
+      assert(f.worker.submitReviewed(f.review(lifetime = 30000L)))
+      assert(f.entered.await(3, TimeUnit.SECONDS))
+      assertEquals(f.orderPosts.get(), 1)
+    finally f.close()
+  }
+
+  private def heldReview(change: Fixture => Unit, cancel: Boolean): Unit =
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val f = new Fixture(beforeOrderSign = () => { entered.countDown(); release.await() })
+    try
+      f.ready()
+      val review = f.review(lifetime = 30000L)
+      assert(f.worker.submitReviewed(review))
+      assert(entered.await(3, TimeUnit.SECONDS))
+      assertEquals(f.posts.get(), 0)
+      f.clock.addAndGet(250L)
+      change(f)
+      release.countDown()
+      waitFor("held order neither posted nor canceled") {
+        f.orderPosts.get() != 0 || f.worker.view.message.contains("canceled before sending")
+      }
+      assertEquals(f.orderPosts.get(), if cancel then 0 else 1)
+      if !cancel then
+        val order = f.lastPost.get()("action")("orders")(0)
+        assertEquals(order("s").str, Trading.format(review.plan.quantity))
+        assertEquals(order("p").str, Trading.format(review.plan.limit))
+    finally
+      release.countDown()
+      f.close()
+
+  test("a fresh position change after acceptance cancels before exchange post") {
+    heldReview(
+      f => {
+        val before = f.worker.preview(buy).toOption.get
+        f.position = "7"
+        waitFor("new position was not observed during signing") {
+          f.worker.view.position.contains(BigDecimal(7))
+        }
+        val after = f.worker.preview(buy).toOption.get
+        assertEquals(after.quantity, before.quantity)
+        assertEquals(after.limit, before.limit)
+        assert(after.positionAfter != before.positionAfter)
+      },
+      cancel = true
+    )
+  }
+
+  test("a fresh quote change after acceptance cancels before exchange post") {
+    heldReview(
+      f => {
+        f.worker.observe(
+          Event.BboUpdate("XMR", Level("100", "20", 1), Level("100.01", "20", 1), 1001L)
+        )
+      },
+      cancel = true
+    )
+  }
+
+  test("unchanged reviewed inputs survive an asynchronous signing delay") {
+    heldReview(_ => (), cancel = false)
+  }
+
+  test("legacy capture also cancels when margin mode changes during signing") {
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val f = new Fixture(beforeOrderSign = () => { entered.countDown(); release.await() })
+    try
+      f.ready()
+      assert(f.worker.submit(buy, "XMR"))
+      assert(entered.await(3, TimeUnit.SECONDS))
+      f.activeMode = "isolated"
+      f.sendActive()
+      release.countDown()
+      waitFor("held legacy order neither posted nor canceled") {
+        f.orderPosts.get() != 0 || f.worker.view.message.contains("canceled before sending")
+      }
+      assertEquals(f.orderPosts.get(), 0)
+    finally
+      release.countDown()
+      f.close()
   }

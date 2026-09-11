@@ -136,7 +136,7 @@ class SocketWaitSpec extends munit.FunSuite:
         )
         assertEquals(
           queue.asScala.last,
-          if operation == "switch" then Event.CandleHistory("ETH", "1d", Vector.empty)
+          if operation == "switch" then Event.CandleHistory("ETH", "1d", Vector.empty, 1_000_000L)
           else Event.SocketDown
         )
       finally

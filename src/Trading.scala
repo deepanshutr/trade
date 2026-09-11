@@ -209,8 +209,8 @@ object Trading:
     for
       _ <- check(coin.nonEmpty, "Select a market")
       _ <- check(
-        rules.asset >= 0 && validDecimals(rules) && rules.maxLeverage >= 5,
-        "Market rules do not support five times leverage"
+        rules.asset >= 0 && validDecimals(rules) && rules.maxLeverage >= 1,
+        "Market rules contain invalid asset, precision or leverage limits"
       )
       _ <- check(
         sizes.small > zero && sizes.big >= sizes.small && sizes.target > zero,

@@ -59,13 +59,23 @@ def market_matches(frame, contract, coin, midpoint):
         "original": rf"{coin} {midpoint}(?: mark \S+ orc \S+ 24h \S+ fund \S+ OI \S+ vol \S+)? live (\d+\.\d)s",
         "contextual": rf"connection active (\d+\.\d)s {coin} mid {midpoint}(?: (?:mark|oracle|24h|fund|open interest|volume) \S+)*",
     }
-    matched = re.fullmatch(patterns[contract], " ".join(frame["lines"][0].split()))
+    header = frame["lines"][0]
+    if contract == "workspace":
+        header = header.split("|", 1)[0]
+        contract = "contextual"
+    matched = re.fullmatch(patterns[contract], " ".join(header.split()))
     return matched is not None and float(matched[1]) <= 5
 
 
 def target_matches(frame, contract, coin, side, limit, midpoint, enter="disabled"):
     if len(frame["lines"]) < 5 or not market_matches(frame, contract, coin, midpoint):
         return False
+    if contract == "workspace":
+        if len(frame["lines"]) < 30:
+            return False
+        cols = len(frame["lines"][0])
+        divider = min(cols * 3 // 5, cols - 47)
+        return frame["lines"][8][divider:] == "|" + f"Target {side} {limit} Up/Down".ljust(cols - divider - 1)
     rows = [row.rstrip() for row in frame["lines"][-4:]]
     if contract == "original":
         selected = rf"Target 9 buy 0 sell \| {re.escape(side)} \${re.escape(limit)}"
@@ -77,6 +87,12 @@ def target_matches(frame, contract, coin, side, limit, midpoint, enter="disabled
 def idle_matches(frame, contract, coin, midpoint):
     if len(frame["lines"]) < 5 or not market_matches(frame, contract, coin, midpoint):
         return False
+    if contract == "workspace":
+        if len(frame["lines"]) < 30:
+            return False
+        cols = len(frame["lines"][0])
+        divider = min(cols * 3 // 5, cols - 47)
+        return frame["lines"][8][divider:] == "|" + "Trade buttons open a review".ljust(cols - divider - 1)
     controls = {
         "original": "Target 9 buy 0 sell | arrows set price enter sends escape cancels",
         "contextual": "Target 9 buy 0 sell | up/down zoom left/right history m market c chart q quit",
@@ -85,21 +101,22 @@ def idle_matches(frame, contract, coin, midpoint):
     return rows[0].startswith("Hard ") and rows[1].startswith("Best ") and rows[2] == controls[contract]
 
 
-def history_matches(before, after, shift, max_seconds=10):
+def history_matches(before, after, shift, max_seconds=10, clock_count=3):
     elapsed = after["captured_ns"] - before["captured_ns"]
     if elapsed < 0 or elapsed > max_seconds * 1_000_000_000:
         return False
-    allowance = (elapsed + 999_999_999) // 1_000_000_000 + 1
+    minimum_progress = elapsed // 1_000_000_000 - 1
+    maximum_progress = (elapsed + 999_999_999) // 1_000_000_000 + 1
     clocks = []
     for frame in (before, after):
         rows = [row for row in frame["lines"] if "c line 1s/col" in row]
         if len(rows) != 1:
             return False
-        values = re.findall(r"\b(\d{2}):(\d{2}):(\d{2})\b", rows[0])
-        if len(values) != 3:
+        values = re.findall(r"(?<![\d:])(\d{2}):(\d{2}):(\d{2})(?![\d:])", rows[0])
+        if len(values) != clock_count or not 1 <= clock_count <= 3:
             return False
         clocks.append([int(h) * 3600 + int(m) * 60 + int(s) for h, m, s in values])
-    return all(abs((new - old + 43200) % 86400 - 43200 - shift) <= allowance
+    return all(minimum_progress <= (new - old + 43200) % 86400 - 43200 - shift <= maximum_progress
                for old, new in zip(*clocks))
 
 
@@ -117,7 +134,10 @@ def validate_result(result, mode):
     assert all(int(s["age_ns"]) >= 0 for s in samples), "negative queue age"
     if mode in ("send", "history"):
         assert result["held_work"], "the selected work never entered its hold"
-        assert not result["hold_finished"], "work ended before application shutdown"
+        if result["hold_finished"]:
+            ended = int(result.get("hold_finished_ns", "0"))
+            quits = [int(s.get("entered_ns", "0")) for s in samples if s["event"] == "key Quit"]
+            assert ended > 0 and quits and all(0 < at <= ended for at in quits), "work ended before quit or lacks timing evidence"
         assert not result["hold_released"], "the driver released held work before quit"
         events = [s["event"] for s in samples]
         assert "key PromptSubmit" in events and "key ZoomOut" in events
@@ -297,11 +317,12 @@ class Playback:
             self.key("candles", b"c", contains("1m/candle"))
             self.key("line", b"c", contains("1s/col"))
             before = self.frames.complete[-1]
-            # At 100 columns and one second per dot, State.step is ((100 - 30 - 9) * 2) // 4.
-            step = 30
-            history = self.key("history back", ESC + b"[D", lambda f: history_matches(before, f, -step))
+            # Workspace has a 53-column market panel, leaving 28 one-second dots.
+            step = 7 if self.args.display_contract == "workspace" else 30
+            count = 1 if self.args.display_contract == "workspace" else 3
+            history = self.key("history back", ESC + b"[D", lambda f: history_matches(before, f, -step, clock_count=count))
             self.key("history forward", ESC + b"[C",
-                     lambda f: history_matches(history, f, step) and history_matches(before, f, 0, 20))
+                     lambda f: history_matches(history, f, step, clock_count=count) and history_matches(before, f, 0, 20, clock_count=count))
             self.key("select public Target", b"9", target("522.28"))
             self.key("move public Target", ESC + b"[A", target("522.29"))
             self.key("cancel Target with lone Escape", ESC,
@@ -398,18 +419,26 @@ def main():
     parser.add_argument("--fixtures", default="fixtures")
     parser.add_argument("--output", required=True)
     parser.add_argument("--mode", choices=("all", "normal", "send", "history", "queue"), default="all")
-    parser.add_argument("--display-contract", choices=("original", "contextual"), default="contextual")
+    parser.add_argument("--display-contract", choices=("original", "contextual", "workspace"), default="workspace")
     parser.add_argument("--repeats", type=int, default=1)
     args = parser.parse_args()
     assert args.repeats > 0
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=False)
-    main_source = Path("src/Main.scala").read_text()
-    schedule = {"Thread.sleep(100)": 100, "Thread.sleep(10)": 10,
-                "val escapeWaitNanos = 40_000_000L": 40,
-                "if time - sizeAt >= 1000 then": 1000}
-    for fragment in schedule:
-        assert main_source.count(fragment) == 1, "scheduling premise changed: " + fragment
+    if args.display_contract == "workspace":
+        anchors = [("src/WorkspaceApp.scala", "Thread.sleep(100L)", 100),
+                   ("src/WorkspaceApp.scala", "Thread.sleep(10L)", 10),
+                   ("src/Main.scala", "val escapeWaitNanos = 40_000_000L", 40),
+                   ("src/WorkspaceApp.scala", "if time - sizeAt >= 500L then", 500)]
+    else:
+        anchors = [("src/Main.scala", fragment, delay) for fragment, delay in
+                   [("Thread.sleep(100)", 100), ("Thread.sleep(10)", 10),
+                    ("val escapeWaitNanos = 40_000_000L", 40),
+                    ("if time - sizeAt >= 1000 then", 1000)]]
+    schedule = {}
+    for source, fragment, delay in anchors:
+        assert Path(source).read_text().count(fragment) == 1, "scheduling premise changed: " + fragment
+        schedule[source + ": " + fragment] = delay
     results = []
     modes = ("normal", "send", "history", "queue") if args.mode == "all" else (args.mode,)
     try:

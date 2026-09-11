@@ -68,6 +68,10 @@ class FeedSpec extends munit.FunSuite:
     val rest = restAnswering()
     val (feed, queue) = newFeed(c, rest)
     val t = startConnected(feed)
+    val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+    while queue.asScala.count(_.isInstanceOf[Event.CandleHistory]) < 18 && System
+        .nanoTime() < deadline
+    do Thread.sleep(10L)
     val sent = c.sockets.peek().sent.asScala.toVector
     assertEquals(sent, Feed.subscriptions("XMR"))
     assert(
@@ -157,7 +161,7 @@ class FeedSpec extends munit.FunSuite:
     feed.fetchHistory()
     assertEquals(rest.bodies.size, 19)
     val events = queue.asScala.toVector
-    assertEquals(events.count { case Event.CandleHistory(_, _, _) => true; case _ => false }, 18)
+    assertEquals(events.count { case Event.CandleHistory(_, _, _, _) => true; case _ => false }, 18)
     assertEquals(events.count(_ == Event.CandleHistoryFailed), 0)
   }
 
@@ -171,7 +175,7 @@ class FeedSpec extends munit.FunSuite:
     for c <- Vector("XMR", "BTC", "PAXG") do
       assertEquals(bodies.count(_.contains(s""""coin":"$c"""")), 6, c)
     assertEquals(bodies.head, Feed.historyBody("XMR", "1m", 10_000_000L))
-    val tags = queue.asScala.toVector.collect { case Event.CandleHistory(c, i, _) => (c, i) }
+    val tags = queue.asScala.toVector.collect { case Event.CandleHistory(c, i, _, _) => (c, i) }
     assertEquals(tags.size, 18)
     assertEquals(tags.distinct.size, 18)
     assertEquals(tags.map(_._1).distinct, Vector("XMR", "BTC", "PAXG"))
@@ -187,7 +191,7 @@ class FeedSpec extends munit.FunSuite:
     feed.fetchHistory()
     assertEquals(rest.bodies.asScala.count(_.contains("\"coin\":\"BTC\"")), 6)
     assertEquals(rest.bodies.asScala.size, 12)
-    val tags = queue.asScala.toVector.collect { case Event.CandleHistory(c, _, _) => c }
+    val tags = queue.asScala.toVector.collect { case Event.CandleHistory(c, _, _, _) => c }
     assertEquals(tags.distinct, Vector("BTC", "PAXG"))
   }
   test("polling the coarse books sends three requests and tags the resolution") {
@@ -319,7 +323,9 @@ class FeedSpec extends munit.FunSuite:
       val queue = new ConcurrentLinkedQueue[Event]()
       val feed = new Feed(new FakeConnector, rest, queue, () => 10_000_000L, main, refs)
       feed.fetchHistory()
-      val history = queue.asScala.toVector.collect { case Event.CandleHistory(c, i, _) => (c, i) }
+      val history = queue.asScala.toVector.collect { case Event.CandleHistory(c, i, _, _) =>
+        (c, i)
+      }
       assertEquals(history.toSet, markets.flatMap(c => State.intervals.map(c -> _)))
       assertEquals(history.size, count)
       assertEquals(rest.bodies.size, count)

@@ -139,12 +139,12 @@ class StateSpec extends munit.FunSuite:
     assertEquals(s3.candles.getOrElse("1m", Vector.empty).map(_.t), Vector(5L, 10L))
   }
   test(
-    "history replaces all candles and a failed history counts as bad without touching the clock"
+    "history merges candles and a failed history counts as bad without touching the clock"
   ) {
     def c(t: Long) = Candle(t, 1, 1, 1, 1, 1)
     val s1 = State.reduce(s0, Event.CandleUpdate("XMR", "1m", c(1)), t0)
     val s2 = State.reduce(s1, Event.CandleHistory("XMR", "1m", Vector(c(7), c(6))), t0 + 5)
-    assertEquals(s2.candles.getOrElse("1m", Vector.empty).map(_.t), Vector(6L, 7L))
+    assertEquals(s2.candles.getOrElse("1m", Vector.empty).map(_.t), Vector(1L, 6L, 7L))
     val s3 = State.reduce(s2, Event.CandleHistoryFailed, t0 + 9)
     assertEquals(s3.bad, 1)
     assertEquals(s3.feed, s1.feed)

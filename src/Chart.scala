@@ -397,11 +397,17 @@ object Chart:
     def clock(column: Long): String =
       fmt.format(Instant.ofEpochSecond((first + column) * z))
     val out = Array.fill(cells)(' ')
-    val spots = Vector(
-      (0, clock(0)),
-      (cells / 2 - clockWidth / 2, clock(count / 2)),
-      (cells - clockWidth, clock(count - 1))
-    )
+    val spots =
+      if count <= 0 || cells < clockWidth then Vector.empty
+      else if cells >= 3 * clockWidth + 2 then
+        Vector(
+          (0, clock(0)),
+          (cells / 2 - clockWidth / 2, clock(count / 2)),
+          (cells - clockWidth, clock(count - 1))
+        )
+      else if cells >= 2 * clockWidth + 1 then
+        Vector((0, clock(0)), (cells - clockWidth, clock(count - 1)))
+      else Vector((cells - clockWidth, clock(count - 1)))
     spots.foreach { (at, text) =>
       text.zipWithIndex.foreach { (ch, i) =>
         if at + i >= 0 && at + i < cells then out(at + i) = ch

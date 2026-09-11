@@ -9,30 +9,39 @@ object Main:
       coin: String,
       mono: Boolean,
       trade: Boolean = false,
-      config: Option[String] = None
+      config: Option[String] = None,
+      paper: Boolean = false,
+      record: Boolean = false,
+      analysis: Boolean = true,
+      stateDirectory: Option[String] = None
   )
-  val usage = "usage: desk [COIN] [--mono] [--trade] [--config PATH]"
+  val usage =
+    "usage: desk [COIN] [--mono] [--paper | --trade | --record] [--config PATH] [--state PATH] [--no-analysis]"
   val escapeWaitNanos = 40_000_000L
 
   def parseArgs(args: Seq[String]): Either[String, Args] =
-    def loop(
-        rest: List[String],
-        coin: Option[String],
-        mono: Boolean,
-        trade: Boolean,
-        config: Option[String]
-    ): Either[String, Args] = rest match
-      case Nil               => Right(Args(coin.getOrElse("XMR"), mono, trade, config))
-      case "--mono" :: tail  => loop(tail, coin, true, trade, config)
-      case "--trade" :: tail => loop(tail, coin, mono, true, config)
-      case "--config" :: path :: tail if !path.startsWith("--") && config.isEmpty =>
-        loop(tail, coin, mono, trade, Some(path))
-      case "--config" :: _                    => Left("give one settings path after --config")
-      case flag :: _ if flag.startsWith("--") => Left(s"unknown flag $flag")
-      case c :: tail if coin.isEmpty && c.matches("[A-Za-z0-9][A-Za-z0-9:._-]{0,39}") =>
-        loop(tail, Some(c), mono, trade, config)
-      case extra :: _ => Left(s"unexpected argument $extra")
-    loop(args.toList, None, false, false, None)
+    def loop(rest: List[String], chosen: Args, hasCoin: Boolean): Either[String, Args] =
+      rest match
+        case Nil =>
+          if Vector(chosen.trade, chosen.paper, chosen.record).count(identity) > 1 then
+            Left("choose one of paper, live or public recording")
+          else Right(chosen)
+        case "--mono" :: tail        => loop(tail, chosen.copy(mono = true), hasCoin)
+        case "--trade" :: tail       => loop(tail, chosen.copy(trade = true), hasCoin)
+        case "--paper" :: tail       => loop(tail, chosen.copy(paper = true), hasCoin)
+        case "--record" :: tail      => loop(tail, chosen.copy(record = true), hasCoin)
+        case "--no-analysis" :: tail => loop(tail, chosen.copy(analysis = false), hasCoin)
+        case "--config" :: path :: tail if !path.startsWith("--") && chosen.config.isEmpty =>
+          loop(tail, chosen.copy(config = Some(path)), hasCoin)
+        case "--state" :: path :: tail if !path.startsWith("--") && chosen.stateDirectory.isEmpty =>
+          loop(tail, chosen.copy(stateDirectory = Some(path)), hasCoin)
+        case "--config" :: _ => Left("give one settings path after --config")
+        case "--state" :: _  => Left("give one local state directory after --state")
+        case flag :: _ if flag.startsWith("--") => Left(s"unknown flag $flag")
+        case coin :: tail if !hasCoin && coin.matches("[A-Za-z0-9][A-Za-z0-9:._-]{0,39}") =>
+          loop(tail, chosen.copy(coin = coin), true)
+        case extra :: _ => Left(s"unexpected argument $extra")
+    loop(args.toList, Args("XMR", false), false)
 
   def style(args: Args, env: Map[String, String]): Style =
     if args.mono || env.contains("NO_COLOR") then Style.mono else Style.colour
@@ -206,144 +215,4 @@ object Main:
       createWorker: (TradingConfig, Boolean, String, Path) => TradingWorker = TradingWorker.create,
       queue: LinkedBlockingQueue[Event] = new LinkedBlockingQueue[Event]()
   ): Unit =
-    val home = Path.of(System.getProperty("user.home"))
-    val config = TradingConfig.load(configPath(args, home)) match
-      case Right(value)  => value
-      case Left(message) =>
-        System.err.println(message)
-        sys.exit(64)
-    val st = style(args, sys.env)
-    val now = () => System.currentTimeMillis()
-    val initial = Snapshot.initial(args.coin, now(), config.references)
-    val state = new AtomicReference(initial)
-    val shownCoin = new AtomicReference(Option.empty[String])
-    val pendingPrompts = new AtomicInteger(0)
-    val target = new AtomicReference(Option.empty[(Side, BigDecimal)])
-    val targetLock = new Object
-    val (connector, rest) = sources(config)
-    val worker =
-      createWorker(config, args.trade, args.coin, home.resolve(".local/state/desk"))
-    val feed = new Feed(connector, rest, queue, now, args.coin, config.references, worker.observe)
-    val zone = java.time.ZoneId.systemDefault()
-    val saved = scala.util.Try(Term.enterRaw()).getOrElse {
-      worker.close()
-      System.err.println("desk needs a terminal")
-      sys.exit(1)
-    }
-    val restored = new AtomicBoolean(false)
-    def restore(): Unit = if restored.compareAndSet(false, true) then
-      try worker.close()
-      finally Term.restore(saved)
-    Runtime.getRuntime.addShutdownHook(new Thread(() => restore()))
-    Thread.setDefaultUncaughtExceptionHandler { (_, error) =>
-      restore()
-      System.err.println(error)
-      sys.exit(1)
-    }
-    val actualSize = new AtomicReference(Term.size())
-    worker.start()
-    daemon("feed")(feed.runForever(ms => Thread.sleep(ms)))
-    daemon("heartbeat") {
-      while true do
-        Thread.sleep(50_000)
-        feed.heartbeat()
-    }
-    daemon("poll") {
-      while true do
-        feed.poll()
-        Thread.sleep(500)
-    }
-    daemon("coarse") {
-      while true do
-        feed.pollCoarse()
-        Thread.sleep(2000)
-    }
-    daemon("keys") {
-      var pending = Vector.empty[Int]
-      var promptOpen = false
-      var escapeAt = 0L
-      var quitting = false
-      def emit(command: Command): Unit = targetLock.synchronized {
-        val (handled, selected) = handleTrade(
-          command,
-          state.get(),
-          promptOpen,
-          actualSize.get(),
-          worker.view,
-          shownCoin.get(),
-          pendingPrompts.get(),
-          target.get(),
-          worker.submit
-        )
-        target.set(selected)
-        promptOpen = nextPromptOpen(promptOpen, command)
-        if command == Command.Quit then quitting = true
-        if !handled then queueInput(command, queue, pendingPrompts)
-      }
-      while !quitting && !state.get().quit do
-        if System.in.available() > 0 then
-          val byte = System.in.read()
-          if byte < 0 then emit(Command.Quit)
-          else
-            val (next, command) = Keys.step(pending, byte, promptOpen)
-            pending = next
-            if pending == Vector(27) then escapeAt = System.nanoTime()
-            command.foreach(emit)
-        else
-          if pending == Vector(27) && System.nanoTime() - escapeAt >= escapeWaitNanos then
-            val (next, command) = Keys.expire(pending, promptOpen)
-            pending = next
-            command.foreach(emit)
-          Thread.sleep(10)
-    }
-    val _ = startTradingFold(
-      queue,
-      state,
-      feed,
-      now,
-      pendingPrompts,
-      targetLock,
-      target,
-      worker.select
-    )
-    var last: Snapshot = null
-    var lastView: TradingView = null
-    var lastTarget = Option.empty[(Side, BigDecimal)]
-    var lastFrameAt = 0L
-    var size = actualSize.get()
-    if size != (0, 0) then queue.put(Event.Resize(size._1, size._2))
-    var sizeAt = now()
-    try
-      while !state.get().quit do
-        val time = now()
-        if time - sizeAt >= 1000 then
-          val polled = Term.size()
-          actualSize.set(polled)
-          if polled != (0, 0) then
-            sizeEvent(size, polled).foreach(queue.put)
-            size = polled
-          sizeAt = time
-        val snapshot = state.get()
-        val view = worker.view
-        val selected = target.get()
-        if (snapshot ne last) || view != lastView || selected != lastTarget || time - lastFrameAt >= 1000
-        then
-          val matching = view.coin == snapshot.coin
-          val shown = view.forMarket(snapshot.coin)
-          val preview: OrderIntent => Either[String, OrderPlan] =
-            if matching then worker.preview else _ => Left("changing market")
-          val footer = TradingScreen.rows(shown, selected, preview, config.sizes, size._1)
-          writeMarketFrame(
-            snapshot.coin,
-            size,
-            shownCoin,
-            () => Term.write(Screen.render(snapshot, size._1, size._2, time, zone, st, footer)),
-            complete = footer.size == Layout.footerRows && footer.forall(_.length <= size._1)
-          )
-          last = snapshot
-          lastView = view
-          lastTarget = selected
-          lastFrameAt = time
-        Thread.sleep(100)
-    finally restore()
-    sys.exit(0)
+    WorkspaceApp.run(args, sources, createWorker, queue)

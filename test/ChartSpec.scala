@@ -381,6 +381,13 @@ class ChartSpec extends munit.FunSuite:
     assertEquals(coarse.drop(56), "02:01")
   }
 
+  test("narrow axes keep complete separated timestamps") {
+    assertEquals(Chart.axisRow(0L, 1, 28, ZoneOffset.UTC), "      00:00:27")
+    assertEquals(Chart.axisRow(0L, 1, 36, ZoneOffset.UTC), "00:00:00  00:00:35")
+    assertEquals(Chart.axisRow(0L, 3600, 28, ZoneOffset.UTC), "   01-02 03:00")
+    assertEquals(Chart.axisRow(0L, 1, 10, ZoneOffset.UTC), "     ")
+  }
+
   test("the axis row picks its clock pattern by zoom") {
     assertEquals(Chart.axisRow(0L, 3600, 122, ZoneOffset.UTC).take(11), "01-01 00:00")
     assertEquals(Chart.axisRow(0L, 86400, 122, ZoneOffset.UTC).take(10), "1970-01-01")

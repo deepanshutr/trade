@@ -37,18 +37,40 @@ object Keys:
     if fields == 0 && following == 0 then Vector.empty
     else Vector(mouseReport, fields, following)
 
-  def step(pending: Vector[Int], byte: Int, promptOpen: Boolean): (Vector[Int], Option[Command]) =
+  def step(
+      pending: Vector[Int],
+      byte: Int,
+      promptOpen: Boolean,
+      mouseEnabled: Boolean = false,
+      textInput: Boolean = false
+  ): (Vector[Int], Option[Command]) =
     if byte == 3 then (Vector.empty, Some(Command.Quit))
     else if pending == Vector(afterEscape) then
       prefix(byte) match
         case Some(next) => (next, None)
-        case None       => step(Vector.empty, byte, promptOpen)
+        case None       => step(Vector.empty, byte, promptOpen, mouseEnabled, textInput)
     else if pending == Vector(escapeIntermediate) then
       (if byte >= 48 && byte <= 126 then Vector.empty else pending, None)
     else if pending.headOption.contains(mouseReport) then (consumeReport(pending, byte), None)
     else if pending.headOption.contains(paste) then
       val tail = pending.tail :+ byte
-      if tail.endsWith(pasteEnd) then (Vector.empty, None)
+      if textInput && promptOpen then
+        val ended = tail.endsWith(pasteEnd)
+        val retained = if ended then pasteEnd.size
+        else (0 until pasteEnd.size).filter(k => tail.endsWith(pasteEnd.take(k))).max
+        val text = tail
+          .dropRight(retained)
+          .flatMap { n =>
+            if n == 10 || n == 13 || n == 9 then Some(' ')
+            else if n >= 32 && n < 127 then Some(n.toChar)
+            else None
+          }
+          .mkString
+        (
+          if ended then Vector.empty else Vector(paste) ++ tail.takeRight(retained),
+          Option.when(text.nonEmpty)(Command.PromptText(text))
+        )
+      else if tail.endsWith(pasteEnd) then (Vector.empty, None)
       else (Vector(paste) ++ tail.takeRight(pasteEnd.size - 1), None)
     else if pending.headOption.exists(n => n == operatingString || n == controlString) then
       val state = pending.head
@@ -79,6 +101,16 @@ object Keys:
             else if next == Vector(27, 91, 77) then (Vector(mouseReport, 3, 0), None)
             else if next == Vector(27, 91, 116) then (Vector(mouseReport, 2, 0), None)
             else if next == Vector(27, 91, 84) then (Vector(mouseReport, 6, 0), None)
+            else if mouseEnabled && next.startsWith(Vector(27, 91, 60)) then
+              val report = "<(0|64|65);([1-9][0-9]{0,3});([1-9][0-9]{0,3})([Mm])".r
+              val command = next.drop(2).map(_.toChar).mkString match
+                case report("0", x, y, "M") =>
+                  Some(Command.PointerPress(x.toInt, y.toInt, 0))
+                case report(button, x, y, end)
+                    if (button == "0" && end == "m") || (button != "0" && end == "M") =>
+                  Some(Command.Pointer(x.toInt, y.toInt, button.toInt))
+                case _ => None
+              (Vector.empty, command)
             else if promptOpen then (Vector.empty, None)
             else
               val command = next match
@@ -95,6 +127,13 @@ object Keys:
     else (pending, None)
 
   private def plain(byte: Int): Option[Command] = byte match
+    case 97                      => Some(Command.Ask)
+    case 112                     => Some(Command.Mode("PAPER"))
+    case 108                     => Some(Command.Mode("LIVE"))
+    case 121                     => Some(Command.Feedback(true))
+    case 110                     => Some(Command.Feedback(false))
+    case 91                      => Some(Command.ScrollMessages(5))
+    case 93                      => Some(Command.ScrollMessages(-5))
     case 113 | 3                 => Some(Command.Quit)
     case 109                     => Some(Command.StartMarketPrompt)
     case 99                      => Some(Command.ToggleCandles)

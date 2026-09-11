@@ -40,7 +40,10 @@ class EventsSpec extends munit.FunSuite:
     Events.parse(fixture("trades.json")) match
       case Some(Event.Trades("XMR", ts)) =>
         assertEquals(ts.size, 30)
-        assertEquals(ts.head, Trade(1788345676023L, Side.Buy, "522.05", "0.421"))
+        assertEquals(
+          ts.head,
+          Trade(1788345676023L, Side.Buy, "522.05", "0.421", Some(0L))
+        )
         assert(ts.exists(_.side == Side.Sell))
         assertEquals(ts.last.time, 1788345719062L)
       case other => fail(s"unexpected $other")

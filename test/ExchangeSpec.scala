@@ -175,3 +175,15 @@ class ExchangeSpec extends munit.FunSuite:
     assertEquals(Exchange.outcome(reply(filled), long.copy(quantity = "1")), None)
     assertEquals(Exchange.outcome(reply(filled), long.copy(limit = "1")), None)
   }
+
+  test("metadata accepts any positive maximum leverage and rejects zero") {
+    def meta(maximum: Int): ujson.Value = ujson.Obj(
+      "universe" -> ujson.Arr(
+        ujson.Obj("name" -> "XMR", "szDecimals" -> 3, "maxLeverage" -> maximum)
+      )
+    )
+    (1 to 4).foreach(maximum =>
+      assertEquals(Exchange.market(meta(maximum), "XMR"), MarketRules(0, 3, maximum))
+    )
+    intercept[Exception](Exchange.market(meta(0), "XMR"))
+  }

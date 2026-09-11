@@ -126,7 +126,7 @@ class OfflinePlaybackSpec extends munit.FunSuite:
         "-s",
         "test",
         "-p",
-        "playback_spec.py"
+        "*playback_spec.py"
       ),
       Files.createTempDirectory("desk-capture-check")
     )

@@ -186,7 +186,7 @@ object Exchange:
     val (asset, index) = found.head
     require(!asset.obj.get("isDelisted").exists(_.bool))
     val rules = MarketRules(index, integer(asset("szDecimals")), integer(asset("maxLeverage")))
-    require(rules.szDecimals <= 6 && rules.maxLeverage >= 5)
+    require(rules.szDecimals <= 6 && rules.maxLeverage >= 1)
     rules
 
   def action(p: SavedOrder): ujson.Value = ujson.Obj(

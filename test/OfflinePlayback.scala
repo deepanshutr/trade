@@ -7,7 +7,7 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
 import java.util.IdentityHashMap
 import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch, LinkedBlockingQueue, TimeUnit}
-import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicLong}
 import scala.jdk.CollectionConverters.*
 
 object OfflinePlayback:
@@ -107,6 +107,7 @@ object OfflinePlayback:
     val holdRelease = new CountDownLatch(1)
     val holdArmed = new AtomicBoolean(false)
     val holdFinished = new AtomicBoolean(false)
+    val holdFinishedAt = new AtomicLong(0L)
     val forbidden = new ConcurrentLinkedQueue[String]()
     val metadataCalls = new AtomicInteger(0)
     @volatile var holdKind = ""
@@ -125,6 +126,7 @@ object OfflinePlayback:
         report(ujson.Obj("kind" -> "work-held", "work" -> kind))
         try holdRelease.await()
         finally
+          holdFinishedAt.set(System.nanoTime())
           holdFinished.set(true)
           report(ujson.Obj("kind" -> "work-ended", "work" -> kind))
 
@@ -247,13 +249,20 @@ object OfflinePlayback:
             "metadata_calls" -> metadataCalls.get(),
             "held_work" -> holding,
             "hold_finished" -> holdFinished.get(),
+            "hold_finished_ns" -> holdFinishedAt.get().toString,
             "hold_released" -> (holdRelease.getCount == 0)
           )
         )
       )
     )
     Main.run(
-      Main.Args("XMR", true, config = Some(args(2))),
+      Main.Args(
+        "XMR",
+        true,
+        config = Some(args(2)),
+        analysis = false,
+        stateDirectory = Some(Path.of(args(2)).getParent.resolve("state").toString)
+      ),
       _ => (connector, rest),
       (config, enabled, coin, _) =>
         require(!enabled && config.owner.isEmpty && config.agent.isEmpty)
