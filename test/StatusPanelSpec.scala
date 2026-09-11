@@ -38,4 +38,23 @@ class StatusPanelSpec extends munit.FunSuite:
     for expected <- Vector(account, analysis, reason, "Background capture saved 5s ago") do
       assert(message.text.contains(expected))
     assert(controller.panel.review.isEmpty)
+
+    controller.handle(Command.Ask, snapshot, view, (100, 30), false)
+    controller.handle(Command.PromptText("keep this question"), snapshot, view, (100, 30), false)
+    val inputFrame = Workspace.draw(
+      snapshot,
+      view,
+      controller.panel,
+      100,
+      30,
+      1800000000000L,
+      java.time.ZoneOffset.UTC,
+      Style.mono
+    )
+    controller.publish(inputFrame)
+    assert(!inputFrame.buttons.exists(_.action == DeskAction.Status))
+    controller.handle(Command.PointerPress(chosen.x, chosen.y, 0), snapshot, view, (100, 30), false)
+    controller.handle(Command.Pointer(chosen.x, chosen.y, 0), snapshot, view, (100, 30), false)
+    assertEquals(controller.panel.input, Some("keep this question"))
+    assertEquals(controller.panel.messages.last, message)
   }

@@ -18,7 +18,6 @@ final class PaperWorker(
   private var touch = Option.empty[(BigDecimal, BigDecimal, Long, Long)]
   private var metadata = Option.empty[ujson.Value]
   private var rules = Option.empty[MarketRules]
-  private var message = "Paper waiting for public data"
   private var outcome = Option.empty[String]
   private var lastPlan = Option.empty[OrderPlan]
   private val pending = new AtomicBoolean(false)
@@ -42,18 +41,22 @@ final class PaperWorker(
       .fold("")(p => " open $" + Trading.display(p))
   }
   def view: TradingView = synchronized {
-    val available = ready && !pending.get()
+    val dataReady = ready
+    val working = pending.get()
+    val message = if working then "Paper order pending"
+    else if dataReady then "Paper ready"
+    else "Paper needs fresh depth and available storage"
     TradingView(
       coin,
       Some(ledger.account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0))),
       message,
-      available,
-      pending.get(),
+      dataReady && !working,
+      working,
       rules,
       touch.map(_._1),
       touch.map(_._2),
       lastPlan,
-      Option.unless(ready)("Paper needs fresh depth and available storage"),
+      Option.unless(dataReady)("Paper needs fresh depth and available storage"),
       outcome
     )
   }
@@ -149,8 +152,7 @@ final class PaperWorker(
           synchronized {
             val result = if matches(review) then ledger.fill(review.plan, wall())
             else Left("Paper canceled: reviewed market data changed")
-            message = result.fold(identity, identity)
-            outcome = Some(message)
+            outcome = Some(result.fold(identity, identity))
             pending.set(false)
           }
       }
