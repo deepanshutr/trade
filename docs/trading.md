@@ -37,6 +37,32 @@ the service name. Use the protected store's on-screen interface for this step.
 A denied or timed-out read leaves signing unavailable. Desk verifies that the
 loaded key matches the agent and that the venue reports delegation to the owner.
 
+Use **Allow Once** when the Mac asks for the key. **Always Allow** can retain access
+for future sessions, as described in [Apple's access guide](https://support.apple.com/en-us/guide/keychain-access/kyca1243/mac).
+Desk keeps its loaded trading key in memory until that process closes. Starting
+a new chat does not close a running Desk process. The current key-store read has
+an eight-second timeout. A denied or timed-out read requires restarting Desk to
+try again.
+
+For new local keys, `python3 tools/keychain_wallet.py --check-access` checks the
+Mac permission settings without creating a key. After selecting the account role,
+`--create owner` creates a wallet key under service `desk-owner`. `--create agent`
+creates a separate trading key under service `desk`. The account name is the
+generated public address. The helper requires the installed Python libraries
+`cryptography`, `pycryptodome` and `eth-account`.
+
+The helper writes only public setup records to
+`~/.config/desk/keychain-owner.jsonl` or `keychain-agent.jsonl`. It records the
+intended item before adding it, then appends completion after checking its access
+settings. Existing records and key-store items are never overwritten. If setup
+stops, preserve that record and inspect its named item before retrying. The private
+value stays in process memory and the protected store. Library memory copies can
+remain until the helper exits.
+
+Creating either key does not register a trading account. The wallet that owns the
+account must separately approve Desk's trading address at the venue. Keep funding
+and account setup separate from the key-creation command.
+
 Start `desk XMR --trade`, or select Live and confirm its account mode. XMR is the
 venue's Monero symbol. The panel names the network and shortened owner address.
 Check the full owner and agent in the local settings before enabling this mode.
