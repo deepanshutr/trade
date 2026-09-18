@@ -37,6 +37,13 @@ the service name. Use the protected store's on-screen interface for this step.
 A denied or timed-out read leaves signing unavailable. Desk verifies that the
 loaded key matches the agent and that the venue reports delegation to the owner.
 
+Desk's local signer accepts only its supported immediate orders. It rejects fund
+transfers, withdrawals, permission changes and leverage changes before producing
+a signature. Hyperliquid's standard agent permission is broader and includes
+transfers between balances within the same account. The local restriction does
+not constrain a key used outside Desk. See the venue's
+[agent-transfer documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#agent-send-asset).
+
 Use **Allow Once** when the Mac asks for the key. **Always Allow** can retain access
 for future sessions, as described in [Apple's access guide](https://support.apple.com/en-us/guide/keychain-access/kyca1243/mac).
 Desk keeps its loaded trading key in memory until that process closes. Starting

@@ -98,11 +98,6 @@ object OrderSigning:
         value.value.get("c").foreach { identifier =>
           if !text(identifier).matches("0x[0-9a-f]{32}") then invalid()
         }
-      case "updateLeverage" =>
-        fields(root, Vector("type", "asset", "isCross", "leverage"))
-        integer(root("asset"))
-        bool(root("isCross"))
-        if integer(root("leverage")) != 5 then invalid()
       case _ => invalid()
 
   private def writeUnsigned(out: ByteArrayOutputStream, value: Long, width: Int): Unit =

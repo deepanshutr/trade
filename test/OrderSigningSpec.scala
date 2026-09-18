@@ -21,7 +21,7 @@ class OrderSigningSpec extends munit.FunSuite:
   private def sign(action: ujson.Value): ujson.Value =
     OrderSigning.sign(secret, action, 1788684358292L, true, Some(1788684359292L))
 
-  fixtures("vectors").arr.foreach { fixture =>
+  fixtures("vectors").arr.filter(_("action")("type").str == "order").foreach { fixture =>
     test("matches recorded signing bytes for " + fixture("name").str) {
       val action = fixture("action")
       val nonce = fixture("nonce").num.toLong
@@ -116,6 +116,57 @@ class OrderSigningSpec extends munit.FunSuite:
     }
   }
 
+  test("fund-transfer actions cannot be signed through Desk") {
+    val internalTransfer = ujson.Obj(
+      "type" -> "agentSendAsset",
+      "destination" -> fixtures("vectors")(1)("address").str,
+      "sourceDex" -> "",
+      "destinationDex" -> "spot",
+      "token" -> "USDC:0x6d1e7cde53ba9467b783cb7c530ce054",
+      "amount" -> "0.01",
+      "fromSubAccount" -> "",
+      "nonce" -> ujson.Num(1788684358292L.toDouble)
+    )
+    val transfers = Vector(
+      internalTransfer,
+      ujson.Obj("type" -> "usdClassTransfer", "amount" -> "0.01", "toPerp" -> true),
+      ujson.Obj("type" -> "subAccountTransfer", "isDeposit" -> true, "usd" -> 10000),
+      ujson.Obj("type" -> "vaultTransfer", "isDeposit" -> true, "usd" -> 10000),
+      ujson.Obj("type" -> "sendAsset"),
+      ujson.Obj("type" -> "usdSend"),
+      ujson.Obj("type" -> "spotSend"),
+      ujson.Obj("type" -> "withdraw3")
+    )
+    assertEquals(sign(sample).obj.keySet, Set("r", "s", "v"))
+    transfers.foreach { action =>
+      val error = intercept[IllegalArgumentException](sign(action))
+      assertEquals(error.getMessage, "Unsupported order signing input")
+    }
+  }
+
+  test("an order cannot carry transfer or builder-fee fields") {
+    Vector("destination", "amount", "builder").foreach { name =>
+      val action = sample
+      action(name) = if name == "builder" then
+        ujson.Obj("b" -> fixtures("vectors")(1)("address").str, "f" -> 10)
+      else ujson.Str("0.01")
+      intercept[IllegalArgumentException](sign(action))
+    }
+  }
+
+  test("extra fields are rejected at every nested order level") {
+    Vector("order", "type", "limit").foreach { level =>
+      val action = sample
+      val order = action("orders")(0)
+      val target = level match
+        case "order" => order
+        case "type"  => order("t")
+        case _       => order("t")("limit")
+      target("unexpected") = true
+      intercept[IllegalArgumentException](sign(action))
+    }
+  }
+
   test("action field order is explicit") {
     val action = sample
     val changed = ujson.Obj(
@@ -174,15 +225,21 @@ class OrderSigningSpec extends munit.FunSuite:
     }
   }
 
-  test("leverage is five and the margin mode is explicit") {
+  test("leverage and account changes are outside local order signing") {
     val action = copy(fixtures("vectors")(3)("action"))
     val cross = copy(action)
     cross("isCross") = true
-    assertNotEquals(sign(action), sign(cross))
-    action("leverage") = 6
-    intercept[IllegalArgumentException](sign(action))
-    val missing = ujson.Obj("type" -> "updateLeverage", "asset" -> 1, "leverage" -> 5)
-    intercept[IllegalArgumentException](sign(missing))
+    Vector(
+      action,
+      cross,
+      ujson.Obj("type" -> "updateIsolatedMargin", "asset" -> 1, "isBuy" -> true, "ntli" -> 1),
+      ujson.Obj("type" -> "approveAgent"),
+      ujson.Obj("type" -> "approveBuilderFee"),
+      ujson.Obj("type" -> "cancel", "cancels" -> ujson.Arr()),
+      ujson.Obj("type" -> "futureAction")
+    ).foreach { change =>
+      intercept[IllegalArgumentException](sign(change))
+    }
   }
 
   test("nonce and expiry reject impossible local deadlines") {
