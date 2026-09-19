@@ -42,7 +42,11 @@ object TradingWorker:
       () => ProtectedKey.read(config),
       () => OrderJournal.open(journalDirectory, config.identity),
       () => System.currentTimeMillis(),
-      () => TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
+      () => TimeUnit.NANOSECONDS.toMillis(System.nanoTime()),
+      orderPermission = run =>
+        AccountGate.withOrder(AccountGate.directory, config.network, config.owner.get)(run()),
+      accountPaused = () =>
+        config.owner.exists(AccountGate.paused(AccountGate.directory, config.network, _))
     )
 
 final class TradingWorker private[desk] (
@@ -56,7 +60,9 @@ final class TradingWorker private[desk] (
     monotonic: () => Long,
     afterReserve: () => Unit = () => (),
     beforeOrderSign: () => Unit = () => (),
-    warmSigning: () => Unit = () => OrderSigning.warm()
+    warmSigning: () => Unit = () => OrderSigning.warm(),
+    orderPermission: (() => Unit) => Unit = run => run(),
+    accountPaused: () => Boolean = () => false
 ) extends AutoCloseable:
   private final case class Seen(book: Book, at: Long)
   private final case class Touch(bid: BigDecimal, ask: BigDecimal, time: Long, at: Long)
@@ -124,8 +130,10 @@ final class TradingWorker private[desk] (
         (roleGeneration.contains(generation) && fresh(roleAt, 60000L)))
 
   def view: TradingView = synchronized {
+    val paused = enabled && accountPaused()
     val block =
       if !enabled then Some("View only")
+      else if paused then Some("Wallet change paused this account")
       else if fatal || !config.configured then Some(message)
       else if !connected then Some("connection disconnected")
       else if rules.isEmpty then Some("waiting for market data")
@@ -139,7 +147,7 @@ final class TradingWorker private[desk] (
       coin,
       position,
       message,
-      enabled && !fatal && !busy
+      enabled && !paused && !fatal && !busy
         .get() && !waitingRefresh && secret.nonEmpty && marketReady && accountReady,
       busy.get() || saved.nonEmpty,
       rules,
@@ -305,7 +313,13 @@ final class TradingWorker private[desk] (
 
   private def execute(press: Press): Unit =
     executing.set(true)
-    try executeOrder(press)
+    try orderPermission(() => executeOrder(press))
+    catch
+      case _: Exception =>
+        synchronized {
+          busy.set(saved.nonEmpty)
+          message = "Wallet change paused this account or account state is unavailable"
+        }
     finally executing.set(false)
 
   private def executeOrder(press: Press): Unit =
@@ -351,7 +365,7 @@ final class TradingWorker private[desk] (
             message = saved.get.coin + " waiting for order result"
         }
       catch case _: Exception => storageFailure()
-    if !synchronized(fatal || saved.nonEmpty || secret.nonEmpty) then
+    if !accountPaused() && !synchronized(fatal || saved.nonEmpty || secret.nonEmpty) then
       var loaded = Array.emptyByteArray
       try
         loaded = loadKey()
