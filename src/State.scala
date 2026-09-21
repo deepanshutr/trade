@@ -33,7 +33,7 @@ enum Command:
   case PromptText(text: String)
   case Pointer(x: Int, y: Int, button: Int)
   case PointerPress(x: Int, y: Int, button: Int)
-  case Ask
+  case Ask, Details, ToggleMute
   case Mode(name: String)
   case Feedback(accepted: Boolean)
   case ScrollMessages(lines: Int)
@@ -270,8 +270,8 @@ object State:
   private def key(s: Snapshot, cmd: Command, now: Long): Snapshot = cmd match
     case Command.PlaceOrder(_) | Command.SelectTarget(_) | Command.SubmitTarget |
         Command.CancelTarget | Command.Pointer(_, _, _) | Command.PointerPress(_, _, _) |
-        Command.Ask | Command.Mode(_) | Command.Feedback(_) | Command.ScrollMessages(_) |
-        Command.PromptText(_) =>
+        Command.Ask | Command.Details | Command.ToggleMute | Command.Mode(_) | Command.Feedback(_) |
+        Command.ScrollMessages(_) | Command.PromptText(_) =>
       s
     case Command.Quit              => s.copy(quit = true)
     case Command.StartMarketPrompt => s.copy(prompt = Some(""))

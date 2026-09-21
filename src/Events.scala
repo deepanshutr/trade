@@ -10,7 +10,11 @@ object Events:
     Try(book(ujson.read(text))).toOption
 
   def parseRestCandles(text: String): Option[Vector[Candle]] =
-    Try(ujson.read(text).arr.toVector.map(candle)).toOption
+    Try {
+      val bars = ujson.read(text).arr.toVector.map(candle)
+      require(bars.groupBy(_.t).values.forall(_.distinct.size == 1))
+      bars
+    }.toOption
 
   private def parseUnsafe(text: String): Option[Event] =
     val j = ujson.read(text)
@@ -85,7 +89,7 @@ object Events:
     )
 
   private def candle(v: ujson.Value): Candle =
-    Candle(
+    val bar = Candle(
       integer(v("t"), Long.MaxValue.toDouble),
       number(v("o")).toDouble,
       number(v("h")).toDouble,
@@ -93,6 +97,8 @@ object Events:
       number(v("c")).toDouble,
       number(v("v"), zero = true).toDouble
     )
+    require(bar.l <= bar.o && bar.o <= bar.h && bar.l <= bar.c && bar.c <= bar.h)
+    bar
 
   private def ctx(c: ujson.Value): Ctx =
     val mid = c.obj.get("midPx").filterNot(_.isNull).map(number(_))

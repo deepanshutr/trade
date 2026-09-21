@@ -71,10 +71,12 @@ object MarketArchive:
 
   private def checked(saved: CandleCheckpoint): CandleCheckpoint =
     require(saved.markets.size <= 32 && saved.markets.values.forall(_.forall { (i, cs) =>
-      State.intervals.contains(i) && cs.size <= State.seriesCap && cs.forall(c =>
+      State.intervals.contains(i) && cs.size <= State.seriesCap &&
+      cs.groupBy(_.t).values.forall(_.distinct.size == 1) && cs.forall(c =>
         c.t >= 0 && Vector(c.o, c.h, c.l, c.c).forall(v =>
           v > 0 && v.isFinite
-        ) && c.v >= 0 && c.v.isFinite
+        ) && c.v >= 0 && c.v.isFinite && c.l <= c.o && c.o <= c.h &&
+          c.l <= c.c && c.c <= c.h
       )
     }))
     saved

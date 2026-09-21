@@ -13,11 +13,15 @@ object Main:
       paper: Boolean = false,
       record: Boolean = false,
       analysis: Boolean = true,
-      stateDirectory: Option[String] = None
+      stateDirectory: Option[String] = None,
+      audio: String = "voice"
   )
   val usage =
-    "usage: desk [COIN] [--mono] [--paper | --trade | --record] [--config PATH] [--state PATH] [--no-analysis]"
+    "usage: desk [COIN] [--mono] [--paper | --trade | --record] [--config PATH] [--state PATH] [--no-analysis] [--chime | --mute]"
   val escapeWaitNanos = 40_000_000L
+
+  private[desk] def announcements(args: Args, output: AnnouncementOutput): Announcements =
+    new Announcements(output, voice = args.audio != "chime", mutedInitially = args.audio == "mute")
 
   def parseArgs(args: Seq[String]): Either[String, Args] =
     def loop(rest: List[String], chosen: Args, hasCoin: Boolean): Either[String, Args] =
@@ -31,6 +35,10 @@ object Main:
         case "--paper" :: tail       => loop(tail, chosen.copy(paper = true), hasCoin)
         case "--record" :: tail      => loop(tail, chosen.copy(record = true), hasCoin)
         case "--no-analysis" :: tail => loop(tail, chosen.copy(analysis = false), hasCoin)
+        case "--chime" :: tail if chosen.audio == "voice" =>
+          loop(tail, chosen.copy(audio = "chime"), hasCoin)
+        case "--mute" :: tail if chosen.audio == "voice" =>
+          loop(tail, chosen.copy(audio = "mute"), hasCoin)
         case "--config" :: path :: tail if !path.startsWith("--") && chosen.config.isEmpty =>
           loop(tail, chosen.copy(config = Some(path)), hasCoin)
         case "--state" :: path :: tail if !path.startsWith("--") && chosen.stateDirectory.isEmpty =>
