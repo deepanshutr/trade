@@ -45,16 +45,22 @@ final class PaperLedger private (
     persist: PaperAccount => Unit,
     lease: AutoCloseable
 ) extends AutoCloseable:
-  private var saved = initial
-  private var healthy = true
-  private var closed = false
-  def account: PaperAccount = synchronized(saved)
-  def available: Boolean = synchronized(healthy && !closed)
+  @volatile private var saved = initial
+  @volatile private var healthy = true
+  @volatile private var closed = false
+  def account: PaperAccount = saved
+  def available: Boolean = healthy && !closed
 
-  def fill(plan: OrderPlan, at: Long): Either[String, String] = synchronized {
+  def fill(
+      plan: OrderPlan,
+      at: Long,
+      expectedCount: Option[Long] = None
+  ): Either[String, String] = synchronized {
     val q = plan.estimatedQuantity
     val value = plan.estimatedValue
     if !available then Left("Paper storage unavailable. Restart to recover")
+    else if expectedCount.exists(_ != saved.count) then
+      Left("Paper canceled: account changed after review")
     else if !plan.coin.matches("[A-Za-z0-9][A-Za-z0-9:._-]{0,39}") then
       Left("Paper rejected: invalid market")
     else if q <= 0 || q > plan.quantity || value <= 0 then

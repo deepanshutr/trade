@@ -97,7 +97,8 @@ class CompactInteractionSpec extends munit.FunSuite:
         )
       )
     val outlook = OutlookView("XMR", now, columns)
-    val rows = OutlookScreen.rows(outlook, 46, ZoneOffset.UTC).mkString("\n")
+    val rows =
+      OutlookScreen.rows(outlook, 46, Some(Axis(89, 111, 9)), 9, ChartMode.Candles).mkString("\n")
     assert(!rows.contains("To hit"), rows)
     assert(rows.contains("Test 5%"), rows)
     val details = OutlookScreen.details(outlook)

@@ -1,7 +1,9 @@
 # Outlook and announcements
 
-The normal workspace keeps the trade controls above three outlook columns:
-Long covers the next day, Mid the next four hours and Short the next hour.
+The normal workspace draws three level columns on the graph, immediately to the
+right of its price axis. Long covers the next day, Mid the next four hours and
+Short the next hour. All three use the same visible price scale as the graph.
+Trade controls remain below the columns, including while Details is open.
 The arrow describes the current trend. Support, resistance and target come from
 the last 50 complete candles. Long uses hourly candles, Mid uses fifteen-minute
 candles and Short uses five-minute candles.
@@ -11,6 +13,13 @@ is above the 50-candle average. It is down when both comparisons reverse.
 Otherwise the trend is mixed. An up target is resistance, the highest high in
 that window. A down target is support, the lowest low. These are descriptive
 levels, not instructions to trade.
+
+`S` marks support, `R` resistance and `T` target. A horizontal mark sits on the
+corresponding price row. Line-chart marks also follow the plotted dot height
+within that row. Combined letters share a tick. When different prices share one
+tick, a star replaces the single price label. An up or down mark
+means the level is above or below the visible scale. Those levels do not stretch
+the graph or acquire a false edge price. Details retains every exact level.
 
 ## Reading the percentages
 
@@ -24,8 +33,9 @@ Method retains the full value.
 `Base` is the percentage of eligible past periods that touched that same relative
 target distance within the named time. `Match` uses the same test but keeps only
 periods with the same moving-average trend. `n` lists the Base and Match sample
-counts. `Band` is a rough 95 percent interval for the matched historical count.
-Method includes both intervals and the observed date range.
+counts. Method includes a rough 95 percent interval for each historical count,
+the reference close and the observed date range. When evidence is unavailable,
+its status appears in place of the compact Test distance.
 
 Each historical signal uses only candles closed by its starting time. Outcome
 periods are aligned to the calendar and do not overlap. At least 100 Base samples,

@@ -12,6 +12,13 @@ final class PaperWorker(
     wall: () => Long,
     monotonic: () => Long
 ) extends AutoCloseable:
+  private final case class Prepared(
+      intent: OrderIntent,
+      plan: OrderPlan,
+      rules: MarketRules,
+      accountCount: Long,
+      at: Long
+  )
   private var coin = initialCoin
   private var connected = false
   private var book = Option.empty[(Book, Long)]
@@ -20,6 +27,7 @@ final class PaperWorker(
   private var rules = Option.empty[MarketRules]
   private var outcome = Option.empty[String]
   private var lastPlan = Option.empty[OrderPlan]
+  private var prepared = Option.empty[Prepared]
   private val pending = new AtomicBoolean(false)
   private val closed = new AtomicBoolean(false)
   private val started = new AtomicBoolean(false)
@@ -67,6 +75,7 @@ final class PaperWorker(
       touch = None
       rules = metadata.flatMap(m => Try(Exchange.market(m, next)).toOption)
       lastPlan = None
+      prepared = None
   }
   def observe(event: Event): Unit = synchronized {
     val at = monotonic()
@@ -80,6 +89,7 @@ final class PaperWorker(
         connected = false
         book = None
         touch = None
+        prepared = None
       case Event.BookUpdate(c, b, _) if c == coin =>
         val better = book.forall { (old, _) =>
           b.time > old.time || (b.time == old.time && b.bids.size >= old.bids.size && b.asks.size >= old.asks.size && b.bids.size + b.asks.size > old.bids.size + old.asks.size)
@@ -94,17 +104,24 @@ final class PaperWorker(
       case _ => ()
   }
   def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized {
-    if !ready then Left("Paper needs fresh selected-market depth")
+    if closed.get() then Left("Paper worker is closed")
+    else if pending.get() then Left("Wait for the pending paper order")
     else
-      Trading.plan(
-        coin,
-        rules.get,
-        book.get._1,
-        if intent.side == Side.Buy then touch.get._2 else touch.get._1,
-        ledger.account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0)),
-        intent,
-        config.sizes
-      )
+      val account = ledger.account
+      val result = if !ready then Left("Paper needs fresh selected-market depth")
+      else
+        Trading.plan(
+          coin,
+          rules.get,
+          book.get._1,
+          if intent.side == Side.Buy then touch.get._2 else touch.get._1,
+          account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0)),
+          intent,
+          config.sizes
+        )
+      prepared =
+        result.toOption.map(plan => Prepared(intent, plan, rules.get, account.count, wall()))
+      result
   }
   private def matches(review: OrderReview): Boolean =
     !closed
@@ -112,8 +129,11 @@ final class PaperWorker(
       review.expiresAt
     ) - BigInt(
       review.createdAt
-    ) <= 30000L && review.leverage.isEmpty && review.marginMode.isEmpty && preview(review.intent)
-      .contains(review.plan)
+    ) <= 30000L && review.leverage.isEmpty && review.marginMode.isEmpty && prepared.exists(p =>
+      p.intent == review.intent && p.plan == review.plan && rules.contains(p.rules) &&
+        ledger.account.count == p.accountCount && p.at <= review.createdAt &&
+        BigInt(wall()) - p.at <= TradingWorker.maximumReviewLifetimeMs
+    )
   def submitReviewed(review: OrderReview): Boolean = synchronized {
     if !matches(review) || !pending.compareAndSet(false, true) then false
     else
@@ -149,9 +169,23 @@ final class PaperWorker(
       spawn("paper-orders") {
         while !closed.get() do
           val review = orders.take()
+          val result = try
+            val fill = synchronized {
+              if matches(review) then
+                val position =
+                  ledger.account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0))
+                val currentQuote =
+                  if review.plan.side == Side.Buy then touch.get._2 else touch.get._1
+                Trading
+                  .fillAtLimit(review.plan, rules.get, book.get._1, currentQuote, position)
+                  .map(plan => (plan, prepared.get.accountCount))
+              else Left("Paper canceled: reviewed request is no longer current")
+            }
+            fill.flatMap((plan, count) => ledger.fill(plan, wall(), Some(count)))
+          catch
+            case scala.util.control.NonFatal(_) => Left("Paper order failed. Review before retry")
           synchronized {
-            val result = if matches(review) then ledger.fill(review.plan, wall())
-            else Left("Paper canceled: reviewed market data changed")
+            prepared = None
             outcome = Some(result.fold(identity, identity))
             pending.set(false)
           }

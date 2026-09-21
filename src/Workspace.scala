@@ -93,6 +93,8 @@ object Workspace:
         case '\u2191'                                                                   => "↑"
         case '\u2193'                                                                   => "↓"
         case '\u2192'                                                                   => "→"
+        case '\u2500'                                                                   => "─"
+        case c @ ('⠉' | '⠒' | '⠤' | '⣀')              => c.toString
         case c if c == '\n' || (c >= ' ' && c <= '~') => c.toString
         case _                                        => " "
       }
@@ -148,7 +150,8 @@ object Workspace:
         else Gauges.tapeRow(s, i - 6, now, h, style)
         Chart.fit(reading, bookWidth) + " " + correlation(i)
       }
-      val market = Screen.render(
+      val tradeTop = rows - 14
+      val marketFrame = Screen.renderMarket(
         s,
         leftWidth,
         rows,
@@ -156,8 +159,10 @@ object Workspace:
         zone,
         style,
         marketOnly = true,
-        reservedRows = 12
-      ) ++ indicators
+        reservedRows = 12,
+        maxPriceRows = tradeTop - 7
+      )
+      val market = marketFrame.lines.padTo(rows - 12, " " * leftWidth) ++ indicators
       val right = Array.fill(rows)("")
       var scrollLimit = 0
       val buttons = Vector.newBuilder[DeskButton]
@@ -175,10 +180,18 @@ object Workspace:
           right(row) = right(row).padTo(column, ' ') + text
           if enabled then
             buttons += DeskButton(label, action, leftWidth + 2 + column, row + 1, text.length)
-      line(0, s"${panel.mode} ${s.coin}  ${panel.account}")
-      button(1, 0, "p Paper", DeskAction.Mode("PAPER"), !view.pending && panel.input.isEmpty)
-      button(1, 12, "l Live", DeskAction.Mode("LIVE"), !view.pending && panel.input.isEmpty)
-      line(
+      def tradeLine(row: Int, text: String): Unit = line(tradeTop + row, text)
+      def tradeButton(
+          row: Int,
+          column: Int,
+          label: String,
+          action: DeskAction,
+          enabled: Boolean = true
+      ): Unit = button(tradeTop + row, column, label, action, enabled)
+      tradeLine(0, s"${panel.mode} ${s.coin}  ${panel.account}")
+      tradeButton(1, 0, "p Paper", DeskAction.Mode("PAPER"), !view.pending && panel.input.isEmpty)
+      tradeButton(1, 12, "l Live", DeskAction.Mode("LIVE"), !view.pending && panel.input.isEmpty)
+      tradeLine(
         2,
         view.position.fold("Position unavailable")(p =>
           "Position " + Trading.format(p)
@@ -189,16 +202,16 @@ object Workspace:
       var complete = false
       panel.modeReview match
         case Some(name) =>
-          line(3, "Switch to " + name + "?")
-          line(
+          tradeLine(3, "Switch to " + name + "?")
+          tradeLine(
             4,
             if name == "PAPER" then "Uses the separate simulated account."
             else "Uses the configured real account."
           )
-          line(5, "Existing positions remain in their account.")
-          line(6, "Each order requires its own review and Send.")
-          button(8, 0, "Enter Select " + name, DeskAction.ConfirmMode(name), !view.pending)
-          button(9, 0, "Esc Cancel", DeskAction.Cancel)
+          tradeLine(5, "Existing positions remain in their account.")
+          tradeLine(6, "Each order requires its own review and Send.")
+          tradeButton(8, 0, "Enter Select " + name, DeskAction.ConfirmMode(name), !view.pending)
+          tradeButton(9, 0, "Esc Cancel", DeskAction.Cancel)
         case None => ()
       (if panel.modeReview.nonEmpty then None else panel.review) match
         case Some(review) =>
@@ -229,10 +242,11 @@ object Workspace:
           complete = knownSettings && details.forall(
             _.length <= rightWidth
           ) && p.coin == s.coin && review.createdAt <= now && now < review.expiresAt
-          details.zipWithIndex.foreach((text, i) => line(i + 3, text))
-          if complete then button(10, 0, "Enter Send " + panel.mode, DeskAction.Submit, canTrade)
-          else line(9, "Review unavailable. Refresh before send")
-          button(10, 20, "Esc Cancel", DeskAction.Cancel)
+          details.zipWithIndex.foreach((text, i) => tradeLine(i + 3, text))
+          if complete then
+            tradeButton(10, 0, "Enter Send " + panel.mode, DeskAction.Submit, canTrade)
+          else tradeLine(9, "Review unavailable. Refresh before send")
+          tradeButton(10, 20, "Esc Cancel", DeskAction.Cancel)
         case None if panel.modeReview.isEmpty =>
           val half = rightWidth / 2
           for index <- 0 until 8 do
@@ -241,15 +255,21 @@ object Workspace:
             val label = s"${index + 1} ${intent.kind} ${
                 if intent.side == Side.Buy then "buy" else "sell"
               } $$${Trading.display(amount)}"
-            button(3 + index / 2, (index % 2) * half, label, DeskAction.Prepare(intent), canTrade)
-          button(
+            tradeButton(
+              3 + index / 2,
+              (index % 2) * half,
+              label,
+              DeskAction.Prepare(intent),
+              canTrade
+            )
+          tradeButton(
             7,
             0,
             "9 Target buy",
             DeskAction.Target(Side.Buy),
             !view.pending && panel.input.isEmpty
           )
-          button(
+          tradeButton(
             7,
             half,
             "0 Target sell",
@@ -257,18 +277,21 @@ object Workspace:
             !view.pending && panel.input.isEmpty
           )
           panel.target.foreach { (side, price) =>
-            line(8, s"Target ${side.toString.toLowerCase} ${Trading.displayExact(price)} Up/Down")
-            button(
+            tradeLine(
+              8,
+              s"Target ${side.toString.toLowerCase} ${Trading.displayExact(price)} Up/Down"
+            )
+            tradeButton(
               9,
               0,
               "Enter Review",
               DeskAction.Prepare(OrderIntent(side, OrderKind.Target, target = Some(price))),
               canTrade
             )
-            button(9, 17, "Esc Cancel", DeskAction.Cancel)
+            tradeButton(9, 17, "Esc Cancel", DeskAction.Cancel)
           }
-          if panel.target.isEmpty then line(8, "Trade buttons open a review")
-          if panel.mode == "PAPER" then line(10, "1x simulation. No funding or liquidation")
+          if panel.target.isEmpty then tradeLine(8, "Trade buttons open a review")
+          if panel.mode == "PAPER" then tradeLine(10, "1x simulation. No funding or liquidation")
           if panel.target.isEmpty then
             panel.actionNotice.foreach { text =>
               val notice = wrap("Action: " + text, rightWidth)
@@ -276,7 +299,7 @@ object Workspace:
                 .take(2)
                 .zipWithIndex
                 .foreach((part, index) =>
-                  line(
+                  tradeLine(
                     9 + index,
                     if index == 1 && notice.size > 2 then
                       part.take(rightWidth - 13) + "... h Details"
@@ -287,7 +310,7 @@ object Workspace:
           else
             panel.actionNotice.foreach { text =>
               val notice = "! " + safeText(text).replace('\n', ' ')
-              line(
+              tradeLine(
                 10,
                 if notice.length <= rightWidth then notice
                 else notice.take(rightWidth - 13) + "... h Details"
@@ -297,13 +320,13 @@ object Workspace:
       val outlook = if panel.outlook.coin.isEmpty then Outlook.empty(s.coin)
       else Outlook.visible(panel.outlook, s, now)
       if panel.details || panel.input.nonEmpty then
-        line(11, "DETAILS  " + panel.detailPage)
-        button(12, 0, "Method", DeskAction.Page(DetailPage.Method), panel.input.isEmpty)
-        button(12, 9, "Sources", DeskAction.Page(DetailPage.Sources), panel.input.isEmpty)
-        button(12, 19, "Answers", DeskAction.Page(DetailPage.Answers), panel.input.isEmpty)
-        button(13, 0, "Up", DeskAction.Scroll(5))
-        button(13, 5, "Down", DeskAction.Scroll(-5))
-        line(13, right(13).padTo(13, ' ') + "[ ] scroll | Esc close")
+        line(0, "DETAILS  " + panel.detailPage)
+        button(1, 0, "Method", DeskAction.Page(DetailPage.Method), panel.input.isEmpty)
+        button(1, 9, "Sources", DeskAction.Page(DetailPage.Sources), panel.input.isEmpty)
+        button(1, 19, "Answers", DeskAction.Page(DetailPage.Answers), panel.input.isEmpty)
+        button(2, 0, "Up", DeskAction.Scroll(5))
+        button(2, 5, "Down", DeskAction.Scroll(-5))
+        line(2, right(2).padTo(13, ' ') + "[ ] scroll | Esc close")
         val alerts = panel.alerts.reverse.zipWithIndex.map { (alert, index) =>
           val dates =
             alert.publishedAt.fold("")(t => "\nPublished " + java.time.Instant.ofEpochMilli(t)) +
@@ -326,8 +349,8 @@ object Workspace:
           val label = if m.kind == "analysis" then s"analysis #${m.id}" else m.kind
           wrap(s"$time $label: ${m.text}", rightWidth).map(text => (Some(m.id), text)) :+ (None, "")
         }
-        val firstRow = if panel.detailPage == DetailPage.Answers then 16 else 14
-        val messageRows = rows - 3 - firstRow
+        val firstRow = if panel.detailPage == DetailPage.Answers then 5 else 3
+        val messageRows = tradeTop - firstRow
         scrollLimit = (messages.size - messageRows).max(0)
         val scroll = panel.scroll.max(0).min(scrollLimit)
         val begin = if panel.detailPage == DetailPage.Answers then
@@ -338,20 +361,19 @@ object Workspace:
         val lastAnalysis =
           panel.messages.reverse.find(m => m.kind == "analysis" && visibleIds.contains(m.id))
         if panel.input.isEmpty && lastAnalysis.nonEmpty then
-          button(14, 0, "y Accept analysis", DeskAction.Feedback(lastAnalysis.get.id, true))
-          button(14, 22, "n Reject analysis", DeskAction.Feedback(lastAnalysis.get.id, false))
+          button(3, 0, "y Accept analysis", DeskAction.Feedback(lastAnalysis.get.id, true))
+          button(3, 22, "n Reject analysis", DeskAction.Feedback(lastAnalysis.get.id, false))
         lastAnalysis.foreach { message =>
           val feedback =
             message.feedback.fold("")(accepted => if accepted then " accepted" else " rejected")
-          line(15, s"Feedback for analysis #${message.id}$feedback")
+          line(4, s"Feedback for analysis #${message.id}$feedback")
         }
         visibleMessages.zipWithIndex.foreach { case ((_, text), i) => line(firstRow + i, text) }
       else
-        OutlookScreen.rows(outlook, rightWidth, zone).zipWithIndex.foreach { (text, i) =>
-          line(11 + i, text)
-        }
-        line(22, "Past target touches. Test from last close")
-        line(23, "Base all | Match same trend | n samples")
+        OutlookScreen
+          .rows(outlook, rightWidth, marketFrame.axis, marketFrame.priceRows, s.chartMode)
+          .zipWithIndex
+          .foreach((text, i) => line(i, text))
         val latest = panel.alerts.lastOption
         val headline = latest.fold("Watching for >5% moves in <1h") { alert =>
           val seconds =
@@ -362,8 +384,12 @@ object Workspace:
           else s"${seconds / 3600}h ago"
           age + " " + alert.text
         }
-        wrap(headline, rightWidth).take(2).zipWithIndex.foreach((text, i) => line(24 + i, text))
-        line(rows - 4, panel.newsStatus + " | " + panel.soundStatus)
+        line(
+          marketFrame.priceRows + 5,
+          if headline.length <= rightWidth then headline
+          else headline.take(rightWidth - 13) + "... h Details"
+        )
+        line(marketFrame.priceRows + 6, panel.newsStatus + " | " + panel.soundStatus)
       button(rows - 3, 0, "a Ask", DeskAction.Ask)
       button(rows - 3, 8, if panel.details then "h Close" else "h Details", DeskAction.Details)
       button(rows - 3, 20, if panel.muted then "v Sound" else "v Mute", DeskAction.ToggleMute)
@@ -378,15 +404,15 @@ object Workspace:
           line(
             rows - 1,
             if panel.details then "Answers explain. Trade buttons submit."
-            else "PAXG (token tied to gold) | h Details"
+            else "S support R resist T target | h Details"
           )
       val lines = market.zipWithIndex.map { (left, i) =>
         val displayed =
           if style == Style.mono then left.replaceAll("\\x1b\\[[0-9;]*m", "") else left
-        val panelLine = if !panel.details && panel.input.isEmpty && i == 12 then
+        val panelLine = if !panel.details && panel.input.isEmpty && i == 0 then
           right(i)
-            .replace("↑ UP", style.wrap(style.bid, "↑ UP"))
-            .replace("↓ DOWN", style.wrap(style.ask, "↓ DOWN"))
+            .replace("↑", style.wrap(style.bid, "↑"))
+            .replace("↓", style.wrap(style.ask, "↓"))
         else right(i)
         displayed + "|" + Chart.fit(panelLine, rightWidth)
       }

@@ -194,10 +194,12 @@ class RuntimeSafetySpec extends munit.FunSuite:
           Event.BboUpdate("XMR", Level("100", "50", 1), Level("101", "50", 1), now + 1)
         )
       }
-      waitFor("changed paper review was not canceled")(
-        worker.view.outcome.exists(_.contains("canceled"))
+      waitFor("paper order outside the newer quote did not report no fill")(
+        worker.view.outcome.exists(_.contains("no fill"))
       )
       assertEquals(ledger.account.count, 0L)
+      assertEquals(worker.view.position, Some(BigDecimal(0)))
+      assert(!worker.view.pending)
       assertEquals(requests.size(), 1)
     finally worker.close()
     assert(!worker.view.ready)

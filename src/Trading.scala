@@ -197,6 +197,43 @@ object Trading:
     }
     (subtract(requested, remaining), value)
 
+  // Execute an already reviewed paper request against current visible depth.
+  // Quantity and limit remain exactly the terms the user saw.
+  def fillAtLimit(
+      plan: OrderPlan,
+      rules: MarketRules,
+      book: Book,
+      currentQuote: BigDecimal,
+      position: BigDecimal
+  ): Either[String, OrderPlan] =
+    for
+      _ <- check(plan.asset == rules.asset && validDecimals(rules), "Paper market rules changed")
+      _ <- check(validPrice(plan.limit, rules), "Paper limit does not match market precision")
+      _ <- check(validPrice(currentQuote, rules), "Paper quote does not match market precision")
+      _ <- check(
+        plan.quantity > zero && plan.quantity.bigDecimal
+          .stripTrailingZeros()
+          .scale() <= rules.szDecimals,
+        "Paper quantity does not match market precision"
+      )
+      bids <- levels(book.bids, rules, ascending = false)
+      asks <- levels(book.asks, rules, ascending = true)
+      _ <- check(bids.head.price < asks.head.price, "Book sides cross")
+      eligible = (if plan.side == Side.Buy then asks else bids).filter(q =>
+        if plan.side == Side.Buy then currentQuote <= q.price && q.price <= plan.limit
+        else plan.limit <= q.price && q.price <= currentQuote
+      )
+      (filled, value) = walk(eligible, plan.quantity)
+      _ <- check(filled > zero, "Paper no fill: no current depth at the reviewed limit")
+      average = BigDecimal(value.bigDecimal.divide(filled.bigDecimal, averageContext))
+    yield plan.copy(
+      estimatedQuantity = filled,
+      estimatedValue = value,
+      average = Some(average),
+      positionAfter =
+        if plan.side == Side.Buy then add(position, filled) else subtract(position, filled)
+    )
+
   def plan(
       coin: String,
       rules: MarketRules,

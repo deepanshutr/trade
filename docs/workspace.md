@@ -11,17 +11,21 @@ Each comparison reports paired candle coverage. Missing, stale or incomplete
 readings stay unavailable. A correlation describes past movement together. It
 does not establish what either market will do next.
 
-The right side shows Long one-day, Mid four-hour and Short one-hour outlooks below
-the trade controls. Historical percentages describe measured target touches, with
-sample counts and unavailable states. The normal view keeps transcripts and logs
+The graph has Long one-day, Mid four-hour and Short one-hour level columns on
+the right of its price axis, with trade controls below. Historical percentages
+describe measured target touches, with sample counts and unavailable states.
+The normal view keeps transcripts and logs
 out of the way. See [outlook and announcements](outlook-and-alerts.md) for the exact
 method, source coverage and sound controls.
 
 Click a trade button or press its numbered key to prepare an order. Read the
 quantity, exact limit, value and account settings, then press Enter or click Send.
-Each review expires after 30 seconds. A changed price, position or account setting
-requires another review. Mouse activation requires a press and release on the
-same visible button. Resizing or switching markets invalidates the old controls.
+Each review expires after 30 seconds. Paper Send keeps that exact quantity and
+limit and uses fresh visible depth to calculate the fill. A new preview, changed
+position, market rules or account requires another review. Live Send also
+rechecks its full market estimate. Mouse activation requires a press and release
+on the same visible button. Resizing or switching markets invalidates the old
+controls.
 
 | Input | Action |
 | --- | --- |
@@ -44,12 +48,21 @@ same visible button. Resizing or switching markets invalidates the old controls.
 | q or Control with c | Quit, except q is ordinary text while typing |
 
 Paper mode starts with $10,000 and a 0.05 percent fee per fill. It uses visible
-depth, allows partial fills and saves the account before reporting success. It
-supports one open market at a time. Cash, realized results and the open position
+depth, allows partial fills and saves the account before reporting success.
+During a slow save, the screen stays responsive and shows the order as pending.
+Another order or mode change must wait for that result. A failed save leaves the
+last confirmed account visible and reports the storage failure. It supports one
+open market at a time. Cash, realized results and the open position
 survive a restart. The latest 1,000 fill records and the lifetime count are saved.
 It models one-times exposure and excludes funding and liquidation. It is not a
 simulation of every live exchange rule. Paper and live accounts stay separate
-when changing modes.
+when changing modes. Paper mode does not start or continue live-account polling.
+When current depth cannot fill any quantity at the reviewed limit, the result
+says that no fill occurred. A partial fill changes the position only by the
+quantity actually available. A newer best quote rules out older depth at a better
+price, while known deeper levels inside the limit remain eligible. A better quote
+alone does not invent depth. Order results appear beside the controls and in
+Details under Answers.
 
 The text assistant uses the existing Codex sign-in. It receives public market
 measurements, the selected question and a fixed set of public news sources.
