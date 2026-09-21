@@ -103,6 +103,12 @@ blocks further orders while status is checked. The pending order is not resent.
 Do not delete saved recovery state to release this block. Resolve it using the
 account's order history.
 
+A wallet change pauses live orders for that owner and network across Desk processes
+sharing the same home directory, including ones using another state directory.
+The controls show the pause and refuse new orders. The pause survives a restart.
+Finish or resolve the wallet change before using the replacement account. Do not
+remove saved pause state to bypass it.
+
 Quoted prices and book depth normally expire after one second. Position and active
 account data normally expire after two seconds. Optional `quoteAgeMs` and
 `positionAgeMs` accept 100 to 5,000 milliseconds. A healthy public socket

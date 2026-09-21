@@ -22,7 +22,9 @@ class TradingWorkerSpec extends munit.FunSuite:
       loseLeverage: Boolean = false,
       marginMode: String = "cross",
       warmSigning: () => Unit = () => OrderSigning.warm(),
-      autoStart: Boolean = true
+      autoStart: Boolean = true,
+      orderPermission: (() => Unit) => Unit = run => run(),
+      accountPaused: () => Boolean = () => false
   ):
     private val key = Array.fill[Byte](32)(1)
     val agent = OrderSigning.address(key)
@@ -193,6 +195,9 @@ class TradingWorkerSpec extends munit.FunSuite:
       () =>
         warmCalls.incrementAndGet()
         warmSigning()
+      ,
+      orderPermission,
+      accountPaused
     )
     val worker = create()
     if autoStart then worker.start()
@@ -215,6 +220,119 @@ class TradingWorkerSpec extends munit.FunSuite:
       worker.close()
 
   private val buy = OrderIntent(Side.Buy, OrderKind.Hard)
+
+  test("a paused account stays visible and cannot unlock a key or submit") {
+    val f = new Fixture(accountPaused = () => true)
+    try
+      waitFor("account refresh did not finish")(f.worker.view.position.nonEmpty)
+      assert(!f.worker.view.ready)
+      assert(f.worker.view.block.exists(_.contains("Wallet change")))
+      assert(!f.worker.submit(buy, "XMR"))
+      assertEquals(f.loads.get(), 0)
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
+
+  test("pausing a ready account disables submission after its key was loaded") {
+    val paused = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val f = new Fixture(accountPaused = () => paused.get())
+    try
+      f.ready()
+      assertEquals(f.loads.get(), 1)
+      paused.set(true)
+      val current = f.worker.view
+      assert(!current.ready)
+      assert(current.block.exists(_.contains("Wallet change")))
+      assert(TradingScreen.rows(current, None, f.worker.preview).mkString.contains("Wallet change"))
+      assert(!f.worker.submit(buy, "XMR"))
+      assertEquals(f.posts.get(), 0)
+      assertEquals(f.loads.get(), 1)
+      paused.set(false)
+      f.ready()
+    finally f.close()
+  }
+
+  test("a durable pause which wins before the gate prevents reservation and posting") {
+    val root = Files.createTempDirectory("desk-worker-account-")
+    val owner = "0x" + "2" * 40
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val writes = new AtomicInteger()
+    val f = new Fixture(
+      beforeReplace = () => { writes.incrementAndGet(); () },
+      orderPermission = run => {
+        entered.countDown()
+        release.await()
+        AccountGate.withOrder(root, "mainnet", owner)(run())
+      },
+      accountPaused = () => AccountGate.paused(root, "mainnet", owner)
+    )
+    try
+      f.ready()
+      assert(f.worker.submit(buy, "XMR"))
+      assert(entered.await(3, TimeUnit.SECONDS))
+      Files.writeString(root.resolve("mainnet-" + owner.drop(2) + ".paused"), "paused")
+      release.countDown()
+      waitFor("pause was not shown")(f.worker.view.message.contains("Wallet change"))
+      assertEquals(writes.get(), 0)
+      assertEquals(f.posts.get(), 0)
+      assert(!f.worker.view.pending)
+    finally
+      release.countDown()
+      f.close()
+      val paths = Files.walk(root)
+      try paths.sorted(java.util.Comparator.reverseOrder()).forEach(Files.deleteIfExists(_))
+      finally paths.close()
+  }
+
+  test("the real account lock remains held until the exchange call finishes") {
+    val root = Files.createTempDirectory("desk-worker-account-")
+    val owner = "0x" + "2" * 40
+    val f =
+      new Fixture(orderPermission = run => AccountGate.withOrder(root, "mainnet", owner)(run()))
+    def probe(): Int =
+      val process = new ProcessBuilder(
+        "/usr/bin/python3",
+        "-c",
+        "import fcntl,sys\nf=open(sys.argv[1],'r+')\ntry: fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(73)",
+        root.resolve("mainnet-" + owner.drop(2) + ".lock").toString
+      ).start()
+      try
+        assert(process.waitFor(3, TimeUnit.SECONDS), "lock probe did not exit")
+        process.exitValue()
+      finally if process.isAlive then process.destroyForcibly()
+    try
+      f.ready()
+      f.hold = true
+      assert(f.worker.submit(buy, "XMR"))
+      assert(f.entered.await(3, TimeUnit.SECONDS))
+      assertEquals(f.orderPosts.get(), 1)
+      assertEquals(probe(), 73)
+      f.release.countDown()
+      waitFor("order did not finish")(f.worker.view.message.contains("filled"))
+      waitFor("account lock was not released")(probe() == 0)
+    finally
+      f.close()
+      val paths = Files.walk(root)
+      try paths.sorted(java.util.Comparator.reverseOrder()).forEach(Files.deleteIfExists(_))
+      finally paths.close()
+  }
+
+  test("a wallet change which wins the account lock stops a queued order") {
+    val attempts = new AtomicInteger()
+    val f = new Fixture(orderPermission = _ => {
+      attempts.incrementAndGet()
+      throw new IllegalArgumentException("paused")
+    })
+    try
+      f.ready()
+      assert(f.worker.submit(buy, "XMR"))
+      waitFor("account lock was not checked")(attempts.get() == 1)
+      waitFor("pause was not shown")(f.worker.view.message.contains("Wallet change"))
+      assertEquals(f.posts.get(), 0)
+      assert(!f.worker.view.pending)
+    finally f.close()
+  }
 
   test("view mode has previews without protected key access or submissions") {
     val f = new Fixture(enabled = false)
