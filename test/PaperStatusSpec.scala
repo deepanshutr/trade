@@ -28,7 +28,7 @@ class PaperStatusSpec extends munit.FunSuite:
     def blocked(): Unit =
       val view = worker.view
       assert(!view.ready)
-      assertEquals(view.message, "Paper needs fresh depth and available storage")
+      assertEquals(view.block, Some(view.message))
     try
       blocked()
       worker.start()
@@ -99,7 +99,7 @@ class PaperStatusSpec extends munit.FunSuite:
         val pending = worker.view
         assert(pending.pending)
         assert(!pending.ready)
-        assertEquals(pending.message, "Paper order pending")
+        assertEquals(pending.message, "PAPER queued 0s | XMR")
         assertEquals(pending.outcome, None)
       }
       waitFor(!worker.view.pending)
@@ -109,10 +109,8 @@ class PaperStatusSpec extends munit.FunSuite:
         val view = worker.view
         assertEquals(view.ready, ready)
         assert(!view.pending)
-        assertEquals(
-          view.message,
-          if ready then "Paper ready" else "Paper needs fresh depth and available storage"
-        )
+        if ready then assertEquals(view.message, "Paper ready")
+        else assertEquals(view.block, Some(view.message))
         assertEquals(view.outcome, result)
       completed(true)
       clock.addAndGet(1001)

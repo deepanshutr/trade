@@ -27,9 +27,9 @@ class CompactWorkspaceSpec extends munit.FunSuite:
     val frame = Workspace.draw(market, view, PanelView(), 100, 30, now, ZoneOffset.UTC, Style.mono)
     assert(frame.lines.exists(_.contains("Details")))
     assert(frame.lines.exists(_.contains("Mute")))
-    val target = frame.buttons.find(_.action == DeskAction.Target(Side.Buy)).get
+    val target = frame.disabledButtons.find(_.action == DeskAction.Target(Side.Buy)).get
     assertEquals(target.y, 24)
-    assert(frame.lines(24).contains("Trade buttons open a review"))
+    assert(frame.lines(24).contains("( ) unavailable. Select one for the reason"))
     assert(!frame.lines.exists(_.contains("tokens")))
   }
 

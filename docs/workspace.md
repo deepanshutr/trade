@@ -64,6 +64,29 @@ price, while known deeper levels inside the limit remain eligible. A better quot
 alone does not invent depth. Order results appear beside the controls and in
 Details under Answers.
 
+Choosing a paper order checks its estimated fill against the saved balance,
+fees and any held market before opening the review. A balance refusal explains
+how to reduce the requested exposure. Orders that reduce an existing position
+remain eligible. Available depth and balance are checked again when sending.
+An opposite order can pass through zero and open a position in the other
+direction. It is not an exact Close control.
+
+Pending paper orders show whether they are queued, being checked or being saved,
+with elapsed seconds beside the position. Controls in parentheses are
+unavailable. Selecting one explains the reason. After a review expires, Enter
+opens a fresh review. Sending still requires another deliberate Enter or click.
+Repeated results remain separate messages and increment the visible action
+number. With a result visible, `h Details` opens Answers directly. If every
+preset exceeds a flat account's balance, lower the configured order sizes and
+restart. If that balance is exhausted, an unused `--state` directory starts a
+separate paper account and leaves the existing account intact.
+
+Message history saves in the background. During a slow save, the screen and
+keyboard remain available and the footer shows the elapsed saving time. A
+history-saving error stays visible alongside the trade result. The confirmed
+paper account is saved separately. Normal shutdown waits for the final accepted
+message snapshot to finish saving.
+
 The text assistant uses the existing Codex sign-in. It receives public market
 measurements, the selected question and a fixed set of public news sources.
 It has no trading, account, file or shell tools. It cannot accept an order or

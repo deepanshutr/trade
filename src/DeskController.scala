@@ -9,12 +9,15 @@ final class DeskController(
     switchMode: String => Either[String, String],
     persist: Vector[DeskMessage] => Unit = _ => (),
     mute: Boolean => Unit = _ => ()
-):
+) extends AutoCloseable:
   private var current = initial
   private var shown = Option.empty[WorkspaceFrame]
   private var pressed = Option.empty[(WorkspaceFrame, DeskButton)]
   private var serial = initial.messages.map(_.id).maxOption.getOrElse(0L)
   private var storageFailed = false
+  private var messagesToSave = Option.empty[Vector[DeskMessage]]
+  private var stopping = false
+  private var historyThread = Option.empty[Thread]
   def panel: PanelView = synchronized(current)
   private def sameControl(
       before: WorkspaceFrame,
@@ -22,7 +25,10 @@ final class DeskController(
       after: WorkspaceFrame
   ): Boolean =
     before.cols == after.cols && before.rows == after.rows && before.coin == after.coin &&
-      before.mode == after.mode && before.review == after.review && after.buttons.contains(button)
+      before.mode == after.mode && before.review == after.review &&
+      before.buttons.contains(button) == after.buttons.contains(button) && after.controls.contains(
+        button
+      )
   def publish(frame: WorkspaceFrame): Unit = synchronized {
     pressed = pressed.filter((before, button) => sameControl(before, button, frame))
     shown = Some(frame)
@@ -48,20 +54,59 @@ final class DeskController(
       current = current.copy(soundStatus = sound, newsStatus = news, newsDetails = details)
     }
   private def saveMessages(): Unit =
-    if !storageFailed then
-      try persist(current.messages)
-      catch
-        case _: Exception =>
+    if !storageFailed && !stopping then
+      messagesToSave = Some(current.messages)
+      current = current.copy(historySavingAt = current.historySavingAt.orElse(Some(wall())))
+      notifyAll()
+
+  def start(): Unit = synchronized {
+    if historyThread.isEmpty && !stopping then
+      val thread = new Thread(() => writeMessages(), "message-history")
+      thread.setDaemon(true)
+      historyThread = Some(thread)
+      thread.start()
+  }
+
+  private def writeMessages(): Unit =
+    try
+      var done = false
+      while !done do
+        val next = synchronized {
+          while messagesToSave.isEmpty && !stopping && !storageFailed do wait()
+          val value = messagesToSave
+          messagesToSave = None
+          value
+        }
+        next match
+          case None           => done = true
+          case Some(messages) =>
+            persist(messages)
+            synchronized {
+              if messagesToSave.isEmpty then current = current.copy(historySavingAt = None)
+            }
+    catch
+      case _: Exception =>
+        synchronized {
           storageFailed = true
+          messagesToSave = None
           serial += 1
-          current = current.copy(messages =
-            (current.messages :+ DeskMessage(
-              serial,
-              wall(),
-              "storage",
-              "Message history could not be saved. This session remains visible."
-            )).takeRight(300)
+          val reason = "Message history save failed. Trade results remain visible for this session"
+          current = current.copy(
+            historySavingAt = None,
+            historyFailure = Some(reason),
+            messages =
+              (current.messages :+ DeskMessage(serial, wall(), "storage", reason)).takeRight(300)
           )
+        }
+
+  def close(): Unit =
+    start()
+    val thread = synchronized {
+      stopping = true
+      notifyAll()
+      historyThread
+    }
+    thread.filterNot(_ == Thread.currentThread()).foreach(_.join())
   def addMessage(kind: String, text: String): Unit = synchronized {
     serial += 1
     current = current.copy(
@@ -69,7 +114,9 @@ final class DeskController(
         .takeRight(300),
       scroll = if current.detailPage == DetailPage.Answers then 0 else current.scroll,
       actionNotice = if kind == "order" || kind == "mode" then Some(Workspace.safeText(text))
-      else current.actionNotice
+      else current.actionNotice,
+      actionNumber = if kind == "order" || kind == "mode" then current.actionNumber + 1
+      else current.actionNumber
     )
     saveMessages()
   }
@@ -89,38 +136,55 @@ final class DeskController(
     )
     def visible(action: DeskAction): Boolean =
       available.exists(_.buttons.exists(_.action == action))
+    def refuse(): Unit =
+      val reason = if view.pending then "Order pending. Wait for its result before another order"
+      else if current.mode == "VIEW" then "Select Paper or Live before reviewing a trade"
+      else
+        view.block.getOrElse(if !view.ready then view.message
+        else "Review the order again before Send")
+      addMessage("order", "Not sent: " + reason)
+    def prepare(intent: OrderIntent): Unit =
+      preview(intent) match
+        case Right(plan) if plan.coin == snapshot.coin =>
+          val at = wall()
+          current = current.copy(
+            review = Some(
+              OrderReview(
+                intent,
+                plan,
+                at,
+                Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
+                view.leverage,
+                view.marginMode
+              )
+            ),
+            modeReview = None,
+            actionNotice = None
+          )
+          shown = None
+        case Left(reason) =>
+          current = current.copy(review = None)
+          addMessage("order", reason)
+          shown = None
+        case _ => ()
     def act(action: DeskAction): Unit =
-      if visible(action) then
+      if current.input.isEmpty && available.exists(_.disabledButtons.exists(_.action == action))
+      then refuse()
+      else if visible(action) then
         action match
           case DeskAction.Prepare(intent)
               if current.input.isEmpty && current.review.isEmpty && view.ready && !view.pending =>
-            preview(intent) match
-              case Right(plan) if plan.coin == snapshot.coin =>
-                val at = wall()
-                current = current.copy(
-                  review = Some(
-                    OrderReview(
-                      intent,
-                      plan,
-                      at,
-                      Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
-                      view.leverage,
-                      view.marginMode
-                    )
-                  ),
-                  modeReview = None,
-                  actionNotice = None
-                )
-                shown = None
-              case Left(reason) => addMessage("order", reason)
-              case _            => ()
+            prepare(intent)
+          case DeskAction.Refresh if current.input.isEmpty && view.ready && !view.pending =>
+            current.review.foreach(review => prepare(review.intent))
           case DeskAction.Submit if current.input.isEmpty && view.ready && !view.pending =>
-            current.review
+            val valid = current.review
               .filter(r =>
                 r.createdAt <= wall() && wall() < r.expiresAt && available
                   .exists(f => f.completeReview && f.review.contains(r))
               )
-              .foreach { review =>
+            valid match
+              case Some(review) =>
                 shown = None
                 current = current.copy(review = None, target = None)
                 if !submit(review) then
@@ -128,15 +192,19 @@ final class DeskController(
                     "order",
                     "Price, account or readiness changed. Review the order again."
                   )
-              }
+              case None => addMessage("order", "Review expired. Press Enter to review again")
           case DeskAction.Target(side) if current.input.isEmpty && !view.pending =>
             val selected = for
               rules <- view.rules
               price <- view.reference(side)
               if Trading.validPrice(price, rules)
             yield (side, price)
-            current = current.copy(target = selected, review = None, actionNotice = None)
-            shown = None
+            selected match
+              case Some(target) =>
+                current = current.copy(target = Some(target), review = None, actionNotice = None)
+                shown = None
+              case None =>
+                addMessage("order", view.block.getOrElse("Waiting for a current market quote"))
           case DeskAction.Cancel =>
             current = current.copy(
               review = None,
@@ -162,7 +230,9 @@ final class DeskController(
             current = current.copy(
               details = !current.details,
               input = None,
-              detailPage = DetailPage.Method,
+              detailPage = if current.actionNotice.nonEmpty || current.historyFailure.nonEmpty then
+                DetailPage.Answers
+              else DetailPage.Method,
               scroll = 0
             )
             shown = None
@@ -211,6 +281,9 @@ final class DeskController(
                 current = current.copy(modeReview = None)
                 addMessage("mode", reason)
             shown = None
+          case DeskAction.Prepare(_) | DeskAction.Submit | DeskAction.Refresh |
+              DeskAction.Target(_) =>
+            refuse()
           case _ => ()
     def sendQuestion(): Unit =
       current.input.map(_.trim).filter(_.nonEmpty).foreach { question =>
@@ -252,7 +325,10 @@ final class DeskController(
           act(DeskAction.Target(side))
           true
         case Command.SubmitTarget =>
-          if current.review.nonEmpty then act(DeskAction.Submit)
+          if current.review.nonEmpty then
+            if available.exists(_.controls.exists(_.action == DeskAction.Refresh)) then
+              act(DeskAction.Refresh)
+            else act(DeskAction.Submit)
           else if current.modeReview.nonEmpty then
             act(DeskAction.ConfirmMode(current.modeReview.get))
           else
@@ -312,7 +388,7 @@ final class DeskController(
         pressed = if button != 0 then None
         else
           available.flatMap { f =>
-            f.buttons.find(b => b.y == y && x >= b.x && x < b.x + b.width).map(b => (f, b))
+            f.controls.find(b => b.y == y && x >= b.x && x < b.x + b.width).map(b => (f, b))
           }
         true
       case Command.Pointer(x, y, 0) =>

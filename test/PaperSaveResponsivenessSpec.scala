@@ -168,8 +168,8 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
       assert(saving.await(3, TimeUnit.SECONDS), "worker never reached the synthetic save")
       readers.foreach(_.start())
       assert(readersStarted.await(1, TimeUnit.SECONDS), "synthetic readers did not start")
-      val sendReturned = sent.await(500, TimeUnit.MILLISECONDS)
-      val readsReturned = viewed.await(500, TimeUnit.MILLISECONDS)
+      val sendReturned = sent.await(250, TimeUnit.MILLISECONDS)
+      val readsReturned = viewed.await(250, TimeUnit.MILLISECONDS)
       assert(
         sendReturned && readsReturned,
         s"Send returned=$sendReturned, readers remaining=${viewed.getCount}. ${trace.toString}"
@@ -178,13 +178,14 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
       assert(shown.get().pending)
       assertEquals(shown.get().position, Some(BigDecimal(0)))
       assert(label.get().startsWith("Cash $10000"))
-      assert(drawn.get().lines.map(Chart.plain).mkString("\n").contains("Paper order pending"))
+      assert(drawn.get().lines.map(Chart.plain).mkString("\n").contains("PAPER saving 0s | XMR"))
       assertEquals(saved.get(), null)
       release.countDown()
       val completed = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
       while worker.view.pending && System.nanoTime() < completed do Thread.sleep(2)
       assert(!worker.view.pending)
       assertEquals(worker.view.position, Some(BigDecimal(5)))
+      println("Held paper save: " + trace.toString)
     finally
       release.countDown()
       sender.foreach(_.join(1000L))

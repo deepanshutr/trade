@@ -92,7 +92,7 @@ def idle_matches(frame, contract, coin, midpoint):
             return False
         cols = len(frame["lines"][0])
         divider = min(cols * 3 // 5, cols - 47)
-        return frame["lines"][-6][divider:] == "|" + "Trade buttons open a review".ljust(cols - divider - 1)
+        return frame["lines"][-6][divider:] == "|" + "( ) unavailable. Select one for the reason".ljust(cols - divider - 1)
     controls = {
         "original": "Target 9 buy 0 sell | arrows set price enter sends escape cancels",
         "contextual": "Target 9 buy 0 sell | up/down zoom left/right history m market c chart q quit",

@@ -224,7 +224,7 @@ object Trading:
         else plan.limit <= q.price && q.price <= currentQuote
       )
       (filled, value) = walk(eligible, plan.quantity)
-      _ <- check(filled > zero, "Paper no fill: no current depth at the reviewed limit")
+      _ <- check(filled > zero, "Paper no fill: no depth inside reviewed limit")
       average = BigDecimal(value.bigDecimal.divide(filled.bigDecimal, averageContext))
     yield plan.copy(
       estimatedQuantity = filled,

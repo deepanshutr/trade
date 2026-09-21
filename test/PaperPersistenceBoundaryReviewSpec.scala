@@ -106,7 +106,7 @@ class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
       thread.setDaemon(true)
       readers :+= thread
       thread.start()
-      assert(done.await(500, TimeUnit.MILLISECONDS), label + " blocked behind persistence")
+      assert(done.await(100, TimeUnit.MILLISECONDS), label + " blocked behind persistence")
       result.get() match
         case Right(value) => value
         case Left(error)  => throw error
@@ -136,8 +136,10 @@ class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
       f.open()
       assert(f.router.submitReviewed(f.review()))
       assert(entered.await(3, TimeUnit.SECONDS))
+      f.clock.addAndGet(5000L)
       val pending = f.quick("view")(f.router.view)
       assert(pending.pending)
+      assertEquals(pending.message, "PAPER saving 5s | XMR")
       assertEquals(pending.position, Some(BigDecimal(0)))
       assertEquals(pending.outcome, None)
       assert(f.quick("account label")(f.router.accountLabel).startsWith("Cash $10000"))
