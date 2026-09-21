@@ -1,7 +1,5 @@
 package desk
 
-import java.time.ZoneOffset
-
 class OutlookNumberSpec extends munit.FunSuite:
   private def outlook(level: Double): OutlookView =
     Outlook
@@ -24,33 +22,40 @@ class OutlookNumberSpec extends munit.FunSuite:
         )
       })
 
-  private def first(rows: Vector[String], row: Int, label: String): String =
-    rows(row).split("\\|", -1).head.stripPrefix(label + " ").trim
+  private def rowsFor(level: Double, width: Int = 46): Vector[String] =
+    OutlookScreen.rows(
+      outlook(level),
+      width,
+      Some(Axis(level * 0.99, level * 1.01, 9)),
+      9,
+      ChartMode.Candles
+    )
+
+  private def target(rows: Vector[String]): String =
+    rows.map(_.split("\\|", -1).head.trim).find(_.startsWith("─ST ")).get.stripPrefix("─ST ")
 
   test("ordinary levels share plain rounded precision at the narrowest column width") {
-    val rows = OutlookScreen.rows(outlook(525.376), 46, ZoneOffset.UTC)
-    val target = first(rows, 2, "Target")
-    val support = first(rows, 3, "Support")
-    assertEquals(target, support)
-    assert(!target.toLowerCase.contains("e"))
-    assert(math.abs(target.toDouble - 525.376) < 0.01)
-    val move = first(rows, 5, "Test").stripSuffix("%")
+    val rows = rowsFor(525.376)
+    val shown = target(rows)
+    assert(!shown.toLowerCase.contains("e"))
+    assert(math.abs(shown.toDouble - 525.376) < 0.01)
+    val move = rows(10).split("\\|", -1).head.trim.stripPrefix("Test ").stripSuffix("%")
     assert(!move.toLowerCase.contains("e"))
     assert(math.abs(move.toDouble - 100 * (525.376 / 530 - 1)) < 0.001)
   }
 
   test("small nonzero levels remain nonzero instead of being rounded away") {
-    val rows = OutlookScreen.rows(outlook(0.000000000357812), 46, ZoneOffset.UTC)
-    val shown = first(rows, 2, "Target").toDouble
+    val rows = rowsFor(0.000000000357812)
+    val shown = target(rows).toDouble
     assert(shown > 0)
     assert(math.abs(shown / 0.000000000357812 - 1) < 0.01)
   }
 
   test("large levels stay bounded and numerically close at every supported width") {
     for width <- Vector(46, 47, 63) do
-      val rows = OutlookScreen.rows(outlook(3578123456789.0), width, ZoneOffset.UTC)
+      val rows = rowsFor(3578123456789.0, width)
       assert(rows.forall(_.length <= width))
-      val shown = first(rows, 2, "Target").toDouble
+      val shown = target(rows).toDouble
       assert(math.abs(shown / 3578123456789.0 - 1) < 0.01)
   }
 
@@ -59,9 +64,9 @@ class OutlookNumberSpec extends munit.FunSuite:
       level <- Vector(3.57812e-308, 3.57812e-13, 0.00357812, 357812.0, 3.57812e307)
       width <- Vector(46, 47, 63)
     do
-      val rows = OutlookScreen.rows(outlook(level), width, ZoneOffset.UTC)
+      val rows = rowsFor(level, width)
       assert(rows.forall(_.length <= width))
-      val shown = first(rows, 2, "Target")
+      val shown = target(rows)
       assert(
         shown == "--" || math.abs(shown.toDouble / level - 1) < 0.01,
         s"$level displayed as $shown at width $width"

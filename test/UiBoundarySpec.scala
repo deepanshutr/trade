@@ -176,7 +176,7 @@ class UiBoundarySpec extends munit.FunSuite:
       assert(frame.lines.forall(_.length == cols))
   }
 
-  test("the PAXG footer identifies the gold token without shortening the correlation count") {
+  test("the PAXG chart label identifies the gold token without shortening the correlation count") {
     val candles = (0 to 15).toVector.map { i =>
       val price = (i + 10).toDouble
       Candle(now - (16L - i) * 60000L, price, price + 1, price - 1, price, 1)
@@ -186,7 +186,7 @@ class UiBoundarySpec extends munit.FunSuite:
       refs = snapshot.refs.updated("PAXG", Ref.empty.copy(candles = Map("1m" -> candles)))
     )
     val frame = Workspace.draw(data, view, PanelView(), 100, 30, now, zone, Style.mono)
-    assert(frame.lines.last.contains("PAXG (token tied to gold)"))
+    assert(frame.lines.exists(_.startsWith("PAXG (token tied to gold)")))
     val tape = frame.lines.indexWhere(_.startsWith("TAPE"))
     assert(tape >= 0)
     assertEquals(frame.lines(tape).take(53).takeRight(20), "gold 15m +1.00 15/15")
@@ -200,7 +200,10 @@ class UiBoundarySpec extends munit.FunSuite:
       assert(row >= 0, coin)
       assertEquals(
         lines.slice(row, row + Layout.referenceRows).map(_.take(Layout.leftW)),
-        Vector(Chart.fit(coin, Layout.leftW)).padTo(Layout.referenceRows, " " * Layout.leftW)
+        Vector(
+          Chart.fit(if coin == "PAXG" then "PAXG (token tied to gold)" else coin, Layout.leftW)
+        )
+          .padTo(Layout.referenceRows, " " * Layout.leftW)
       )
   }
 

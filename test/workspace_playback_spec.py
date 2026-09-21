@@ -25,7 +25,7 @@ class WorkspaceCaptureSpec(unittest.TestCase):
     def frame(self):
         lines = [" " * 53 + "|" + " " * 46 for _ in range(30)]
         lines[0] = "connection active 0.3s  XMR  mid 522.26".ljust(53) + "|" + "VIEW XMR".ljust(46)
-        lines[8] = " " * 53 + "|" + "Target buy 522.28 Up/Down".ljust(46)
+        lines[24] = " " * 53 + "|" + "Target buy 522.28 Up/Down".ljust(46)
         return {"lines": lines}
 
     def test_workspace_pins_market_and_target_at_actual_panel_rows(self):
@@ -34,7 +34,7 @@ class WorkspaceCaptureSpec(unittest.TestCase):
         self.assertTrue(playback.target_matches(frame, "workspace", "XMR", "buy", "522.28", "522.26"))
         self.assertFalse(playback.target_matches(frame, "workspace", "XMR", "sell", "522.28", "522.26"))
         self.assertFalse(playback.market_matches(frame, "workspace", "XMR", "522.260"))
-        frame["lines"][9], frame["lines"][8] = frame["lines"][8], frame["lines"][9]
+        frame["lines"][25], frame["lines"][24] = frame["lines"][24], frame["lines"][25]
         self.assertFalse(playback.target_matches(frame, "workspace", "XMR", "buy", "522.28", "522.26"))
 
 

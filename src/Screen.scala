@@ -3,6 +3,7 @@ package desk
 import scala.math.floor
 
 object Screen:
+  final case class MarketFrame(lines: Vector[String], axis: Option[Axis], priceRows: Int)
   val esc: String = 27.toChar.toString
   val bold: String = esc + "[1m"
   val dim: String = esc + "[2m"
@@ -78,53 +79,69 @@ object Screen:
                else Layout.minCols) || rows < Layout.minRows
     then Vector(s"need ${Layout.minCols}x${Layout.minRows}, have ${cols}x$rows")
     else
-      val references = s.referenceCoins.distinct.filterNot(_ == s.coin)
-      val priceRows = Layout.priceRows(
-        rows,
-        references.size
-      ) + Layout.gaugeRows + Layout.footerRows - reservedRows
-      require(priceRows >= 3)
-      val cells = Layout.cells(cols)
-      val count = Layout.plotColumns(cols, s.chartMode)
-      val columns = Chart.columns(s, count, now)
-      val axis = Chart.axis(columns, s.book, priceRows)
-      val mid = s.book.flatMap(midOf)
-      val midRow = for a <- axis; m <- mid yield a.row(m.toDouble)
-      val left = Chart.ladderRows(s.book, s.coarse, axis, priceRows, midRow, style)
-      val chart = axis.fold(Vector.fill(priceRows)(" " * cells))(a =>
-        Chart.plot(columns, a, cells, s.chartMode)
-      )
-      val scale = Chart.scaleRows(axis, priceRows, midRow, mid)
-      val priceLines = (0 until priceRows).toVector.map(r => left(r) + chart(r) + scale(r))
-      val (volume, maximum) = Chart.volumeRows(columns, Style.mono, s.chartMode, cells)
-      val volumeLine = Chart.rjust("volume", Layout.leftW - 1) + " " + volume.head +
-        Chart.rjust("v " + short(maximum), Layout.scaleW)
-      val referenceLines = references.flatMap { coin =>
-        val data = s.refs.getOrElse(coin, Ref.empty)
-        val values = Chart.referenceColumns(data, count, s, now)
-        val ax = Chart.axis(values, None, Layout.referenceRows)
-        val ink = ax.fold(Vector.fill(Layout.referenceRows)(" " * cells))(a =>
-          Chart.plot(values, a, cells, s.chartMode)
-        )
-        val labels = if marketOnly then
-          Vector(Chart.fit(coin, Layout.leftW)).padTo(Layout.referenceRows, " " * Layout.leftW)
-        else Gauges.correlationRows(s, coin)
-        val prices = Chart.scaleRows(ax, Layout.referenceRows, None, None)
-        (0 until Layout.referenceRows).map(i => labels(i) + ink(i) + prices(i))
-      }
-      val (first, z) = Chart.window(s, count, now)
-      val unit = if s.chartMode == ChartMode.Candles then "/candle" else "/col"
-      val mode = if s.chartMode == ChartMode.Candles then "candles" else "line"
-      val caption = "c " + mode + " " + State.zoomLabel(z) + unit +
-        (if s.offsetSec > 0 then " history" else "")
-      val axisLine = Chart.rjust(caption, Layout.leftW - 1) + " " +
-        Chart.axisRow(first, z, count, zone, cells) + " " * Layout.scaleW
+      val market = renderMarket(s, cols, rows, now, zone, style, marketOnly, reservedRows)
       val controls = footer
         .take(Layout.footerRows)
         .padTo(Layout.footerRows, "")
         .map(Chart.fit(_, cols))
-      val market =
-        (stats(s, now, cols) +: priceLines) ++ Vector(volumeLine) ++ referenceLines ++ Vector(
-          axisLine
-        )
-      if marketOnly then market else market ++ Gauges.rows(s, now, cols, style) ++ controls
+      if marketOnly then market.lines
+      else market.lines ++ Gauges.rows(s, now, cols, style) ++ controls
+
+  def renderMarket(
+      s: Snapshot,
+      cols: Int,
+      rows: Int,
+      now: Long,
+      zone: java.time.ZoneId,
+      style: Style,
+      marketOnly: Boolean,
+      reservedRows: Int,
+      maxPriceRows: Int = Int.MaxValue
+  ): MarketFrame =
+    val references = s.referenceCoins.distinct.filterNot(_ == s.coin)
+    val priceRows = (Layout.priceRows(
+      rows,
+      references.size
+    ) + Layout.gaugeRows + Layout.footerRows - reservedRows).min(maxPriceRows)
+    require(priceRows >= 3)
+    val cells = Layout.cells(cols)
+    val count = Layout.plotColumns(cols, s.chartMode)
+    val columns = Chart.columns(s, count, now)
+    val axis = Chart.axis(columns, s.book, priceRows)
+    val mid = s.book.flatMap(midOf)
+    val midRow = for a <- axis; m <- mid yield a.row(m.toDouble)
+    val left = Chart.ladderRows(s.book, s.coarse, axis, priceRows, midRow, style)
+    val chart = axis.fold(Vector.fill(priceRows)(" " * cells))(a =>
+      Chart.plot(columns, a, cells, s.chartMode)
+    )
+    val scale = Chart.scaleRows(axis, priceRows, midRow, mid)
+    val priceLines = (0 until priceRows).toVector.map(r => left(r) + chart(r) + scale(r))
+    val (volume, maximum) = Chart.volumeRows(columns, Style.mono, s.chartMode, cells)
+    val volumeLine = Chart.rjust("volume", Layout.leftW - 1) + " " + volume.head +
+      Chart.rjust("v " + short(maximum), Layout.scaleW)
+    val referenceLines = references.flatMap { coin =>
+      val data = s.refs.getOrElse(coin, Ref.empty)
+      val values = Chart.referenceColumns(data, count, s, now)
+      val ax = Chart.axis(values, None, Layout.referenceRows)
+      val ink = ax.fold(Vector.fill(Layout.referenceRows)(" " * cells))(a =>
+        Chart.plot(values, a, cells, s.chartMode)
+      )
+      val labels = if marketOnly then
+        val label = if coin == "PAXG" then "PAXG (token tied to gold)" else coin
+        Vector(Chart.fit(label, Layout.leftW)).padTo(Layout.referenceRows, " " * Layout.leftW)
+      else Gauges.correlationRows(s, coin)
+      val prices = Chart.scaleRows(ax, Layout.referenceRows, None, None)
+      (0 until Layout.referenceRows).map(i => labels(i) + ink(i) + prices(i))
+    }
+    val (first, z) = Chart.window(s, count, now)
+    val unit = if s.chartMode == ChartMode.Candles then "/candle" else "/col"
+    val mode = if s.chartMode == ChartMode.Candles then "candles" else "line"
+    val caption = "c " + mode + " " + State.zoomLabel(z) + unit +
+      (if s.offsetSec > 0 then " history" else "")
+    val axisLine = Chart.rjust(caption, Layout.leftW - 1) + " " +
+      Chart.axisRow(first, z, count, zone, cells) + " " * Layout.scaleW
+    val market =
+      (stats(s, now, cols) +: priceLines) ++ Vector(volumeLine) ++ referenceLines ++ Vector(
+        axisLine
+      )
+    MarketFrame(market, axis, priceRows)

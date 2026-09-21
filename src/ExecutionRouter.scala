@@ -36,9 +36,9 @@ final class ExecutionRouter(
     }
   def mode: String = synchronized(selected)
   def start(): Unit = synchronized {
-    live.start()
     if selected == "PAPER" then
       val _ = paperWorker()
+    else live.start()
   }
   def observe(event: Event): Unit = synchronized {
     event match
@@ -72,6 +72,8 @@ final class ExecutionRouter(
     else if next == "PAPER" then
       Try {
         val _ = paperWorker()
+        live.close()
+        liveEnabled = false
         selected = "PAPER"
         accountLabel
       }.toEither.left.map(_ => "Paper storage cannot be opened. Its saved balance was preserved")
