@@ -128,6 +128,8 @@ object Keys:
 
   private def plain(byte: Int): Option[Command] = byte match
     case 97                      => Some(Command.Ask)
+    case 104                     => Some(Command.Details)
+    case 118                     => Some(Command.ToggleMute)
     case 112                     => Some(Command.Mode("PAPER"))
     case 108                     => Some(Command.Mode("LIVE"))
     case 121                     => Some(Command.Feedback(true))

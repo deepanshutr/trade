@@ -7,7 +7,8 @@ final class DeskController(
     submit: OrderReview => Boolean,
     ask: String => Boolean,
     switchMode: String => Either[String, String],
-    persist: Vector[DeskMessage] => Unit = _ => ()
+    persist: Vector[DeskMessage] => Unit = _ => (),
+    mute: Boolean => Unit = _ => ()
 ):
   private var current = initial
   private var shown = Option.empty[WorkspaceFrame]
@@ -28,13 +29,24 @@ final class DeskController(
   }
   def invalidate(): Unit = synchronized { shown = None }
   def resetMarket(): Unit = synchronized {
-    current = current.copy(review = None, target = None, modeReview = None)
+    current =
+      current.copy(review = None, target = None, modeReview = None, outlook = Outlook.empty(""))
     shown = None
     pressed = None
   }
   def status(data: String, analysis: String, account: String): Unit = synchronized {
     current = current.copy(dataStatus = data, analysisStatus = analysis, account = account)
   }
+  def outlook(value: OutlookView): Unit = synchronized {
+    current = current.copy(outlook = value)
+  }
+  def announcement(value: Announcement): Unit = synchronized {
+    current = current.copy(alerts = (current.alerts :+ value).takeRight(30))
+  }
+  def alertStatus(sound: String, news: String, details: String = "News waiting"): Unit =
+    synchronized {
+      current = current.copy(soundStatus = sound, newsStatus = news, newsDetails = details)
+    }
   private def saveMessages(): Unit =
     if !storageFailed then
       try persist(current.messages)
@@ -55,7 +67,9 @@ final class DeskController(
     current = current.copy(
       messages = (current.messages :+ DeskMessage(serial, wall(), kind, Workspace.safeText(text)))
         .takeRight(300),
-      scroll = 0
+      scroll = if current.detailPage == DetailPage.Answers then 0 else current.scroll,
+      actionNotice = if kind == "order" || kind == "mode" then Some(Workspace.safeText(text))
+      else current.actionNotice
     )
     saveMessages()
   }
@@ -94,7 +108,8 @@ final class DeskController(
                       view.marginMode
                     )
                   ),
-                  modeReview = None
+                  modeReview = None,
+                  actionNotice = None
                 )
                 shown = None
               case Left(reason) => addMessage("order", reason)
@@ -120,17 +135,47 @@ final class DeskController(
               price <- view.reference(side)
               if Trading.validPrice(price, rules)
             yield (side, price)
-            current = current.copy(target = selected, review = None)
+            current = current.copy(target = selected, review = None, actionNotice = None)
             shown = None
           case DeskAction.Cancel =>
-            current = current.copy(review = None, target = None, input = None, modeReview = None)
+            current = current.copy(
+              review = None,
+              target = None,
+              input = None,
+              modeReview = None,
+              details = false
+            )
             shown = None
-          case DeskAction.Ask =>
-            current =
-              current.copy(input = Some(""), review = None, target = None, modeReview = None)
+          case DeskAction.Ask if current.input.isEmpty =>
+            current = current.copy(
+              input = Some(""),
+              review = None,
+              target = None,
+              modeReview = None,
+              details = true,
+              detailPage = DetailPage.Answers,
+              scroll = 0
+            )
             shown = None
-          case DeskAction.SendQuestion                    => sendQuestion()
+          case DeskAction.SendQuestion => sendQuestion()
+          case DeskAction.Details      =>
+            current = current.copy(
+              details = !current.details,
+              input = None,
+              detailPage = DetailPage.Method,
+              scroll = 0
+            )
+            shown = None
+          case DeskAction.Page(page) if current.input.isEmpty =>
+            current = current.copy(details = true, detailPage = page, scroll = 0)
+            shown = None
+          case DeskAction.ToggleMute =>
+            val next = !current.muted
+            mute(next)
+            current = current.copy(muted = next, soundStatus = if next then "Muted" else "Sound on")
+            shown = None
           case DeskAction.Status if current.input.isEmpty =>
+            current = current.copy(details = true, detailPage = DetailPage.Answers)
             addMessage(
               "data",
               s"${current.mode} ${snapshot.coin}\n${current.account}\n${view.message}\n${current.dataStatus}\n${current.analysisStatus}"
@@ -143,7 +188,10 @@ final class DeskController(
             )
             saveMessages()
           case DeskAction.Scroll(lines) =>
-            current = current.copy(scroll = (current.scroll + lines).max(0).min(100000))
+            val delta = if current.detailPage == DetailPage.Answers then lines else -lines
+            current = current.copy(scroll =
+              (current.scroll + delta).max(0).min(available.fold(0)(_.scrollLimit))
+            )
           case DeskAction.Mode(name)
               if current.input.isEmpty && !view.pending && name != current.mode =>
             current = current.copy(modeReview = Some(name), review = None, target = None)
@@ -213,7 +261,7 @@ final class DeskController(
             )
           true
         case Command.CancelTarget =>
-          current = current.copy(review = None, target = None, modeReview = None)
+          current = current.copy(review = None, target = None, modeReview = None, details = false)
           shown = None
           true
         case Command.ZoomIn | Command.ZoomOut if current.target.nonEmpty =>
@@ -228,6 +276,12 @@ final class DeskController(
           true
         case Command.Ask =>
           act(DeskAction.Ask)
+          true
+        case Command.Details =>
+          act(DeskAction.Details)
+          true
+        case Command.ToggleMute =>
+          act(DeskAction.ToggleMute)
           true
         case Command.Mode(name) =>
           act(DeskAction.Mode(name))

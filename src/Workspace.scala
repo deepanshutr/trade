@@ -3,11 +3,15 @@ package desk
 enum DeskAction:
   case Prepare(intent: OrderIntent)
   case Target(side: Side)
-  case Submit, Cancel, Ask, SendQuestion, Status
+  case Submit, Cancel, Ask, SendQuestion, Status, Details, ToggleMute
   case Feedback(id: Long, accepted: Boolean)
   case Scroll(lines: Int)
   case Mode(name: String)
   case ConfirmMode(name: String)
+  case Page(value: DetailPage)
+
+enum DetailPage:
+  case Method, Sources, Answers
 
 final case class OrderReview(
     intent: OrderIntent,
@@ -36,7 +40,16 @@ final case class PanelView(
     target: Option[(Side, BigDecimal)] = None,
     sizes: TradeSizes = TradeSizes(),
     fee: BigDecimal = BigDecimal("0.0005"),
-    modeReview: Option[String] = None
+    modeReview: Option[String] = None,
+    details: Boolean = false,
+    outlook: OutlookView = Outlook.empty(""),
+    alerts: Vector[Announcement] = Vector.empty,
+    muted: Boolean = false,
+    soundStatus: String = "Sound on",
+    newsStatus: String = "News waiting",
+    newsDetails: String = "News waiting",
+    detailPage: DetailPage = DetailPage.Method,
+    actionNotice: Option[String] = None
 )
 final case class DeskButton(label: String, action: DeskAction, x: Int, y: Int, width: Int)
 final case class WorkspaceFrame(
@@ -47,7 +60,9 @@ final case class WorkspaceFrame(
     rows: Int,
     completeReview: Boolean,
     review: Option[OrderReview] = None,
-    mode: String = "VIEW"
+    mode: String = "VIEW",
+    outlook: Option[OutlookView] = None,
+    scrollLimit: Int = 0
 ):
   def hit(
       x: Int,
@@ -75,6 +90,9 @@ object Workspace:
         case '\u2018' | '\u2019'                                                        => "'"
         case '\u201c' | '\u201d'                                                        => "\""
         case '\u2026'                                                                   => "..."
+        case '\u2191'                                                                   => "↑"
+        case '\u2193'                                                                   => "↓"
+        case '\u2192'                                                                   => "→"
         case c if c == '\n' || (c >= ' ' && c <= '~') => c.toString
         case _                                        => " "
       }
@@ -141,6 +159,7 @@ object Workspace:
         reservedRows = 12
       ) ++ indicators
       val right = Array.fill(rows)("")
+      var scrollLimit = 0
       val buttons = Vector.newBuilder[DeskButton]
       def line(row: Int, text: String): Unit =
         if row >= 0 && row < rows then right(row) = safeText(text)
@@ -250,47 +269,126 @@ object Workspace:
           }
           if panel.target.isEmpty then line(8, "Trade buttons open a review")
           if panel.mode == "PAPER" then line(10, "1x simulation. No funding or liquidation")
+          if panel.target.isEmpty then
+            panel.actionNotice.foreach { text =>
+              val notice = wrap("Action: " + text, rightWidth)
+              notice
+                .take(2)
+                .zipWithIndex
+                .foreach((part, index) =>
+                  line(
+                    9 + index,
+                    if index == 1 && notice.size > 2 then
+                      part.take(rightWidth - 13) + "... h Details"
+                    else part
+                  )
+                )
+            }
+          else
+            panel.actionNotice.foreach { text =>
+              val notice = "! " + safeText(text).replace('\n', ' ')
+              line(
+                10,
+                if notice.length <= rightWidth then notice
+                else notice.take(rightWidth - 13) + "... h Details"
+              )
+            }
         case _ => ()
-      line(11, panel.dataStatus)
-      line(12, panel.analysisStatus)
-      button(13, 0, "a Ask", DeskAction.Ask)
-      button(13, 9, "[ Older", DeskAction.Scroll(5))
-      button(13, 20, "] Newer", DeskAction.Scroll(-5))
-      button(13, 33, "Status", DeskAction.Status, panel.input.isEmpty)
-      val messageRows = rows - 19
-      val messages = panel.messages.flatMap { m =>
-        val time = java.time.Instant.ofEpochMilli(m.at).atZone(zone).toLocalTime.toString.take(8)
-        val label = if m.kind == "analysis" then s"analysis #${m.id}" else m.kind
-        wrap(s"$time $label: ${m.text}", rightWidth).map(text => (Some(m.id), text)) :+ (None, "")
-      }
-      val end = (messages.size - panel.scroll.max(0)).max(0)
-      val visibleMessages = messages.slice((end - messageRows).max(0), end)
-      val visibleIds = visibleMessages.flatMap(_._1).toSet
-      val lastAnalysis =
-        panel.messages.reverse.find(m => m.kind == "analysis" && visibleIds.contains(m.id))
-      if panel.input.isEmpty && lastAnalysis.nonEmpty then
-        button(14, 0, "y Accept analysis", DeskAction.Feedback(lastAnalysis.get.id, true))
-        button(14, 22, "n Reject analysis", DeskAction.Feedback(lastAnalysis.get.id, false))
-      lastAnalysis.foreach { message =>
-        val feedback =
-          message.feedback.fold("")(accepted => if accepted then " accepted" else " rejected")
-        line(15, s"Feedback for analysis #${message.id}$feedback")
-      }
-      visibleMessages.zipWithIndex
-        .foreach { case ((_, text), i) => line(16 + i, text) }
-      line(rows - 3, "Messages " + end + "/" + messages.size + "  q quit  m market")
+      val outlook = if panel.outlook.coin.isEmpty then Outlook.empty(s.coin)
+      else Outlook.visible(panel.outlook, s, now)
+      if panel.details || panel.input.nonEmpty then
+        line(11, "DETAILS  " + panel.detailPage)
+        button(12, 0, "Method", DeskAction.Page(DetailPage.Method), panel.input.isEmpty)
+        button(12, 9, "Sources", DeskAction.Page(DetailPage.Sources), panel.input.isEmpty)
+        button(12, 19, "Answers", DeskAction.Page(DetailPage.Answers), panel.input.isEmpty)
+        button(13, 0, "Up", DeskAction.Scroll(5))
+        button(13, 5, "Down", DeskAction.Scroll(-5))
+        line(13, right(13).padTo(13, ' ') + "[ ] scroll | Esc close")
+        val alerts = panel.alerts.reverse.zipWithIndex.map { (alert, index) =>
+          val dates =
+            alert.publishedAt.fold("")(t => "\nPublished " + java.time.Instant.ofEpochMilli(t)) +
+              alert.retrievedAt.fold("")(t => "\nRetrieved " + java.time.Instant.ofEpochMilli(t))
+          DeskMessage(
+            -2L - index,
+            alert.at,
+            "alert",
+            alert.text + dates + alert.url.fold("")(u => "\n" + u)
+          )
+        }
+        val history = panel.detailPage match
+          case DetailPage.Method =>
+            Vector(DeskMessage(-1L, now, "method", OutlookScreen.details(outlook)))
+          case DetailPage.Sources =>
+            Vector(DeskMessage(-1L, now, "sources", panel.newsDetails)) ++ alerts
+          case DetailPage.Answers => panel.messages
+        val messages = history.flatMap { m =>
+          val time = java.time.Instant.ofEpochMilli(m.at).atZone(zone).toLocalTime.toString.take(8)
+          val label = if m.kind == "analysis" then s"analysis #${m.id}" else m.kind
+          wrap(s"$time $label: ${m.text}", rightWidth).map(text => (Some(m.id), text)) :+ (None, "")
+        }
+        val firstRow = if panel.detailPage == DetailPage.Answers then 16 else 14
+        val messageRows = rows - 3 - firstRow
+        scrollLimit = (messages.size - messageRows).max(0)
+        val scroll = panel.scroll.max(0).min(scrollLimit)
+        val begin = if panel.detailPage == DetailPage.Answers then
+          (messages.size - scroll - messageRows).max(0)
+        else scroll
+        val visibleMessages = messages.slice(begin, begin + messageRows)
+        val visibleIds = visibleMessages.flatMap(_._1).toSet
+        val lastAnalysis =
+          panel.messages.reverse.find(m => m.kind == "analysis" && visibleIds.contains(m.id))
+        if panel.input.isEmpty && lastAnalysis.nonEmpty then
+          button(14, 0, "y Accept analysis", DeskAction.Feedback(lastAnalysis.get.id, true))
+          button(14, 22, "n Reject analysis", DeskAction.Feedback(lastAnalysis.get.id, false))
+        lastAnalysis.foreach { message =>
+          val feedback =
+            message.feedback.fold("")(accepted => if accepted then " accepted" else " rejected")
+          line(15, s"Feedback for analysis #${message.id}$feedback")
+        }
+        visibleMessages.zipWithIndex.foreach { case ((_, text), i) => line(firstRow + i, text) }
+      else
+        OutlookScreen.rows(outlook, rightWidth, zone).zipWithIndex.foreach { (text, i) =>
+          line(11 + i, text)
+        }
+        line(22, "Past target touches. Test from last close")
+        line(23, "Base all | Match same trend | n samples")
+        val latest = panel.alerts.lastOption
+        val headline = latest.fold("Watching for >5% moves in <1h") { alert =>
+          val seconds =
+            ((BigInt(now) - alert.at).max(BigInt(0)) / 1000).min(BigInt(Long.MaxValue)).toLong
+          val age = if now < alert.at then "Clock changed"
+          else if seconds < 60 then "Just now"
+          else if seconds < 3600 then s"${seconds / 60}m ago"
+          else s"${seconds / 3600}h ago"
+          age + " " + alert.text
+        }
+        wrap(headline, rightWidth).take(2).zipWithIndex.foreach((text, i) => line(24 + i, text))
+        line(rows - 4, panel.newsStatus + " | " + panel.soundStatus)
+      button(rows - 3, 0, "a Ask", DeskAction.Ask)
+      button(rows - 3, 8, if panel.details then "h Close" else "h Details", DeskAction.Details)
+      button(rows - 3, 20, if panel.muted then "v Sound" else "v Mute", DeskAction.ToggleMute)
+      button(rows - 3, 32, "Status", DeskAction.Status, panel.input.isEmpty)
       panel.input match
         case Some(text) =>
           line(rows - 2, "Ask> " + safeText(text).takeRight(rightWidth - 6) + "_")
           button(rows - 1, 0, "Enter Ask", DeskAction.SendQuestion)
           button(rows - 1, 14, "Esc Cancel", DeskAction.Cancel)
         case None =>
-          line(rows - 2, "Assistant explains. Trade buttons submit.")
-          line(rows - 1, "PAXG (token tied to gold)")
+          line(rows - 2, "q quit  m market  c chart")
+          line(
+            rows - 1,
+            if panel.details then "Answers explain. Trade buttons submit."
+            else "PAXG (token tied to gold) | h Details"
+          )
       val lines = market.zipWithIndex.map { (left, i) =>
         val displayed =
           if style == Style.mono then left.replaceAll("\\x1b\\[[0-9;]*m", "") else left
-        displayed + "|" + Chart.fit(right(i), rightWidth)
+        val panelLine = if !panel.details && panel.input.isEmpty && i == 12 then
+          right(i)
+            .replace("↑ UP", style.wrap(style.bid, "↑ UP"))
+            .replace("↓ DOWN", style.wrap(style.ask, "↓ DOWN"))
+        else right(i)
+        displayed + "|" + Chart.fit(panelLine, rightWidth)
       }
       WorkspaceFrame(
         lines,
@@ -300,5 +398,7 @@ object Workspace:
         rows,
         complete,
         panel.review,
-        panel.mode
+        panel.mode,
+        Some(outlook),
+        scrollLimit
       )

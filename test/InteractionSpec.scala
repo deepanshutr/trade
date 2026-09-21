@@ -72,6 +72,14 @@ class InteractionSpec extends munit.FunSuite:
       draw()
     def press(button: DeskButton): Unit = key(Command.PointerPress(button.x, button.y, 0))
     def release(button: DeskButton): Unit = key(Command.Pointer(button.x, button.y, 0))
+    def answers(): WorkspaceFrame =
+      draw()
+      key(Command.Details)
+      val frame = draw()
+      val button = frame.buttons.find(_.action == DeskAction.Page(DetailPage.Answers)).get
+      press(button)
+      release(button)
+      draw()
 
   test("order shortcut only prepares and send requires that exact complete review on screen") {
     val f = new Fixture
@@ -121,7 +129,7 @@ class InteractionSpec extends munit.FunSuite:
   test("feedback belongs to the displayed message even when a reply arrives before a click") {
     val f = new Fixture
     f.controller.addMessage("analysis", "first")
-    val frame = f.draw()
+    val frame = f.answers()
     val accept = frame.buttons.find(_.label.startsWith("y Accept")).get
     val first = f.controller.panel.messages.last.id
     f.key(Command.PointerPress(accept.x, accept.y, 0))
@@ -399,7 +407,7 @@ class InteractionSpec extends munit.FunSuite:
   test("feedback shortcut retains the displayed id while a new response arrives") {
     val f = new Fixture
     f.controller.addMessage("analysis", "first")
-    f.draw()
+    f.answers()
     val first = f.controller.panel.messages.last.id
     f.controller.addMessage("analysis", "second")
     f.feed("n")

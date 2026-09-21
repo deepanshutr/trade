@@ -261,7 +261,8 @@ object OfflinePlayback:
         true,
         config = Some(args(2)),
         analysis = false,
-        stateDirectory = Some(Path.of(args(2)).getParent.resolve("state").toString)
+        stateDirectory = Some(Path.of(args(2)).getParent.resolve("state").toString),
+        audio = "mute"
       ),
       _ => (connector, rest),
       (config, enabled, coin, _) =>

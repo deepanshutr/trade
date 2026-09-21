@@ -11,6 +11,12 @@ Each comparison reports paired candle coverage. Missing, stale or incomplete
 readings stay unavailable. A correlation describes past movement together. It
 does not establish what either market will do next.
 
+The right side shows Long one-day, Mid four-hour and Short one-hour outlooks below
+the trade controls. Historical percentages describe measured target touches, with
+sample counts and unavailable states. The normal view keeps transcripts and logs
+out of the way. See [outlook and announcements](outlook-and-alerts.md) for the exact
+method, source coverage and sound controls.
+
 Click a trade button or press its numbered key to prepare an order. Read the
 quantity, exact limit, value and account settings, then press Enter or click Send.
 Each review expires after 30 seconds. A changed price, position or account setting
@@ -27,8 +33,10 @@ same visible button. Resizing or switching markets invalidates the old controls.
 | Escape | Cancel the current review, target or text entry |
 | p or l | Open a paper or live mode confirmation |
 | a | Ask the text assistant |
+| h | Open or close Details, with Method, Sources and Answers pages |
+| v | Mute or resume new announcements |
 | y or n | Accept or reject the identified visible analysis |
-| [ or ] | Read older or newer messages |
+| [ or ] | Scroll up or down in Details |
 | Status button | Read full account, capture, news and assistant status in messages |
 | m | Change the market |
 | c | Switch between line and candle charts |
@@ -44,7 +52,7 @@ simulation of every live exchange rule. Paper and live accounts stay separate
 when changing modes.
 
 The text assistant uses the existing Codex sign-in. It receives public market
-measurements, the selected question and a small set of official news sources.
+measurements, the selected question and a fixed set of public news sources.
 It has no trading, account, file or shell tools. It cannot accept an order or
 change the trade controls. Accept and reject record feedback for the displayed
 answer and never submit a trade. Numbers and pasted text remain text while the
@@ -58,8 +66,9 @@ entry, exit period, sample count and cost assumptions. Historical results are
 measurements, not predicted odds. `--no-analysis` disables the connected assistant
 and news. Local measurements remain available when a connection cannot answer.
 
-News comes from the Federal Reserve, the US Bureau of Labor Statistics and the
-Monero project. Each fact keeps its source and retrieval date. A failed source
+News comes from the Federal Reserve, the US Bureau of Labor Statistics, CoinDesk,
+FXStreet, UN News, the Zcash Foundation and the Monero project. Each fact keeps its
+source, publication date when supplied, and retrieval date. A failed source
 remains unavailable, so missing news does not imply a quiet market. Calendar
 dates without a published time stay dates. The source set is not a complete news
 service.

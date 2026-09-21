@@ -66,7 +66,11 @@ class WorkspaceSpec extends munit.FunSuite:
 
   test("assistant and news text cannot emit terminal control bytes") {
     val text = "news " + 27.toChar + "[2J" + 7.toChar + " hostile"
-    val panel = PanelView(messages = Vector(DeskMessage(1, now, "analysis", text)))
+    val panel = PanelView(
+      messages = Vector(DeskMessage(1, now, "analysis", text)),
+      details = true,
+      detailPage = DetailPage.Answers
+    )
     val frame = Workspace.draw(s, view, panel, 120, 40, now, java.time.ZoneId.of("UTC"), Style.mono)
     assert(!frame.lines.mkString.contains(27.toChar))
     assert(!frame.lines.mkString.contains(7.toChar))
@@ -79,7 +83,7 @@ class WorkspaceSpec extends munit.FunSuite:
     val frame = Workspace.draw(
       s,
       view,
-      PanelView(messages = messages, scroll = 5),
+      PanelView(messages = messages, scroll = 5, details = true, detailPage = DetailPage.Answers),
       120,
       40,
       now,
@@ -102,7 +106,7 @@ class WorkspaceSpec extends munit.FunSuite:
     val frame = Workspace.draw(
       s,
       view,
-      PanelView(messages = messages),
+      PanelView(messages = messages, details = true, detailPage = DetailPage.Answers),
       120,
       40,
       now,

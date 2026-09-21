@@ -17,22 +17,26 @@ final case class CrossingStudy(samples: Int, mean: Option[Double], positive: Int
 
 object Quant:
   private def closed(cs: Vector[Candle], step: Long, now: Long): Vector[Candle] =
-    cs.filter(c =>
-      c.t >= 0 && c.t <= now - step && c.t % step == 0 &&
-        Vector(c.o, c.h, c.l, c.c).forall(v => v > 0 && v.isFinite)
-    ).map(c => c.t -> c)
-      .toMap
+    cs.groupBy(_.t)
       .values
+      .filter(copies => copies.distinct.size == 1)
+      .map(_.head)
+      .filter(c =>
+        c.t >= 0 && c.t <= now - step && c.t % step == 0 &&
+          Vector(c.o, c.h, c.l, c.c).forall(v => v > 0 && v.isFinite) &&
+          c.v >= 0 && c.v.isFinite && c.l <= c.o && c.o <= c.h &&
+          c.l <= c.c && c.c <= c.h
+      )
       .toVector
       .sortBy(_.t)
 
   private def window(cs: Vector[Candle], step: Long, n: Int, now: Long): (Vector[Candle], String) =
     val end = now / step * step - step
-    val all = closed(cs, step, now)
-    val selected = all.filter(c => c.t >= end - (n - 1L) * step && c.t <= end)
+    val start = end - (n - 1L) * step
+    val selected = closed(cs.filter(c => c.t >= start && c.t <= end), step, now)
     val status =
-      if all.isEmpty then "unavailable"
-      else if all.last.t < end then "stale"
+      if selected.isEmpty then if closed(cs, step, now).isEmpty then "unavailable" else "stale"
+      else if selected.last.t < end then "stale"
       else if selected.size != n then "partial"
       else "complete"
     (selected, status)

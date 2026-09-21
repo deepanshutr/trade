@@ -28,7 +28,20 @@ object News:
   val fedCalendar = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
   val fedNews = "https://www.federalreserve.gov/feeds/press_monetary.xml"
   val monero = "https://www.getmonero.org/feed.xml"
-  private val sources = Vector(bls, fedCalendar, fedNews, monero)
+  val crypto = "https://www.coindesk.com/arc/outboundfeeds/rss"
+  val gold = "https://www.fxstreet.com/rss/news"
+  val war = "https://news.un.org/feed/subscribe/en/news/topic/peace-and-security/feed/rss.xml"
+  val zcash = "https://zfnd.org/feed/"
+  val sources: Vector[String] = Vector(bls, fedCalendar, fedNews, monero, crypto, gold, war, zcash)
+  private val articleHosts = Map(
+    "www.bls.gov" -> Set("www.bls.gov"),
+    "www.federalreserve.gov" -> Set("www.federalreserve.gov"),
+    "www.getmonero.org" -> Set("www.getmonero.org"),
+    "www.coindesk.com" -> Set("www.coindesk.com"),
+    "www.fxstreet.com" -> Set("www.fxstreet.com"),
+    "news.un.org" -> Set("news.un.org"),
+    "zfnd.org" -> Set("zfnd.org")
+  )
   private def clean(text: String): String =
     Workspace.safeText(text.replaceAll("<[^>]*>", " ")).replaceAll("\\s+", " ").trim.take(500)
   private def url(text: String, source: String): String =
@@ -36,9 +49,7 @@ object News:
     require(
       target.getScheme == "https" && target.getUserInfo == null && Set(-1, 443).contains(
         target.getPort
-      ) && Set("www.bls.gov", "www.federalreserve.gov", "www.getmonero.org").contains(
-        target.getHost
-      )
+      ) && articleHosts.getOrElse(URI.create(source).getHost, Set.empty).contains(target.getHost)
     )
     target.toString
   private def instant(text: String): Option[Long] =
@@ -215,13 +226,13 @@ object News:
         .fold("")(t => " | source updated " + Instant.ofEpochMilli(t))
     }
     (Vector(
-      "Official-source sample, not complete market-news coverage. Reporting date is separate from the event date. Calendar absence does not prove no upcoming events."
+      "Selected public-source sample, not complete market-news coverage. Reporting date is separate from the event date. Calendar absence does not prove no upcoming events."
     ) ++ failures ++ lines).mkString("\n")
 
   final class Worker(
       wall: () => Long,
       fetchText: Option[String => String] = None,
-      refreshEveryMs: Long = 600000L
+      refreshEveryMs: Long = 120000L
   ) extends AutoCloseable:
     require(refreshEveryMs > 0)
     private val closed = new AtomicBoolean(false)
@@ -238,7 +249,7 @@ object News:
         attempted: Boolean
     )
     @volatile private var cache =
-      Cache(Map.empty, Map.empty, Vector("Official news and calendars have not refreshed"), false)
+      Cache(Map.empty, Map.empty, Vector("News and calendars have not refreshed"), false)
     private var thread = Option.empty[Thread]
     private def stale(current: Cache, now: Long): Vector[String] =
       sources.filter(source =>
@@ -252,12 +263,35 @@ object News:
           "News partial " + current.failures.size + " unavailable"
         else "News sources updated"
         if stale(current, wall()).nonEmpty then state + " (stale)" else state
+    def summary: String =
+      val current = cache
+      if !current.attempted then "News waiting"
+      else if current.failures.nonEmpty || stale(current, wall()).nonEmpty then "News partial"
+      else "News 8 sources"
+    def batches: Map[String, Vector[NewsItem]] =
+      val current = cache
+      val expired = stale(current, wall()).toSet
+      current.items.filterNot((source, _) => expired.contains(source))
     def context: String =
       val current = cache
       val now = wall()
       val aged =
         stale(current, now).map(source => "Source retrieval is stale or unavailable: " + source)
-      News.context(current.items.valuesIterator.flatten.toVector, current.failures ++ aged, now)
+      val publications = Vector(monero, crypto, gold, war, zcash).map { source =>
+        val latest = current.items
+          .getOrElse(source, Vector.empty)
+          .flatMap(_.publishedAt)
+          .filter(t => t >= 0 && t <= now)
+          .maxOption
+        "Latest publication from " + source + ": " + latest.fold("unavailable")(t =>
+          Instant.ofEpochMilli(t).toString
+        )
+      }
+      News.context(
+        current.items.valuesIterator.flatten.toVector,
+        current.failures ++ aged ++ publications,
+        now
+      )
     private def fetch(source: String): String =
       val request = HttpRequest
         .newBuilder(URI.create(source))
@@ -308,7 +342,7 @@ object News:
                 if !closed.get() then Thread.sleep(refreshEveryMs)
             catch case _: InterruptedException => ()
           },
-          "official-news"
+          "market-news"
         )
         worker.setDaemon(true)
         thread = Some(worker)

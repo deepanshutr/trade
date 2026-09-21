@@ -6,6 +6,28 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReferenc
 import scala.util.Try
 
 object WorkspaceApp:
+  private[desk] def drawFrame(
+      market: Snapshot,
+      view: TradingView,
+      panel: PanelView,
+      cols: Int,
+      rows: Int,
+      now: Long,
+      zone: java.time.ZoneId,
+      style: Style,
+      outlook: OutlookWorker
+  ): WorkspaceFrame =
+    val visible = outlook.forDisplay(panel.outlook, market, now)
+    Workspace.draw(market, view, panel.copy(outlook = visible), cols, rows, now, zone, style)
+
+  private[desk] def announce(
+      alert: Announcement,
+      controller: DeskController,
+      sound: Announcements
+  ): Unit =
+    controller.announcement(alert)
+    val _ = sound.offer(alert)
+
   private[desk] def enqueueInput(
       command: Command,
       size: (Int, Int),
@@ -162,20 +184,27 @@ object WorkspaceApp:
       val connection =
         Option.when(args.analysis)(CodexConnection.create(directory.resolve("analysis-workspace")))
       val analysisRef = new AtomicReference(Option.empty[AnalysisWorker])
+      val announcements = Main.announcements(args, NativeAnnouncementOutput.create())
       val controller = new DeskController(
         PanelView(
           mode = mode,
           sizes = config.sizes,
           fee = config.paperFee,
-          messages = history.messages
+          messages = history.messages,
+          muted = args.audio == "mute",
+          soundStatus = if args.audio == "mute" then "Muted" else "Sound on",
+          newsStatus = if args.analysis then "News waiting" else "News disabled"
         ),
         now,
         worker.preview,
         worker.submitReviewed,
         question => analysisRef.get().exists(_.ask(question)),
         worker.switchMode,
-        history.save
+        history.save,
+        announcements.setMuted
       )
+      val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
+      val alerts = new AlertPolicy
       val analysis = new AnalysisWorker(
         () => state.get(),
         () =>
@@ -198,6 +227,8 @@ object WorkspaceApp:
         )
       val saved = Try(Term.enterRaw()).getOrElse {
         analysis.close()
+        outlook.close()
+        announcements.close()
         connectedNews.foreach(_.close())
         recorder.foreach(_.close())
         history.close()
@@ -212,6 +243,8 @@ object WorkspaceApp:
         if restored.compareAndSet(false, true) then
           try
             analysis.close()
+            outlook.close()
+            announcements.close()
             connectedNews.foreach(_.close())
             recorder.foreach(_.close())
             worker.close()
@@ -232,6 +265,21 @@ object WorkspaceApp:
       recorder.foreach(_.start())
       connectedNews.foreach(_.start())
       analysis.start()
+      outlook.start()
+      announcements.start()
+      val alertThread = background("market-alerts") {
+        while !state.get().quit do
+          val time = now()
+          val found = alerts.market(state.get(), time) ++
+            connectedNews.toVector.flatMap(n => alerts.news(n.batches, time))
+          found.foreach(announce(_, controller, announcements))
+          controller.alertStatus(
+            announcements.status,
+            connectedNews.fold("News disabled")(_.summary),
+            connectedNews.fold("News disabled by --no-analysis")(_.context)
+          )
+          Thread.sleep(250L)
+      }
       val publicThreads = publicLoops(feed)
       val foldThreads = Main.startFold(
         queue,
@@ -338,7 +386,7 @@ object WorkspaceApp:
             worker.accountLabel
           )
           val frame =
-            Workspace.draw(market, view, controller.panel, size._1, size._2, time, zone, style)
+            drawFrame(market, view, controller.panel, size._1, size._2, time, zone, style, outlook)
           inputLock.synchronized {
             controller.invalidate()
             Term.write(frame.lines)
@@ -347,6 +395,6 @@ object WorkspaceApp:
           }
           Thread.sleep(100L)
       finally
-        (publicThreads ++ foldThreads :+ keys).foreach(_.interrupt())
+        (publicThreads ++ foldThreads ++ Vector(keys, alertThread)).foreach(_.interrupt())
         restore()
       sys.exit(0)

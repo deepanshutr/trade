@@ -7,7 +7,7 @@ import scala.jdk.CollectionConverters.*
 
 class NewsWorkerSpec extends munit.FunSuite:
   private val now = Instant.parse("2026-09-11T13:00:00Z").toEpochMilli
-  private val sources = Set(News.bls, News.fedCalendar, News.fedNews, News.monero)
+  private val sources = News.sources.toSet
   private def waitFor(label: String)(condition: => Boolean): Unit =
     val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
     while !condition && System.nanoTime() < until do Thread.sleep(5)
