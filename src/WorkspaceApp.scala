@@ -203,6 +203,7 @@ object WorkspaceApp:
         history.save,
         announcements.setMuted
       )
+      controller.start()
       val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
       val alerts = new AlertPolicy
       val analysis = new AnalysisWorker(
@@ -231,6 +232,7 @@ object WorkspaceApp:
         announcements.close()
         connectedNews.foreach(_.close())
         recorder.foreach(_.close())
+        controller.close()
         history.close()
         worker.close()
         System.err.println("desk needs a terminal")
@@ -248,6 +250,7 @@ object WorkspaceApp:
             connectedNews.foreach(_.close())
             recorder.foreach(_.close())
             worker.close()
+            controller.close()
             history.close()
           finally
             print(Screen.esc + "[?1006l" + Screen.esc + "[?1000l")
@@ -345,7 +348,7 @@ object WorkspaceApp:
       }
       var sizeAt = 0L
       var statusAt = 0L
-      var lastOutcome = Option.empty[String]
+      val orderUpdates = new OrderUpdates
       var captureStatus = "Public capture starting"
       try
         while !state.get().quit do
@@ -365,9 +368,7 @@ object WorkspaceApp:
           }
           val market = state.get()
           val view = worker.view.forMarket(market.coin)
-          if view.outcome != lastOutcome then
-            view.outcome.foreach(controller.addMessage("order", _))
-            lastOutcome = view.outcome
+          orderUpdates.collect(view)(controller.addMessage("order", _))
           if time - statusAt >= 2000L then
             captureStatus = recorder.map(_.status).getOrElse {
               val at = Try(

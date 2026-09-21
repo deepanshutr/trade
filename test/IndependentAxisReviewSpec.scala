@@ -58,11 +58,11 @@ class IndependentAxisReviewSpec extends munit.FunSuite:
     Chart.plain(frame.lines(row)).drop(54).split("\\|", -1).toVector.map(_.trim)
 
   test("populated line and outlook ticks use the same terminal row and braille subrow") {
-    // The 90/110 book fixes the padded scale at 89..111 and the frame has nine price rows.
-    for (price, row, subrow) <- Vector((109.5, 0, 2), (109.0, 0, 3), (108.5, 1, 0), (108.0, 1, 1))
+    // The 90/110 book fixes the padded scale at 89..111 and the frame has eight price rows.
+    for (price, row, subrow) <- Vector((109.5, 0, 2), (109.0, 0, 3), (108.5, 1, 0), (107.5, 1, 1))
     do
       val actual = frame(ChartMode.Line, price)
-      val chart = actual.lines.slice(1, 10).map(Chart.plain).map(_.slice(30, 44))
+      val chart = actual.lines.slice(1, 9).map(Chart.plain).map(_.slice(30, 44))
       val ink = chart.zipWithIndex.flatMap { (line, r) =>
         line.zipWithIndex.flatMap { (ch, cell) =>
           if ch < 0x2800 || ch > 0x28ff then Vector.empty
@@ -84,12 +84,12 @@ class IndependentAxisReviewSpec extends munit.FunSuite:
   }
 
   test("populated candles and outlook ticks use the same terminal row") {
-    for price <- Vector(109.5, 109.0, 108.5, 108.0) do
+    for (price, row) <- Vector((109.5, 0), (109.0, 1), (108.5, 1), (108.0, 1)) do
       val actual = frame(ChartMode.Candles, price)
-      val chart = actual.lines.slice(1, 10).map(Chart.plain).map(_.slice(30, 44))
-      assertEquals(chart.zipWithIndex.filter(_._1.trim.nonEmpty).map(_._2), Vector(1))
-      assert(chart(1).contains("───"))
-      assert(cells(actual, 2).forall(_.startsWith("─TR ")), actual.lines.mkString("\n"))
+      val chart = actual.lines.slice(1, 9).map(Chart.plain).map(_.slice(30, 44))
+      assertEquals(chart.zipWithIndex.filter(_._1.trim.nonEmpty).map(_._2), Vector(row))
+      assert(chart(row).contains("───"))
+      assert(cells(actual, row + 1).forall(_.startsWith("─TR ")), actual.lines.mkString("\n"))
       assertEquals(actual.lines.slice(1, 10).count(_.contains("TR ")), 1)
   }
 
@@ -140,12 +140,12 @@ class IndependentAxisReviewSpec extends munit.FunSuite:
     for mode <- ChartMode.values do
       val outside = levels(80, 130, 130, mode)
       assert(cells(outside, 1).forall(_ == "↑TR 130"), outside.lines.mkString("\n"))
-      assert(cells(outside, 9).forall(_ == "↓S 80"), outside.lines.mkString("\n"))
+      assert(cells(outside, 8).forall(_ == "↓S 80"), outside.lines.mkString("\n"))
       val edges = levels(89, 150, 111, mode)
       val upper = if mode == ChartMode.Line then "⠉R" else "─R"
       val lower = if mode == ChartMode.Line then "⣀S 89" else "─S 89"
       assert(cells(edges, 1).forall(c => c.contains(upper) && c.contains("↑T")))
-      assert(cells(edges, 9).forall(_ == lower), edges.lines.mkString("\n"))
+      assert(cells(edges, 8).forall(_ == lower), edges.lines.mkString("\n"))
   }
 
   test("distant outside levels cannot wrap integer coordinates onto the opposite edge") {
@@ -153,5 +153,5 @@ class IndependentAxisReviewSpec extends munit.FunSuite:
     for mode <- ChartMode.values do
       val actual = levels(50, 110, 110, mode, narrow)
       assert(cells(actual, 1).forall(_ == "↑TR 110"), actual.lines.mkString("\n"))
-      assert(cells(actual, 9).forall(_ == "↓S 50"), actual.lines.mkString("\n"))
+      assert(cells(actual, 8).forall(_ == "↓S 50"), actual.lines.mkString("\n"))
   }

@@ -1,0 +1,573 @@
+package desk
+
+import java.nio.file.Files
+import java.time.ZoneId
+import java.util.concurrent.{CountDownLatch, TimeUnit}
+import java.util.concurrent.atomic.AtomicLong
+
+class TradeProgressSpec extends munit.FunSuite:
+  private val start = 1800000000000L
+  private def await(label: String)(condition: => Boolean): Unit =
+    val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+    while !condition && System.nanoTime() < end do Thread.sleep(2)
+    assert(condition, label)
+
+  private class Paper(balance: BigDecimal = BigDecimal(10000), fee: BigDecimal = BigDecimal(0)):
+    val clock = new AtomicLong(start)
+    val ledger =
+      PaperLedger.open(Files.createTempDirectory("trade-progress-"), "mainnet", balance, fee)
+    val worker = new PaperWorker(
+      TradingConfig(),
+      "XMR",
+      ledger,
+      new Rest:
+        def post(body: String): Option[String] =
+          Some(
+            """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5},{"name":"BTC","szDecimals":2,"maxLeverage":40}]}"""
+          )
+      ,
+      () => clock.get(),
+      () => clock.get()
+    )
+    var book = Book(Vector(Level("99.99", "50", 1)), Vector(Level("100", "50", 1)), start)
+    def publish(depth: String = "50"): Unit =
+      book = book.copy(asks = Vector(Level("100", depth, 1)), time = clock.incrementAndGet())
+      worker.observe(Event.BookUpdate("XMR", book, true))
+    def open(): Unit =
+      worker.start()
+      worker.observe(Event.SocketUp)
+      publish()
+      await("metadata unavailable")(worker.view.ready)
+    def review(): OrderReview =
+      val intent = Trading.action(0)
+      OrderReview(intent, worker.preview(intent).toOption.get, clock.get(), clock.get() + 30000)
+    def close(): Unit = worker.close()
+
+  test("fees that exceed paper capacity are explained before Send without any write") {
+    val f = new Paper(BigDecimal(500), BigDecimal("0.001"))
+    try
+      f.open()
+      val before = f.ledger.account
+      val result = f.worker.preview(Trading.action(0))
+      assert(result.isLeft, s"unaffordable order reached review: $result")
+      assert(result.swap.toOption.get.toLowerCase.contains("limit"))
+      assertEquals(f.ledger.account, before)
+    finally f.close()
+  }
+
+  test("a repeated capacity refusal gives a distinct acknowledgement on the main screen") {
+    val f = new Paper(BigDecimal(200))
+    val c = new DeskController(
+      PanelView(mode = "PAPER"),
+      () => f.clock.get(),
+      f.worker.preview,
+      f.worker.submitReviewed,
+      _ => false,
+      _ => Left("disabled")
+    )
+    try
+      f.open()
+      draw(c, f.worker.view)
+      c.handle(Command.PlaceOrder(Trading.action(0)), snapshot, f.worker.view, (100, 30), false)
+      val first = draw(c, f.worker.view)
+      capture("100x30-mono-repeated-first", first)
+      assert(first.lines.exists(_.contains("Paper limit")))
+      c.handle(Command.PlaceOrder(Trading.action(0)), snapshot, f.worker.view, (100, 30), false)
+      val second = draw(c, f.worker.view)
+      capture("100x30-mono-repeated-second", second)
+      assert(first.lines != second.lines, "the repeated refusal looked like no response")
+      assertEquals(c.panel.messages.count(_.kind == "order"), 2)
+      assertEquals(f.ledger.account.count, 0L)
+    finally
+      c.close()
+      f.close()
+  }
+
+  test("a flat account below every preset gets an achievable settings route") {
+    val f = new Paper(BigDecimal(200))
+    try
+      f.open()
+      val reason = f.worker.preview(Trading.action(0)).swap.toOption.get
+      assert(reason.contains("settings"), reason)
+      assert(reason.contains("restart"), reason)
+      assert(!reason.contains("reduce the position"), "flat account has no position to reduce")
+    finally f.close()
+  }
+
+  test("paper receipts retain exact time in a human-readable form") {
+    val f = new Paper()
+    try
+      f.open()
+      assert(f.worker.submitReviewed(f.review()))
+      await("receipt missing")(!f.worker.view.pending)
+      val result = f.worker.view.outcome.get
+      assert(result.contains(java.time.Instant.ofEpochMilli(f.clock.get()).toString), result)
+      assert(!result.contains(f.clock.get().toString), result)
+      assert(result.contains("\nFee"), result)
+    finally f.close()
+  }
+
+  test("an exhausted flat paper account gets a separate-account recovery route") {
+    val f = new Paper(BigDecimal(200))
+    def one(side: Side, price: BigDecimal): OrderPlan =
+      OrderPlan(
+        "XMR",
+        0,
+        side,
+        OrderKind.Hard,
+        BigDecimal(1),
+        price,
+        price,
+        BigDecimal(1),
+        price,
+        Some(price),
+        BigDecimal(0)
+      )
+    try
+      f.open()
+      assert(f.ledger.fill(one(Side.Sell, BigDecimal(100)), start).isRight)
+      assert(f.ledger.fill(one(Side.Buy, BigDecimal(400)), start + 1).isRight)
+      val exhausted = f.ledger.account
+      assertEquals(exhausted.cash, BigDecimal(-100))
+      assert(exhausted.positions.isEmpty)
+      val reason = f.worker.preview(Trading.action(0)).swap.toOption.get
+      assert(reason.contains("--state"), reason)
+      assertEquals(f.ledger.account, exhausted)
+    finally f.close()
+  }
+
+  test("capacity uses actual partial depth and checks larger depth again after review") {
+    val f = new Paper(BigDecimal(200))
+    try
+      f.open()
+      f.publish("1")
+      val review = f.review()
+      assertEquals(review.plan.estimatedQuantity, BigDecimal(1))
+      f.publish("50")
+      assert(f.worker.submitReviewed(review))
+      await("capacity result absent")(!f.worker.view.pending)
+      assert(f.worker.view.outcome.exists(_.toLowerCase.contains("limit")))
+      assertEquals(f.ledger.account.count, 0L)
+    finally f.close()
+  }
+
+  test("a newer quote excludes stale depth from paper capacity preview") {
+    val f = new Paper(BigDecimal(200))
+    try
+      f.open()
+      val depth = f.book.copy(
+        asks = Vector(Level("100", "4", 1), Level("100.05", "1", 1)),
+        time = f.clock.incrementAndGet()
+      )
+      f.worker.observe(Event.BookUpdate("XMR", depth, true))
+      f.worker.observe(
+        Event.BboUpdate(
+          "XMR",
+          Level("100", "1", 1),
+          Level("100.05", "1", 1),
+          f.clock.incrementAndGet()
+        )
+      )
+      val result = f.worker.preview(Trading.action(0))
+      assert(result.isRight, s"affordable fresh partial fill rejected: $result")
+      val plan = result.toOption.get
+      assertEquals(plan.estimatedQuantity, BigDecimal(1))
+      assertEquals(plan.estimatedValue, BigDecimal("100.05"))
+      assert(
+        f.worker.submitReviewed(
+          OrderReview(Trading.action(0), plan, f.clock.get(), f.clock.get() + 30000)
+        )
+      )
+      await("partial result absent")(!f.worker.view.pending)
+      assertEquals(f.ledger.account.positions("XMR").quantity, BigDecimal(1))
+    finally f.close()
+  }
+
+  test("every identical completed refusal is delivered even when no pending frame is sampled") {
+    val f = new Paper(BigDecimal(200))
+    val updates = new OrderUpdates
+    var received = Vector.empty[String]
+    try
+      f.open()
+      for _ <- 1 to 2 do
+        f.publish("1")
+        val review = f.review()
+        f.publish("50")
+        assert(f.worker.submitReviewed(review))
+        await("refusal absent")(!f.worker.view.pending)
+        updates.collect(f.worker.view)(text => received :+= text)
+        updates.collect(f.worker.view)(text => received :+= text)
+      assertEquals(received.size, 2)
+      assertEquals(received.distinct.size, 1)
+      assertEquals(f.ledger.account.count, 0L)
+    finally f.close()
+  }
+
+  private val rules = MarketRules(0, 2, 5)
+  private val book = Book(Vector(Level("99.99", "50", 1)), Vector(Level("100", "50", 1)), start)
+  private val snapshot = Snapshot.initial("XMR", start).copy(book = Some(book), workspace = true)
+  private val ready = TradingView(
+    "XMR",
+    Some(BigDecimal(0)),
+    "Paper ready",
+    ready = true,
+    rules = Some(rules),
+    bid = Some(BigDecimal("99.99")),
+    ask = Some(BigDecimal(100))
+  )
+  private def plan(intent: OrderIntent): Either[String, OrderPlan] =
+    Trading.plan(
+      "XMR",
+      rules,
+      book,
+      ready.reference(intent.side).get,
+      BigDecimal(0),
+      intent,
+      TradeSizes()
+    )
+  private def draw(
+      c: DeskController,
+      view: TradingView = ready,
+      now: Long = start,
+      cols: Int = 100,
+      rows: Int = 30
+  ): WorkspaceFrame =
+    val frame =
+      Workspace.draw(snapshot, view, c.panel, cols, rows, now, ZoneId.of("UTC"), Style.mono)
+    c.publish(frame)
+    frame
+
+  test("slow history persistence does not hold the display and keyboard") {
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val read = new CountDownLatch(1)
+    val c = new DeskController(
+      PanelView(mode = "PAPER"),
+      () => start,
+      plan,
+      _ => false,
+      _ => false,
+      _ => Left("disabled"),
+      persist = _ => {
+        entered.countDown()
+        release.await(5, TimeUnit.SECONDS)
+        ()
+      }
+    )
+    val writer = new Thread(() => c.addMessage("order", "PAPER filled 5 XMR"))
+    val reader = new Thread(() => {
+      draw(c)
+      c.handle(Command.Details, snapshot, ready, (100, 30), false)
+      read.countDown()
+    })
+    writer.setDaemon(true)
+    reader.setDaemon(true)
+    try
+      c.start()
+      writer.start()
+      assert(entered.await(2, TimeUnit.SECONDS))
+      reader.start()
+      assert(read.await(250, TimeUnit.MILLISECONDS), "screen and keys blocked behind history save")
+    finally
+      release.countDown()
+      writer.join(1000L)
+      reader.join(1000L)
+      c.close()
+  }
+
+  for mouse <- Vector(false, true) do
+    test(s"unavailable order explains its reason for mouse=$mouse") {
+      val c = new DeskController(
+        PanelView(mode = "PAPER"),
+        () => start,
+        _ => fail("unavailable control prepared an order"),
+        _ => fail("sent unavailable order"),
+        _ => false,
+        _ => Left("disabled")
+      )
+      val stale = ready.copy(
+        ready = false,
+        message = "Depth stale",
+        block = Some("Depth stale. Waiting for fresh prices")
+      )
+      val frame = draw(c, stale)
+      if mouse then
+        val y = frame.lines.indexWhere(_.contains("1 Hard buy"))
+        val x = frame.lines(y).indexOf("1 Hard buy") + 1
+        c.handle(Command.PointerPress(x, y + 1, 0), snapshot, stale, (100, 30), false)
+        c.handle(Command.Pointer(x, y + 1, 0), snapshot, stale, (100, 30), false)
+      else c.handle(Command.PlaceOrder(Trading.action(0)), snapshot, stale, (100, 30), false)
+      assert(c.panel.actionNotice.exists(_.toLowerCase.contains("stale")), c.panel.toString)
+      assertEquals(c.panel.review, None)
+    }
+
+  test("expired review can be renewed from Enter without sending") {
+    val clock = new AtomicLong(start)
+    var sends = 0
+    val c = new DeskController(
+      PanelView(mode = "PAPER"),
+      () => clock.get(),
+      plan,
+      _ => { sends += 1; true },
+      _ => false,
+      _ => Left("disabled")
+    )
+    draw(c)
+    c.handle(Command.PlaceOrder(Trading.action(0)), snapshot, ready, (100, 30), false)
+    val old = c.panel.review.get
+    clock.set(old.expiresAt)
+    val expired = draw(c, now = clock.get())
+    assert(!expired.completeReview)
+    c.handle(Command.SubmitTarget, snapshot, ready, (100, 30), false)
+    assertEquals(sends, 0)
+    assert(c.panel.review.exists(_.createdAt == clock.get()), "Enter did not refresh review")
+    val renewed = draw(c, now = clock.get())
+    assert(renewed.completeReview)
+    c.handle(Command.SubmitTarget, snapshot, ready, (100, 30), false)
+    assertEquals(sends, 1)
+  }
+
+  test("progress remains readable beside a long position at all supported sizes") {
+    val pending = ready.copy(
+      position = Some(BigDecimal("1234567890" * 8)),
+      ready = false,
+      pending = true,
+      message = "Saving paper account 4s"
+    )
+    val c = new DeskController(
+      PanelView(mode = "PAPER"),
+      () => start,
+      plan,
+      _ => false,
+      _ => false,
+      _ => Left("disabled")
+    )
+    for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
+      val frame = draw(c, pending, cols = cols, rows = rows)
+      assert(frame.lines.exists(_.contains("Saving paper account 4s")), frame.lines.mkString("\n"))
+  }
+
+  test("a result details shortcut opens the order history") {
+    val c = new DeskController(
+      PanelView(mode = "PAPER"),
+      () => start,
+      plan,
+      _ => false,
+      _ => false,
+      _ => Left("disabled")
+    )
+    c.addMessage("order", "Paper rejected: " + "reason " * 30)
+    draw(c)
+    c.handle(Command.Details, snapshot, ready, (100, 30), false)
+    assert(c.panel.details)
+    assertEquals(c.panel.detailPage, DetailPage.Answers)
+  }
+
+  for mouse <- Vector(false, true) do
+    test(s"Target with missing prices explains why it is unavailable, mouse=$mouse") {
+      val c = new DeskController(
+        PanelView(mode = "PAPER"),
+        () => start,
+        _ => fail("missing prices prepared a trade"),
+        _ => false,
+        _ => false,
+        _ => Left("disabled")
+      )
+      val missing = ready.copy(
+        ready = false,
+        rules = None,
+        bid = None,
+        ask = None,
+        message = "Paper waiting for selected-market depth",
+        block = Some("Paper waiting for selected-market depth")
+      )
+      val frame = draw(c, missing)
+      if mouse then
+        val y = frame.lines.indexWhere(_.contains("9 Target buy"))
+        val x = frame.lines(y).indexOf("9 Target buy") + 1
+        c.handle(Command.PointerPress(x, y + 1, 0), snapshot, missing, (100, 30), false)
+        c.handle(Command.Pointer(x, y + 1, 0), snapshot, missing, (100, 30), false)
+      else c.handle(Command.SelectTarget(Side.Buy), snapshot, missing, (100, 30), false)
+      assert(c.panel.actionNotice.exists(_.contains("waiting")), "Target was silently ignored")
+      assertEquals(c.panel.target, None)
+    }
+
+    test(s"a refused Send remains visible during the exact review, mouse=$mouse") {
+      val intent = Trading.action(0)
+      val reviewed = OrderReview(
+        intent,
+        plan(intent).toOption.get,
+        start,
+        start + 30000,
+        leverage = Some(1),
+        marginMode = Some("cross")
+      )
+      val c = new DeskController(
+        PanelView(mode = "LIVE", review = Some(reviewed)),
+        () => start,
+        _ => fail("unexpected preview"),
+        _ => fail("stale account sent"),
+        _ => false,
+        _ => Left("disabled")
+      )
+      val stale = ready.copy(
+        ready = false,
+        message = "Ready",
+        block = Some("Account data stale. Waiting for refresh")
+      )
+      val frame = draw(c, stale)
+      if mouse then
+        val y = frame.lines.indexWhere(_.contains("Enter Send LIVE"))
+        val x = frame.lines(y).indexOf("Enter Send LIVE") + 1
+        c.handle(Command.PointerPress(x, y + 1, 0), snapshot, stale, (100, 30), false)
+        c.handle(Command.Pointer(x, y + 1, 0), snapshot, stale, (100, 30), false)
+      else c.handle(Command.SubmitTarget, snapshot, stale, (100, 30), false)
+      val refused = draw(c, stale)
+      assert(refused.lines.exists(_.contains("Account data stale")), refused.lines.mkString("\n"))
+      assert(
+        refused.lines.exists(_.contains("Quantity " + Trading.displayExact(reviewed.plan.quantity)))
+      )
+      assert(refused.lines.exists(_.contains("Limit " + Trading.displayExact(reviewed.plan.limit))))
+      assertEquals(c.panel.review, Some(reviewed))
+    }
+
+  test("missing account settings never recommend a wider screen") {
+    val intent = Trading.action(0)
+    val reviewed = OrderReview(intent, plan(intent).toOption.get, start, start + 30000)
+    val c = new DeskController(
+      PanelView(mode = "LIVE", review = Some(reviewed)),
+      () => start,
+      _ => Left("disabled"),
+      _ => false,
+      _ => false,
+      _ => Left("disabled")
+    )
+    val frame = draw(c)
+    assert(!frame.completeReview)
+    assert(!frame.lines.exists(_.contains("Widen")))
+    assert(frame.lines.exists(_.contains("Account settings")))
+  }
+
+  private def capture(label: String, frame: WorkspaceFrame): Unit =
+    sys.props.get("desk.ux.frames").foreach { directory =>
+      val root = java.nio.file.Path.of(directory)
+      Files.createDirectories(root)
+      Files.writeString(
+        root.resolve(label + ".txt"),
+        frame.lines.map(Chart.plain).mkString("\n") + "\n"
+      )
+      Files.writeString(root.resolve(label + ".ansi"), frame.lines.mkString("\n") + "\n")
+    }
+
+  for
+    (cols, rows) <- Vector((100, 30), (120, 40), (160, 45))
+    style <- Vector(Style.mono, Style.colour)
+    scenario <- Vector("filled", "partial", "no-fill", "capacity")
+  do
+    test(s"visible paper $scenario pipeline at ${cols}x$rows colour=${style.colour}") {
+      val f = new Paper(if scenario == "capacity" then BigDecimal(200) else BigDecimal(10000))
+      val c = new DeskController(
+        PanelView(mode = "PAPER", fee = BigDecimal(0)),
+        () => f.clock.get(),
+        f.worker.preview,
+        f.worker.submitReviewed,
+        _ => false,
+        _ => Left("disabled")
+      )
+      val updates = new OrderUpdates
+      val prefix = s"${cols}x$rows-${if style.colour then "colour" else "mono"}-$scenario"
+      def update(label: String): WorkspaceFrame =
+        val began = System.nanoTime()
+        val view = f.worker.view
+        updates.collect(view)(c.addMessage("order", _))
+        c.status("Synthetic feed", "Disabled", f.worker.accountLabel)
+        val frame = Workspace.draw(
+          snapshot.copy(book = Some(f.book), feed = Health.Live(f.clock.get())),
+          view,
+          c.panel,
+          cols,
+          rows,
+          f.clock.get(),
+          ZoneId.of("UTC"),
+          style
+        )
+        c.publish(frame)
+        val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began)
+        assert(elapsed <= 250L, s"frame update took ${elapsed}ms")
+        assert(frame.lines.forall(line => Chart.plain(line).length == cols))
+        assertEquals(frame.lines.size, rows)
+        capture(prefix + "-" + label, frame)
+        frame
+      def key(command: Command): Unit =
+        c.handle(command, snapshot, f.worker.view, (cols, rows), false)
+      try
+        f.open()
+        if scenario == "partial" || scenario == "capacity" then f.publish("1")
+        val first = update("ready")
+        val buy = first.buttons.find(_.action == DeskAction.Prepare(Trading.action(0))).get
+        if style.colour then
+          key(Command.PointerPress(buy.x, buy.y, 0))
+          key(Command.Pointer(buy.x, buy.y, 0))
+        else key(Command.PlaceOrder(Trading.action(0)))
+        val reviewed = c.panel.review.get
+        val review = update("review")
+        assert(review.completeReview)
+        assert(
+          review.lines.exists(
+            _.contains("Quantity " + Trading.displayExact(reviewed.plan.quantity))
+          )
+        )
+        assert(
+          review.lines.exists(_.contains("Limit " + Trading.displayExact(reviewed.plan.limit)))
+        )
+        if scenario == "capacity" then f.publish("50")
+        if scenario == "no-fill" then
+          f.worker.observe(
+            Event.BboUpdate(
+              "XMR",
+              Level("100.99", "1", 1),
+              Level("101", "1", 1),
+              f.clock.incrementAndGet()
+            )
+          )
+        f.worker.synchronized {
+          if style.colour then
+            val send = review.buttons.find(_.action == DeskAction.Submit).get
+            key(Command.PointerPress(send.x, send.y, 0))
+            key(Command.Pointer(send.x, send.y, 0))
+          else key(Command.SubmitTarget)
+          assert(f.worker.view.pending)
+          val pending = update("queued")
+          assert(pending.lines.exists(_.contains("PAPER queued 0s | XMR")))
+          assert(pending.lines.exists(_.contains("Position 0")))
+          assert(!pending.buttons.exists(_.action.isInstanceOf[DeskAction.Prepare]))
+        }
+        await("paper completion missing")(!f.worker.view.pending)
+        val completed = update("result")
+        val expected = scenario match
+          case "no-fill"  => "no fill"
+          case "capacity" => "Paper limit"
+          case other      => other
+        assert(completed.lines.exists(_.contains(expected)), completed.lines.mkString("\n"))
+        if scenario == "no-fill" then
+          assert(
+            completed.lines.exists(_.contains("reviewed limit")),
+            "no-fill text split across words"
+          )
+        val expectedPosition = if scenario == "filled" then BigDecimal(5)
+        else if scenario == "partial" then BigDecimal(1)
+        else BigDecimal(0)
+        assertEquals(f.worker.view.position, Some(expectedPosition))
+        assertEquals(c.panel.messages.count(_.kind == "order"), 1)
+        assertEquals(
+          f.worker.view.lastPlan.map(p => (p.quantity, p.limit)),
+          Some((reviewed.plan.quantity, reviewed.plan.limit))
+        )
+        key(Command.Details)
+        val details = update("details")
+        assertEquals(c.panel.detailPage, DetailPage.Answers)
+        assert(details.lines.exists(_.contains(expected)))
+      finally
+        c.close()
+        f.close()
+    }

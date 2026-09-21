@@ -6,7 +6,14 @@ class AlignedOutlookSpec extends munit.FunSuite:
   private val now = 1_800_000_000_000L
   private val book = Book(Vector(Level("90", "1", 1)), Vector(Level("110", "1", 1)), now)
   private val market = Snapshot.initial("XMR", now).copy(book = Some(book))
-  private val view = TradingView("XMR", message = "Ready", ready = true)
+  private val view = TradingView(
+    "XMR",
+    message = "Ready",
+    ready = true,
+    rules = Some(MarketRules(0, 2, 5)),
+    bid = Some(BigDecimal(90)),
+    ask = Some(BigDecimal(110))
+  )
   private def outlook: OutlookView = OutlookView(
     "XMR",
     now,
@@ -61,7 +68,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
       style <- Vector(Style.mono, Style.colour)
     do
       val frame = draw(market.copy(chartMode = mode), cols = cols, rows = rows, style = style)
-      val height = rows - 21
+      val height = rows - 22
       assert(cells(frame, 0).zip(Outlook.horizons).forall((c, h) => c.contains(h.label)))
       for (column, i) <- outlook.columns.zipWithIndex do
         for (label, value) <- Vector("S" -> column.support.get, "TR" -> column.target.get) do
@@ -84,8 +91,8 @@ class AlignedOutlookSpec extends munit.FunSuite:
     )
     val frame = draw(o = outside)
     assert(cells(frame, 1).forall(_.startsWith("↑TR ")), frame.lines.mkString("\n"))
-    assert(cells(frame, 9).forall(_.startsWith("↓S ")), frame.lines.mkString("\n"))
-    assert("[─⠉⠒⠤⣀][STR]".r.findFirstIn(frame.lines.slice(1, 10).mkString).isEmpty)
+    assert(cells(frame, 8).forall(_.startsWith("↓S ")), frame.lines.mkString("\n"))
+    assert("[─⠉⠒⠤⣀][STR]".r.findFirstIn(frame.lines.slice(1, 9).mkString).isEmpty)
   }
 
   test("distinct levels that share one row keep every label and no misleading single price") {
@@ -95,7 +102,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
       )
     )
     val frame = draw(o = close)
-    assert(cells(frame, 5).forall(_ == "⠒STR *"), frame.lines.mkString("\n"))
+    assert(cells(frame, 4).forall(_ == "⣀STR *"), frame.lines.mkString("\n"))
     assert(frame.lines.last.contains("S support R resist T target"))
   }
 
@@ -136,7 +143,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
     do
       val s = market.copy(samples = samples, offsetSec = offset, zoom = zoom)
       val frame = draw(s, cols = width, rows = height)
-      val priceRows = height - 21
+      val priceRows = height - 22
       val labels =
         frame.lines.slice(1, 1 + priceRows).map(line => Chart.plain(line).take(8).trim.toDouble)
       for (column, index) <- outlook.columns.zipWithIndex do
@@ -156,7 +163,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
       assertEquals(frame.lines.size, 30)
       assert(frame.lines.forall(_.length == 100))
       assert(frame.buttons.filter(_.action.isInstanceOf[DeskAction.Target]).forall(_.y == 24))
-      assert(frame.lines(16).contains("VIEW XMR"))
+      assert(frame.lines(15).contains("VIEW XMR"))
       assert(cells(frame, 0).head.contains("LONG"))
   }
 
@@ -172,8 +179,8 @@ class AlignedOutlookSpec extends munit.FunSuite:
   test("stale quotes retain descriptive levels but never active rates or direction") {
     val stale = draw(market.copy(book = Some(book.copy(time = now - 6000))))
     assert(!cells(stale, 0).exists(c => c.contains("↑") || c.contains("↓")))
-    assert(cells(stale, 10).forall(_.contains("Stale price")))
-    assert(cells(stale, 11).forall(_ == "Base --"))
-    assert(cells(stale, 12).forall(_ == "Match --"))
-    assert(stale.lines.slice(1, 10).exists(_.contains("TR ")))
+    assert(cells(stale, 9).forall(_.contains("Stale price")))
+    assert(cells(stale, 10).forall(_ == "Base --"))
+    assert(cells(stale, 11).forall(_ == "Match --"))
+    assert(stale.lines.slice(1, 9).exists(_.contains("TR ")))
   }

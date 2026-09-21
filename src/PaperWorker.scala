@@ -26,6 +26,10 @@ final class PaperWorker(
   private var metadata = Option.empty[ujson.Value]
   private var rules = Option.empty[MarketRules]
   private var outcome = Option.empty[String]
+  private var outcomeId = 0L
+  private var pendingAt = 0L
+  private var pendingCoin = initialCoin
+  private var stage = "queued"
   private var lastPlan = Option.empty[OrderPlan]
   private var prepared = Option.empty[Prepared]
   private val pending = new AtomicBoolean(false)
@@ -34,11 +38,22 @@ final class PaperWorker(
   private val orders = new ArrayBlockingQueue[OrderReview](1)
   private var threads = Vector.empty[Thread]
   private def fresh(at: Long): Boolean = monotonic() >= at && monotonic() - at <= config.quoteAgeMs
-  private def ready: Boolean = connected && rules.nonEmpty && ledger.available && book.exists(b =>
-    fresh(b._2)
-  ) && touch.exists(t => t._1 > 0 && t._2 > t._1 && fresh(t._4)) && book.exists(b =>
-    touch.exists(t => (BigInt(b._1.time) - BigInt(t._3)).abs <= config.quoteAgeMs)
-  )
+  private def block: Option[String] =
+    if closed.get() then Some("Paper closed. Restart Desk")
+    else if !ledger.available then Some("Paper storage unavailable. Restart to recover")
+    else if !connected then Some("Paper disconnected. Waiting to reconnect")
+    else if rules.isEmpty then Some("Paper waiting for market details")
+    else if book.isEmpty || touch.isEmpty then Some("Paper waiting for selected-market depth")
+    else if !touch.exists(t => t._1 > 0 && t._2 > t._1) then
+      Some("Paper quote invalid. Waiting for prices")
+    else if !book.exists(b => fresh(b._2)) || !touch.exists(t => fresh(t._4)) then
+      Some("Paper prices stale. Waiting for fresh depth")
+    else if !book.exists(b =>
+        touch.exists(t => (BigInt(b._1.time) - BigInt(t._3)).abs <= config.quoteAgeMs)
+      )
+    then Some("Paper depth behind quote. Waiting for depth")
+    else None
+  private def ready: Boolean = block.isEmpty
   def account: PaperAccount = ledger.account
   def accountLabel: String = synchronized {
     val a = ledger.account
@@ -49,11 +64,13 @@ final class PaperWorker(
       .fold("")(p => " open $" + Trading.display(p))
   }
   def view: TradingView = synchronized {
-    val dataReady = ready
+    val reason = block
+    val dataReady = reason.isEmpty
     val working = pending.get()
-    val message = if working then "Paper order pending"
+    val elapsed = ((BigInt(monotonic()) - pendingAt).max(BigInt(0)) / 1000)
+    val message = if working then s"PAPER $stage ${elapsed}s | $pendingCoin"
     else if dataReady then "Paper ready"
-    else "Paper needs fresh depth and available storage"
+    else reason.get
     TradingView(
       coin,
       Some(ledger.account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0))),
@@ -64,8 +81,9 @@ final class PaperWorker(
       touch.map(_._1),
       touch.map(_._2),
       lastPlan,
-      Option.unless(dataReady)("Paper needs fresh depth and available storage"),
-      outcome
+      reason,
+      outcome,
+      outcomeId = outcomeId
     )
   }
   def select(next: String): Unit = synchronized {
@@ -108,17 +126,28 @@ final class PaperWorker(
     else if pending.get() then Left("Wait for the pending paper order")
     else
       val account = ledger.account
-      val result = if !ready then Left("Paper needs fresh selected-market depth")
+      val result = if !ready then Left(block.get)
       else
-        Trading.plan(
-          coin,
-          rules.get,
-          book.get._1,
-          if intent.side == Side.Buy then touch.get._2 else touch.get._1,
-          account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0)),
-          intent,
-          config.sizes
-        )
+        Trading
+          .plan(
+            coin,
+            rules.get,
+            book.get._1,
+            if intent.side == Side.Buy then touch.get._2 else touch.get._1,
+            account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0)),
+            intent,
+            config.sizes
+          )
+          .flatMap(plan =>
+            Trading.fillAtLimit(
+              plan,
+              rules.get,
+              book.get._1,
+              if intent.side == Side.Buy then touch.get._2 else touch.get._1,
+              account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0))
+            )
+          )
+          .flatMap(plan => ledger.check(plan, account).map(_ => plan))
       prepared =
         result.toOption.map(plan => Prepared(intent, plan, rules.get, account.count, wall()))
       result
@@ -139,6 +168,9 @@ final class PaperWorker(
     else
       lastPlan = Some(review.plan)
       outcome = None
+      pendingAt = monotonic()
+      pendingCoin = review.plan.coin
+      stage = "queued"
       if orders.offer(review) then true
       else
         pending.set(false)
@@ -171,6 +203,7 @@ final class PaperWorker(
           val review = orders.take()
           val result = try
             val fill = synchronized {
+              stage = "checking"
               if matches(review) then
                 val position =
                   ledger.account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0))
@@ -181,12 +214,16 @@ final class PaperWorker(
                   .map(plan => (plan, prepared.get.accountCount))
               else Left("Paper canceled: reviewed request is no longer current")
             }
-            fill.flatMap((plan, count) => ledger.fill(plan, wall(), Some(count)))
+            fill.flatMap { (plan, count) =>
+              synchronized { stage = "saving" }
+              ledger.fill(plan, wall(), Some(count))
+            }
           catch
             case scala.util.control.NonFatal(_) => Left("Paper order failed. Review before retry")
           synchronized {
             prepared = None
             outcome = Some(result.fold(identity, identity))
+            outcomeId = OrderUpdates.nextId()
             pending.set(false)
           }
       }

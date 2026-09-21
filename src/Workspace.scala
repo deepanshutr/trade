@@ -3,7 +3,7 @@ package desk
 enum DeskAction:
   case Prepare(intent: OrderIntent)
   case Target(side: Side)
-  case Submit, Cancel, Ask, SendQuestion, Status, Details, ToggleMute
+  case Submit, Refresh, Cancel, Ask, SendQuestion, Status, Details, ToggleMute
   case Feedback(id: Long, accepted: Boolean)
   case Scroll(lines: Int)
   case Mode(name: String)
@@ -49,7 +49,10 @@ final case class PanelView(
     newsStatus: String = "News waiting",
     newsDetails: String = "News waiting",
     detailPage: DetailPage = DetailPage.Method,
-    actionNotice: Option[String] = None
+    actionNotice: Option[String] = None,
+    historySavingAt: Option[Long] = None,
+    historyFailure: Option[String] = None,
+    actionNumber: Long = 0L
 )
 final case class DeskButton(label: String, action: DeskAction, x: Int, y: Int, width: Int)
 final case class WorkspaceFrame(
@@ -62,8 +65,10 @@ final case class WorkspaceFrame(
     review: Option[OrderReview] = None,
     mode: String = "VIEW",
     outlook: Option[OutlookView] = None,
-    scrollLimit: Int = 0
+    scrollLimit: Int = 0,
+    disabledButtons: Vector[DeskButton] = Vector.empty
 ):
+  def controls: Vector[DeskButton] = buttons ++ disabledButtons
   def hit(
       x: Int,
       y: Int,
@@ -150,7 +155,7 @@ object Workspace:
         else Gauges.tapeRow(s, i - 6, now, h, style)
         Chart.fit(reading, bookWidth) + " " + correlation(i)
       }
-      val tradeTop = rows - 14
+      val tradeTop = rows - 15
       val marketFrame = Screen.renderMarket(
         s,
         leftWidth,
@@ -166,6 +171,7 @@ object Workspace:
       val right = Array.fill(rows)("")
       var scrollLimit = 0
       val buttons = Vector.newBuilder[DeskButton]
+      val disabledButtons = Vector.newBuilder[DeskButton]
       def line(row: Int, text: String): Unit =
         if row >= 0 && row < rows then right(row) = safeText(text)
       def button(
@@ -175,28 +181,38 @@ object Workspace:
           action: DeskAction,
           enabled: Boolean = true
       ): Unit =
-        val text = "[" + label + "]"
+        val text = if enabled then "[" + label + "]" else "(" + label + ")"
         if row < rows && column + text.length <= rightWidth then
           right(row) = right(row).padTo(column, ' ') + text
-          if enabled then
-            buttons += DeskButton(label, action, leftWidth + 2 + column, row + 1, text.length)
-      def tradeLine(row: Int, text: String): Unit = line(tradeTop + row, text)
+          val control = DeskButton(label, action, leftWidth + 2 + column, row + 1, text.length)
+          if enabled then buttons += control else disabledButtons += control
+      def tradeLine(row: Int, text: String): Unit =
+        line(tradeTop + row + (if row >= 3 then 1 else 0), text)
       def tradeButton(
           row: Int,
           column: Int,
           label: String,
           action: DeskAction,
           enabled: Boolean = true
-      ): Unit = button(tradeTop + row, column, label, action, enabled)
+      ): Unit = button(tradeTop + row + (if row >= 3 then 1 else 0), column, label, action, enabled)
       tradeLine(0, s"${panel.mode} ${s.coin}  ${panel.account}")
       tradeButton(1, 0, "p Paper", DeskAction.Mode("PAPER"), !view.pending && panel.input.isEmpty)
       tradeButton(1, 12, "l Live", DeskAction.Mode("LIVE"), !view.pending && panel.input.isEmpty)
       tradeLine(
         2,
         view.position.fold("Position unavailable")(p =>
-          "Position " + Trading.format(p)
-        ) + "  " + view.message
+          "Position " + Trading.display(p, rightWidth - 9)
+        )
       )
+      val tradeStatus = if view.pending then view.message
+      else
+        (if panel.review.nonEmpty then panel.actionNotice else None)
+          .orElse(view.block)
+          .getOrElse(view.message)
+      val acknowledgement = if !view.pending && panel.actionNotice.nonEmpty then
+        s"Action ${panel.actionNumber}: "
+      else ""
+      line(tradeTop + 3, acknowledgement + tradeStatus.replace('\n', ' '))
       val canTrade =
         view.ready && !view.pending && panel.input.isEmpty && s.prompt.isEmpty && panel.mode != "VIEW"
       var complete = false
@@ -245,10 +261,19 @@ object Workspace:
           details.zipWithIndex.foreach((text, i) => tradeLine(i + 3, text))
           if complete then
             tradeButton(10, 0, "Enter Send " + panel.mode, DeskAction.Submit, canTrade)
-          else tradeLine(9, "Review unavailable. Refresh before send")
+          else if p.coin != s.coin then tradeLine(9, "Market changed. Cancel and review again")
+          else if !knownSettings then tradeLine(9, "Account settings missing. Review when ready")
+          else if review.createdAt > now || now >= review.expiresAt then
+            tradeLine(9, "Review expired. Enter reviews again")
+            tradeButton(10, 0, "Enter Review again", DeskAction.Refresh, canTrade)
+          else tradeLine(9, "Review does not fit. Widen the window")
           tradeButton(10, 20, "Esc Cancel", DeskAction.Cancel)
         case None if panel.modeReview.isEmpty =>
           val half = rightWidth / 2
+          def targetReady(side: Side): Boolean =
+            !view.pending && panel.input.isEmpty && view.rules.exists(r =>
+              view.reference(side).exists(Trading.validPrice(_, r))
+            )
           for index <- 0 until 8 do
             val intent = Trading.action(index)
             val amount = if intent.big then panel.sizes.big else panel.sizes.small
@@ -267,14 +292,14 @@ object Workspace:
             0,
             "9 Target buy",
             DeskAction.Target(Side.Buy),
-            !view.pending && panel.input.isEmpty
+            targetReady(Side.Buy)
           )
           tradeButton(
             7,
             half,
             "0 Target sell",
             DeskAction.Target(Side.Sell),
-            !view.pending && panel.input.isEmpty
+            targetReady(Side.Sell)
           )
           panel.target.foreach { (side, price) =>
             tradeLine(
@@ -290,11 +315,17 @@ object Workspace:
             )
             tradeButton(9, 17, "Esc Cancel", DeskAction.Cancel)
           }
-          if panel.target.isEmpty then tradeLine(8, "Trade buttons open a review")
+          if panel.target.isEmpty then
+            tradeLine(
+              8,
+              if view.pending then "Waiting for result. Do not send again"
+              else if canTrade then "Trade buttons open a review"
+              else "( ) unavailable. Select one for the reason"
+            )
           if panel.mode == "PAPER" then tradeLine(10, "1x simulation. No funding or liquidation")
           if panel.target.isEmpty then
             panel.actionNotice.foreach { text =>
-              val notice = wrap("Action: " + text, rightWidth)
+              val notice = wrap(text, rightWidth)
               notice
                 .take(2)
                 .zipWithIndex
@@ -400,7 +431,17 @@ object Workspace:
           button(rows - 1, 0, "Enter Ask", DeskAction.SendQuestion)
           button(rows - 1, 14, "Esc Cancel", DeskAction.Cancel)
         case None =>
-          line(rows - 2, "q quit  m market  c chart")
+          val historyStatus = panel.historyFailure
+            .map(_ => "History save failed. h Details")
+            .orElse(
+              panel.historySavingAt
+                .filter(at => BigInt(now) - at >= 1000L)
+                .map(at =>
+                  "History saving " + ((BigInt(now) - at)
+                    .max(BigInt(0)) / 1000) + "s. Trade result above"
+                )
+            )
+          line(rows - 2, historyStatus.getOrElse("q quit  m market  c chart"))
           line(
             rows - 1,
             if panel.details then "Answers explain. Trade buttons submit."
@@ -426,5 +467,6 @@ object Workspace:
         panel.review,
         panel.mode,
         Some(outlook),
-        scrollLimit
+        scrollLimit,
+        disabledButtons.result()
       )

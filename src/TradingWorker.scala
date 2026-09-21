@@ -18,7 +18,8 @@ final case class TradingView(
     block: Option[String] = None,
     outcome: Option[String] = None,
     leverage: Option[Int] = None,
-    marginMode: Option[String] = None
+    marginMode: Option[String] = None,
+    outcomeId: Long = 0L
 ):
   def reference(side: Side): Option[BigDecimal] = if side == Side.Buy then ask else bid
   def forMarket(current: String): TradingView =
@@ -102,6 +103,7 @@ final class TradingWorker private[desk] (
   private var lastPlan = Option.empty[OrderPlan]
   private var message = if enabled then "Preparing trading" else "View only"
   private var outcome = Option.empty[String]
+  private var outcomeId = 0L
   private var fatal = false
   private var waitingRefresh = false
   private var accountVersion = 0L
@@ -157,7 +159,8 @@ final class TradingWorker private[desk] (
       block,
       outcome,
       Option.when(leverageReady)(activeLeverage),
-      Option.when(leverageReady)(activeMode)
+      Option.when(leverageReady)(activeMode),
+      outcomeId
     )
   }
 
@@ -305,6 +308,7 @@ final class TradingWorker private[desk] (
         saved = None
         message = text
         outcome = Some(text)
+        outcomeId = OrderUpdates.nextId()
         waitingRefresh = true
         accountVersion += 1
         accountAt = Long.MinValue
