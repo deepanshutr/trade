@@ -1,7 +1,7 @@
 package desk
 
 import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch, LinkedBlockingQueue, TimeUnit}
-import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
 import scala.jdk.CollectionConverters.*
 
 class MainSpec extends munit.FunSuite:
@@ -24,6 +24,7 @@ class MainSpec extends munit.FunSuite:
     @volatile private var receive: String => Unit = _ => ()
     @volatile private var disconnect: () => Unit = () => ()
     var workers = Vector.empty[Thread]
+    val repairs = new AtomicInteger()
 
     private def hold(): Unit =
       if armed.compareAndSet(true, false) then
@@ -55,9 +56,18 @@ class MainSpec extends munit.FunSuite:
         val _ = feed.connectOnce()
       catch case _: InterruptedException => Thread.currentThread().interrupt()
     )
+    val history = new Thread(() =>
+      try
+        while true do
+          feed.awaitHistoryRepair()
+          val _ = repairs.incrementAndGet()
+      catch case _: InterruptedException => ()
+    )
 
     def start(): Unit =
       connection.setDaemon(true)
+      history.setDaemon(true)
+      history.start()
       connection.start()
       assert(startup.await(3, TimeUnit.SECONDS), "initial histories did not finish")
       workers = Main.startFold(queue, state, feed, () => time)
@@ -67,6 +77,7 @@ class MainSpec extends munit.FunSuite:
         s.refs.values.forall(_.candles.keySet == State.intervals.toSet)
       }
       assertEquals(state.get().feed, Health.Live(time))
+      awaitState("initial repair did not finish")(repairs.get() == 1)
       sent.clear()
       bodies.clear()
       callers.clear()
@@ -86,8 +97,12 @@ class MainSpec extends munit.FunSuite:
       workers.foreach(_.interrupt())
       disconnect()
       connection.interrupt()
-      (workers :+ connection).foreach(_.join(3000))
-      assert((workers :+ connection).forall(!_.isAlive), "a test thread did not stop")
+      history.interrupt()
+      (workers ++ Vector(connection, history)).foreach(_.join(3000))
+      assert(
+        (workers ++ Vector(connection, history)).forall(!_.isAlive),
+        "a test thread did not stop"
+      )
 
   private def withSwitch(blockSocket: Boolean)(body: SwitchFixture => Unit): Unit =
     val f = new SwitchFixture(blockSocket)
@@ -130,14 +145,12 @@ class MainSpec extends munit.FunSuite:
       f.queue.put(Event.Resize(121, 41))
       awaitState("queued markets held up the fold")(f.state.get().cols == 121)
       assertEquals(f.state.get().coin, "XMR")
-      assertEquals(f.feed.coin, "ETH")
-      assertEquals(
-        f.sent.asScala.toVector,
-        Feed.unsubscriptions("XMR") ++ Feed.subscriptions("ETH")
+      awaitState("history held up subscription changes")(
+        f.feed.coin == "XMR" && f.sent.size() == 144
       )
       assertEquals(f.bodies.size(), 1)
       f.release.countDown()
-      awaitState("queued histories did not finish")(f.bodies.size() == 18)
+      awaitState("latest repair wake was lost")(f.repairs.get() >= 3)
       val expectedSends = Vector("XMR", "ETH", "SOL", "XMR")
         .sliding(2)
         .flatMap(pair => Feed.unsubscriptions(pair.head) ++ Feed.subscriptions(pair.last))
@@ -147,11 +160,10 @@ class MainSpec extends munit.FunSuite:
         val req = ujson.read(body)("req")
         (req("coin").str, req("interval").str)
       }
-      val expectedRequests = Vector("ETH", "SOL", "XMR")
-        .flatMap(coin => State.intervals.map(interval => (coin, interval)))
+      val expectedRequests = Vector("ETH" -> "1m") ++ State.intervals.map("XMR" -> _)
       assertEquals(requests, expectedRequests)
       assertEquals(f.feed.coin, "XMR")
-      assertEquals(f.callers.asScala.toVector.distinct, Vector(f.workers.head))
+      assertEquals(f.callers.asScala.toSet, Set(f.workers.head, f.history))
     }
   }
 
@@ -243,6 +255,12 @@ class MainSpec extends munit.FunSuite:
         val _ = events.add("selected " + coin)
       }
     )
+    val history = new Thread(() =>
+      try feed.awaitHistoryRepair()
+      catch case _: InterruptedException => ()
+    )
+    history.setDaemon(true)
+    history.start()
     try
       queue.put(Event.Key(Command.PromptSubmit))
       assert(called.await(3, TimeUnit.SECONDS))
@@ -250,4 +268,6 @@ class MainSpec extends munit.FunSuite:
     finally
       workers.foreach(_.interrupt())
       workers.foreach(_.join(3000))
+      history.interrupt()
+      history.join(3000)
   }

@@ -1,8 +1,9 @@
 # Outlook and announcements
 
 The normal workspace draws three level columns on the graph, immediately to the
-right of its price axis. Long covers the next day, Mid the next four hours and
-Short the next hour. All three use the same visible price scale as the graph.
+right of its price axis. From left to right, Short covers the next hour, Mid
+the next four hours and Long the next day. Each column uses twelve characters.
+All three use the same visible price scale as the graph.
 Trade controls remain below the columns, including while Details is open.
 The arrow describes the current trend. Support, resistance and target come from
 the last 50 complete candles. Long uses hourly candles, Mid uses fifteen-minute

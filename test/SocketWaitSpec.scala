@@ -71,8 +71,8 @@ class SocketWaitSpec extends munit.FunSuite:
       assert(!thread.isAlive)
       assertEquals(Option(failure.get()), None)
 
-  private def started(queue: ConcurrentLinkedQueue[Event]): Boolean =
-    queue.contains(Event.SocketUp) && queue.asScala.count(_.isInstanceOf[Event.CandleHistory]) == 18
+  private def started(queue: ConcurrentLinkedQueue[Event], wire: Wire): Boolean =
+    queue.contains(Event.SocketUp) && wire.sent.size() == 24
 
   private def make(connector: Connector) =
     val queue = new ConcurrentLinkedQueue[Event]()
@@ -91,7 +91,7 @@ class SocketWaitSpec extends munit.FunSuite:
     val _ = boundary.replies.add(CompletableFuture.completedFuture(replacement))
     val running = new Running(feed)
     try
-      await("the replacement startup did not finish")(started(queue))
+      await("the replacement startup did not finish")(started(queue, replacement))
       queue.clear()
       val obsolete = new Wire
       assert(pending.complete(obsolete))
@@ -122,7 +122,7 @@ class SocketWaitSpec extends munit.FunSuite:
       val running = new Running(feed)
       try
         if operation != "subscription" then
-          await("the connection startup did not finish")(started(queue))
+          await("the connection startup did not finish")(started(queue, wire))
           wire.hold = _ => true
           if operation == "heartbeat" then feed.heartbeat() else feed.setMarket("ETH")
         running.finish()
@@ -132,12 +132,11 @@ class SocketWaitSpec extends munit.FunSuite:
         assertEquals(queue.asScala.count(_ == Event.SocketDown), 1)
         assertEquals(
           queue.asScala.count(_ == Event.SocketUp),
-          if operation == "subscription" then 0 else 1
+          1
         )
         assertEquals(
           queue.asScala.last,
-          if operation == "switch" then Event.CandleHistory("ETH", "1d", Vector.empty, 1_000_000L)
-          else Event.SocketDown
+          Event.SocketDown
         )
       finally
         val _ = wire.held.complete(wire)

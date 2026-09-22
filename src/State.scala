@@ -190,7 +190,7 @@ object State:
     r.copy(samples = keep(r.samples, sec, samplesMs) :+ (sec, mid))
 
   private def step(s: Snapshot): Long =
-    val width = if s.workspace then Layout.workspaceMarketWidth(s.cols) else s.cols
+    val width = if s.workspace then Layout.workspaceChartWidth(s.cols) else s.cols
     (Layout.plotColumns(width, s.chartMode) / 4L).max(1L) * zooms(s.zoom)
 
   def reduce(s: Snapshot, e: Event, now: Long): Snapshot = e match

@@ -2,7 +2,13 @@ package desk
 
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse, WebSocket}
-import java.util.concurrent.{CompletableFuture, CompletionStage, CountDownLatch, TimeUnit}
+import java.util.concurrent.{
+  ArrayBlockingQueue,
+  CompletableFuture,
+  CompletionStage,
+  CountDownLatch,
+  TimeUnit
+}
 import scala.util.Try
 
 trait Socket:
@@ -40,7 +46,12 @@ object Feed:
 
   def subscriptions(c: String, referenceCoins: Vector[String] = State.refCoins): Vector[String] =
     val main =
-      Vector(sub("l2Book", c), sub("bbo", c), sub("trades", c), sub("activeAssetCtx", c)) ++
+      Vector(
+        sub("l2Book", c, ""","fast":true"""),
+        sub("bbo", c),
+        sub("trades", c),
+        sub("activeAssetCtx", c)
+      ) ++
         State.intervals.map(i => sub("candle", c, s""","interval":"$i""""))
     val refs = referenceCoins.distinct.flatMap(r =>
       sub("bbo", r) +: State.intervals.map(i => sub("candle", r, s""","interval":"$i""""))
@@ -75,7 +86,8 @@ final class Feed(
   private var historyAt = Map.empty[(String, String), Long]
   private var historySuccess = Map.empty[(String, String), Long]
   private var historyInFlight = Set.empty[(String, String)]
-  @volatile private var connectedHistoryAt = 0L
+  @volatile private var marketGeneration = 0L
+  private val historyWakeup = new ArrayBlockingQueue[java.lang.Boolean](1)
   private val sendLock = new Object
 
   private val references = referenceCoins.distinct
@@ -115,22 +127,15 @@ final class Feed(
             val accepted = synchronized {
               if current.contains(c) then
                 c.socket = Some(s)
+                push(Event.SocketUp)
                 true
               else false
             }
-            if accepted then
-              Feed.subscriptions(coin, references).foreach(transmit(c, _))
-              synchronized { if current.contains(c) then push(Event.SocketUp) }
+            if accepted then Feed.subscriptions(coin, references).foreach(transmit(c, _))
             else { val _ = Try(s.close()) }
             accepted
           }
-          val time = clock()
-          if synchronized(
-              current.contains(c)
-            ) && (connectedHistoryAt == 0L || time - connectedHistoryAt >= Feed.historyEveryMs)
-          then
-            connectedHistoryAt = time
-            fetchHistory()
+          if synchronized(current.contains(c)) then wakeHistory()
           c.closed.await()
           opened
     finally end(c)
@@ -162,7 +167,12 @@ final class Feed(
         .foreach(b => push(Event.CoarseBook(c, k, b)))
     }
 
-  private def history(c: String, i: String, force: Boolean): Unit =
+  private def history(
+      c: String,
+      i: String,
+      force: Boolean,
+      relevant: () => Boolean = () => true
+  ): Unit =
     val requestedAt = clock()
     val key = (c, i)
     val accepted = synchronized {
@@ -171,7 +181,7 @@ final class Feed(
           State.intervalMs(i).max(Feed.historyEveryMs)
         else Feed.historyEveryMs
       val due = historyAt.get(key).forall(at => requestedAt < at || requestedAt - at >= wait)
-      if historyInFlight.contains(key) || (!force && !due) then false
+      if !relevant() || historyInFlight.contains(key) || (!force && !due) then false
       else
         historyAt = historyAt.updated(key, requestedAt)
         historyInFlight += key
@@ -181,13 +191,17 @@ final class Feed(
       try
         val since = synchronized(historySuccess.get(key).map(_ - 2L * State.intervalMs(i)))
         def attempt(): Option[Vector[Candle]] =
-          rest.post(Feed.historyBody(c, i, clock(), since)).flatMap(Events.parseRestCandles)
+          if relevant() then
+            rest.post(Feed.historyBody(c, i, clock(), since)).flatMap(Events.parseRestCandles)
+          else None
         attempt().orElse(attempt()) match
           case Some(cs) =>
-            if cs.nonEmpty then
-              synchronized { historySuccess = historySuccess.updated(key, requestedAt) }
-            push(Event.CandleHistory(c, i, cs, requestedAt))
-          case None => push(Event.CandleHistoryFailed)
+            synchronized {
+              if relevant() then
+                if cs.nonEmpty then historySuccess = historySuccess.updated(key, requestedAt)
+                push(Event.CandleHistory(c, i, cs, requestedAt))
+            }
+          case None => if relevant() then push(Event.CandleHistoryFailed)
       finally synchronized { historyInFlight -= key }
 
   def fetchHistoryFor(c: String): Unit = State.intervals.foreach(i => history(c, i, true))
@@ -197,24 +211,35 @@ final class Feed(
     (c +: references.filterNot(_ == c)).foreach(fetchHistoryFor)
 
   def repairHistory(): Unit =
-    val c = coin
+    val (generation, c) = synchronized { (marketGeneration, coin) }
     (c +: references.filterNot(_ == c)).foreach(market =>
-      State.intervals.foreach(i => history(market, i, false))
+      State.intervals.foreach(i => history(market, i, false, () => generation == marketGeneration))
     )
+
+  private def wakeHistory(): Unit = { val _ = historyWakeup.offer(java.lang.Boolean.TRUE) }
+
+  def awaitHistoryRepair(): Unit =
+    val _ = historyWakeup.poll(Feed.historyEveryMs, TimeUnit.MILLISECONDS)
+    repairHistory()
 
   def setMarket(newCoin: String): Unit =
     val changed = sendLock.synchronized {
       if newCoin == coin then false
       else
         val old = coin
-        coin = newCoin
+        synchronized {
+          coin = newCoin
+          marketGeneration += 1L
+          historyAt = historyAt.filterNot(_._1._1 == newCoin)
+          historySuccess = historySuccess.filterNot(_._1._1 == newCoin)
+        }
         synchronized(current).foreach { c =>
           Feed.unsubscriptions(old, references).foreach(transmit(c, _))
           Feed.subscriptions(newCoin, references).foreach(transmit(c, _))
         }
         true
     }
-    if changed then fetchHistoryFor(newCoin)
+    if changed then wakeHistory()
 
 final class SocketConnector(val url: String, waitMs: Long = 5000L) extends Connector:
   private val client = HttpClient.newHttpClient()
@@ -257,14 +282,15 @@ final class EndpointRest(val url: String) extends Rest:
   private val client = HttpClient.newHttpClient()
 
   def post(body: String): Option[String] = Try {
-    PublicRequestBudget.waitFor(body)
-    val request = HttpRequest
-      .newBuilder(URI.create(url))
-      .timeout(java.time.Duration.ofSeconds(5))
-      .header("Content-Type", "application/json")
-      .POST(HttpRequest.BodyPublishers.ofString(body))
-      .build()
-    val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-    if response.statusCode() == 200 then response.body()
-    else throw new RuntimeException(s"http ${response.statusCode()}")
+    PublicRequestBudget.execute(body) {
+      val request = HttpRequest
+        .newBuilder(URI.create(url))
+        .timeout(java.time.Duration.ofSeconds(5))
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(body))
+        .build()
+      val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+      if response.statusCode() == 200 then response.body()
+      else throw new RuntimeException(s"http ${response.statusCode()}")
+    }
   }.toOption

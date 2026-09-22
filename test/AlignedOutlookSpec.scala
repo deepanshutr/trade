@@ -56,7 +56,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
   private def cells(frame: WorkspaceFrame, row: Int): Vector[String] =
     Chart
       .plain(frame.lines(row))
-      .drop(Layout.workspaceMarketWidth(frame.cols) + 1)
+      .drop(Layout.workspaceChartWidth(frame.cols) + 1)
       .split("\\|", -1)
       .toVector
       .map(_.trim)
@@ -68,9 +68,9 @@ class AlignedOutlookSpec extends munit.FunSuite:
       style <- Vector(Style.mono, Style.colour)
     do
       val frame = draw(market.copy(chartMode = mode), cols = cols, rows = rows, style = style)
-      val height = rows - 22
-      assert(cells(frame, 0).zip(Outlook.horizons).forall((c, h) => c.contains(h.label)))
-      for (column, i) <- outlook.columns.zipWithIndex do
+      val height = rows - 24
+      assert(cells(frame, 0).zip(Outlook.horizons.reverse).forall((c, h) => c.contains(h.label)))
+      for (column, i) <- outlook.columns.reverse.zipWithIndex do
         for (label, value) <- Vector("S" -> column.support.get, "TR" -> column.target.get) do
           // Book extent 90..110 plus the existing five percent padding: 89..111.
           val dot = math.floor((111 - value) / 22 * (height * 4 - 1) + 0.5).toInt
@@ -91,8 +91,8 @@ class AlignedOutlookSpec extends munit.FunSuite:
     )
     val frame = draw(o = outside)
     assert(cells(frame, 1).forall(_.startsWith("↑TR ")), frame.lines.mkString("\n"))
-    assert(cells(frame, 8).forall(_.startsWith("↓S ")), frame.lines.mkString("\n"))
-    assert("[─⠉⠒⠤⣀][STR]".r.findFirstIn(frame.lines.slice(1, 9).mkString).isEmpty)
+    assert(cells(frame, 6).forall(_.startsWith("↓S ")), frame.lines.mkString("\n"))
+    assert("[─⠉⠒⠤⣀][STR]".r.findFirstIn(frame.lines.slice(1, 7).mkString).isEmpty)
   }
 
   test("distinct levels that share one row keep every label and no misleading single price") {
@@ -102,7 +102,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
       )
     )
     val frame = draw(o = close)
-    assert(cells(frame, 4).forall(_ == "⣀STR *"), frame.lines.mkString("\n"))
+    assert(cells(frame, 3).forall(_ == "⣀STR *"), frame.lines.mkString("\n"))
     assert(frame.lines.last.contains("S support R resist T target"))
   }
 
@@ -125,7 +125,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
 
   test("missing scale and missing levels never invent price marks") {
     val noScale = draw(market.copy(book = None), outlook)
-    assert(noScale.lines.exists(_.contains("No price scale")))
+    assert(noScale.lines.exists(_.contains("No prices")))
     val marker = "[─⠉⠒⠤⣀↑↓][STR]".r
     assert(marker.findFirstIn(noScale.lines.mkString).isEmpty)
     val empty = draw(o = Outlook.empty("XMR").copy(calculatedAt = now))
@@ -143,10 +143,10 @@ class AlignedOutlookSpec extends munit.FunSuite:
     do
       val s = market.copy(samples = samples, offsetSec = offset, zoom = zoom)
       val frame = draw(s, cols = width, rows = height)
-      val priceRows = height - 22
+      val priceRows = height - 24
       val labels =
         frame.lines.slice(1, 1 + priceRows).map(line => Chart.plain(line).take(8).trim.toDouble)
-      for (column, index) <- outlook.columns.zipWithIndex do
+      for (column, index) <- outlook.columns.reverse.zipWithIndex do
         val price = column.target.get
         val nearest = math
           .floor(
@@ -164,7 +164,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
       assert(frame.lines.forall(_.length == 100))
       assert(frame.buttons.filter(_.action.isInstanceOf[DeskAction.Target]).forall(_.y == 24))
       assert(frame.lines(15).contains("VIEW XMR"))
-      assert(cells(frame, 0).head.contains("LONG"))
+      assert(cells(frame, 0).head.contains("SHORT"))
   }
 
   test("edge prices stay in range beside an outside price sharing the edge row") {
@@ -179,8 +179,8 @@ class AlignedOutlookSpec extends munit.FunSuite:
   test("stale quotes retain descriptive levels but never active rates or direction") {
     val stale = draw(market.copy(book = Some(book.copy(time = now - 6000))))
     assert(!cells(stale, 0).exists(c => c.contains("↑") || c.contains("↓")))
-    assert(cells(stale, 9).forall(_.contains("Stale price")))
-    assert(cells(stale, 10).forall(_ == "Base --"))
-    assert(cells(stale, 11).forall(_ == "Match --"))
-    assert(stale.lines.slice(1, 9).exists(_.contains("TR ")))
+    assert(cells(stale, 7).forall(_.contains("Stale price")))
+    assert(cells(stale, 8).forall(_ == "Base --"))
+    assert(cells(stale, 9).forall(_ == "Match --"))
+    assert(stale.lines.slice(1, 7).exists(_.contains("TR ")))
   }

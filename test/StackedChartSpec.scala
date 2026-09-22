@@ -80,7 +80,7 @@ class StackedChartSpec extends munit.FunSuite:
         )
       )
     val frame = draw(s)
-    assertEquals(frame.slice(13, 16).map(_.drop(91)), Vector("   2050.0", "   1500.0", "    950.0"))
+    assertEquals(frame.slice(13, 16).map(_.drop(91)), Vector("   3050.0", "    <2000", "    950.0"))
     val changedMain = draw(s.copy(samples = Vector(sec -> 9000.0)))
     assertEquals(frame.slice(13, 19), changedMain.slice(13, 19))
   }

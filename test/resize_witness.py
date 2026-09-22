@@ -64,9 +64,9 @@ for number in range(3):
         ordered = int(resized['entered_ns']) < int(pan['entered_ns'])
         minimum = elapsed // 1_000_000_000 - 1
         maximum = (elapsed + 999_999_999) // 1_000_000_000 + 1
-        correct_step = minimum <= difference + 16 <= maximum
+        correct_step = minimum <= difference + 21 <= maximum
         record = {'trial': number + 1, 'elapsed_ns': elapsed, 'clock_difference_seconds': difference,
-                  'expected_pan_seconds': 16, 'resize_before_pan': ordered, 'correct_step': correct_step,
+                  'expected_pan_seconds': 21, 'resize_before_pan': ordered, 'correct_step': correct_step,
                   'samples': samples, 'before_axis': axis(before), 'after_axis': axis(after)}
         records.append(record)
         print(json.dumps(record), flush=True)

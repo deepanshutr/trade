@@ -82,9 +82,7 @@ object WorkspaceApp:
         Thread.sleep(2000L)
     },
     background("history-repair") {
-      while true do
-        Thread.sleep(Feed.historyEveryMs)
-        feed.repairHistory()
+      while true do feed.awaitHistoryRepair()
     }
   )
 

@@ -106,7 +106,7 @@ class PublicConnectionSpec extends munit.FunSuite:
     }
     assertEquals(waited, 1000L)
     assertEquals(probe.links.peek().closes, 1)
-    assertEquals(queue.asScala.toVector, Vector(Event.SocketDown))
+    assertEquals(queue.asScala.toVector, Vector(Event.SocketUp, Event.SocketDown))
     assert(history.isEmpty)
   }
 
@@ -115,11 +115,13 @@ class PublicConnectionSpec extends munit.FunSuite:
       val probe = new Probe
       val (feed, queue, history) = make(probe)
       val first = new Running(feed)
+      feed.awaitHistoryRepair()
       await("the initial history did not finish")(history.size() == 18)
       val old = probe.links.peek()
       old.failSend.set(true)
       try
         if operation == "heartbeat" then feed.heartbeat() else feed.setMarket("ETH")
+        if operation == "switch" then feed.awaitHistoryRepair()
         first.finish()
         assertEquals(first.result.get(), true)
         assertEquals(old.closes, 1)
@@ -145,6 +147,7 @@ class PublicConnectionSpec extends munit.FunSuite:
     val probe = new Probe
     val (feed, queue, history) = make(probe)
     val first = new Running(feed)
+    feed.awaitHistoryRepair()
     await("the first connection did not finish startup")(history.size() == 18)
     val oldText = probe.messages.peek()
     val oldClose = probe.closures.peek()
@@ -175,6 +178,7 @@ class PublicConnectionSpec extends munit.FunSuite:
     val (feed, queue, history) = make(probe)
     val state = new AtomicReference(Snapshot.initial("XMR", 1_000_000L))
     val first = new Running(feed)
+    feed.awaitHistoryRepair()
     await("the first connection did not finish startup")(history.size() == 18)
     val old = probe.links.peek()
     old.hold = true
@@ -206,6 +210,7 @@ class PublicConnectionSpec extends munit.FunSuite:
       old.release.countDown()
       await("the replacement did not subscribe")(probe.links.asScala.last.sent.size() == 24)
       assertEquals(probe.links.asScala.last.sent.asScala.toVector, Feed.subscriptions("ETH"))
+      feed.awaitHistoryRepair()
       await("the explicit switch did not fetch all six histories")(history.size() == 24)
       assert(history.asScala.toVector.takeRight(6).forall(_.contains("\"coin\":\"ETH\"")))
       assertEquals(old.closes, 1)
@@ -248,6 +253,7 @@ class PublicConnectionSpec extends munit.FunSuite:
     val probe = new Probe
     val (feed, queue, history) = make(probe)
     val first = new Running(feed)
+    feed.awaitHistoryRepair()
     await("the first history did not finish")(history.size() == 18)
     val closeFirst = probe.closures.peek()
     closeFirst()
@@ -257,11 +263,12 @@ class PublicConnectionSpec extends munit.FunSuite:
     try
       assert(probe.openEntered.await(3, TimeUnit.SECONDS))
       feed.setMarket("ETH")
+      feed.awaitHistoryRepair()
       assertEquals(history.size(), 24)
       assert(probe.links.asScala.last.sent.isEmpty)
       probe.openRelease.countDown()
       await("the replacement did not finish subscription")(
-        queue.asScala.count(_ == Event.SocketUp) == 2
+        queue.asScala.count(_ == Event.SocketUp) == 2 && probe.links.asScala.last.sent.size() == 24
       )
       assertEquals(probe.links.asScala.last.sent.asScala.toVector, Feed.subscriptions("ETH"))
       assertEquals(history.size(), 24)

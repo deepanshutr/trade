@@ -242,7 +242,7 @@ class CandleModeSpec extends munit.FunSuite:
       assert(main.forall(row => row.take(start).trim.isEmpty && row.drop(end).trim.isEmpty))
       for first <- Vector(13, 16) do
         val ref = frame.slice(first, first + 3).map(_.slice(Layout.leftW, cols - Layout.scaleW))
-        assertEquals(ref.map(_.slice(start, end)), Vector(" │   │  ", " □  ███ ", " │   │  "))
+        assertEquals(ref.map(_.slice(start, end)), Vector(" │   │  ", " □  ███ ", "        "))
         assert(ref.forall(row => row.take(start).trim.isEmpty && row.drop(end).trim.isEmpty))
       val volume = frame(12).slice(Layout.leftW, cols - Layout.scaleW)
       assertEquals(
