@@ -132,42 +132,60 @@ object Workspace:
     else
       val leftWidth = Layout.workspaceMarketWidth(cols)
       val rightWidth = cols - leftWidth - 1
-      val bookWidth = leftWidth - 21
+      val chartWidth = Layout.workspaceChartWidth(cols)
+      val correlationWidth = (leftWidth - 28).min(31)
+      val bookWidth = leftWidth - correlationWidth - 1
       val h = ((bookWidth - 27) / 2).max(1).min(20)
       val referenceCoins = Vector("BTC", "PAXG")
       val correlation = referenceCoins.flatMap { coin =>
         Gauges.horizons.zipWithIndex.map { case ((label, interval, n), index) =>
-          val r = Quant.compare(
-            s.candles.getOrElse(interval, Vector.empty),
-            s.refs.getOrElse(coin, Ref.empty).candles.getOrElse(interval, Vector.empty),
-            interval,
-            n,
-            now
-          )
+          val r = if coin == s.coin then Comparison(None, 0, n, "same market")
+          else
+            Quant.compare(
+              s.candles.getOrElse(interval, Vector.empty),
+              s.refs.getOrElse(coin, Ref.empty).candles.getOrElse(interval, Vector.empty),
+              interval,
+              n,
+              now
+            )
           val prefix = if index == 0 then (if coin == "PAXG" then "gold" else "BTC") else ""
           val reading =
-            r.value.map(v => f"$v%+.2f ${r.count}/$n").getOrElse(s"${r.status} ${r.count}/$n")
-          Chart.fit(s"$prefix $label $reading".trim, 20)
+            r.value
+              .map { v =>
+                val rail = Gauges.track(
+                  Some(v),
+                  ((correlationWidth - 22) / 2).max(1),
+                  if v >= 0 then style.bid else style.ask
+                )
+                rail + f" $v%+.2f ${r.count}/$n"
+              }
+              .getOrElse(s"${r.status} ${r.count}/$n")
+          Chart.fit(s"$prefix $label $reading".trim, correlationWidth)
         }
       }
       val indicators = (0 until 12).toVector.map { i =>
         val reading = if i < 6 then Gauges.bookRow(s, i, now, h, style)
+        else if bookWidth < 30 then Gauges.compactTapeRow(s, i - 6, now, h, style)
         else Gauges.tapeRow(s, i - 6, now, h, style)
         Chart.fit(reading, bookWidth) + " " + correlation(i)
       }
       val tradeTop = rows - 15
       val marketFrame = Screen.renderMarket(
         s,
-        leftWidth,
+        chartWidth,
         rows,
         now,
         zone,
         style,
         marketOnly = true,
         reservedRows = 12,
-        maxPriceRows = tradeTop - 7
+        maxPriceRows = (tradeTop - 8).min(
+          tradeTop - 3 - Layout.referenceRows * s.referenceCoins.distinct.count(_ != s.coin)
+        )
       )
-      val market = marketFrame.lines.padTo(rows - 12, " " * leftWidth) ++ indicators
+      val market = marketFrame.lines.padTo(tradeTop, " " * chartWidth) ++ Vector.fill(3)(
+        " " * leftWidth
+      ) ++ indicators
       val right = Array.fill(rows)("")
       var scrollLimit = 0
       val buttons = Vector.newBuilder[DeskButton]
@@ -182,9 +200,11 @@ object Workspace:
           enabled: Boolean = true
       ): Unit =
         val text = if enabled then "[" + label + "]" else "(" + label + ")"
-        if row < rows && column + text.length <= rightWidth then
+        val width = if row < tradeTop then Layout.outlookWidth else rightWidth
+        val origin = if row < tradeTop then chartWidth else leftWidth
+        if row < rows && column + text.length <= width then
           right(row) = right(row).padTo(column, ' ') + text
-          val control = DeskButton(label, action, leftWidth + 2 + column, row + 1, text.length)
+          val control = DeskButton(label, action, origin + 2 + column, row + 1, text.length)
           if enabled then buttons += control else disabledButtons += control
       def tradeLine(row: Int, text: String): Unit =
         line(tradeTop + row + (if row >= 3 then 1 else 0), text)
@@ -378,7 +398,10 @@ object Workspace:
         val messages = history.flatMap { m =>
           val time = java.time.Instant.ofEpochMilli(m.at).atZone(zone).toLocalTime.toString.take(8)
           val label = if m.kind == "analysis" then s"analysis #${m.id}" else m.kind
-          wrap(s"$time $label: ${m.text}", rightWidth).map(text => (Some(m.id), text)) :+ (None, "")
+          wrap(s"$time $label: ${m.text}", Layout.outlookWidth).map(text => (Some(m.id), text)) :+ (
+            None,
+            ""
+          )
         }
         val firstRow = if panel.detailPage == DetailPage.Answers then 5 else 3
         val messageRows = tradeTop - firstRow
@@ -393,7 +416,7 @@ object Workspace:
           panel.messages.reverse.find(m => m.kind == "analysis" && visibleIds.contains(m.id))
         if panel.input.isEmpty && lastAnalysis.nonEmpty then
           button(3, 0, "y Accept analysis", DeskAction.Feedback(lastAnalysis.get.id, true))
-          button(3, 22, "n Reject analysis", DeskAction.Feedback(lastAnalysis.get.id, false))
+          button(3, 20, "n Reject", DeskAction.Feedback(lastAnalysis.get.id, false))
         lastAnalysis.foreach { message =>
           val feedback =
             message.feedback.fold("")(accepted => if accepted then " accepted" else " rejected")
@@ -402,7 +425,7 @@ object Workspace:
         visibleMessages.zipWithIndex.foreach { case ((_, text), i) => line(firstRow + i, text) }
       else
         OutlookScreen
-          .rows(outlook, rightWidth, marketFrame.axis, marketFrame.priceRows, s.chartMode)
+          .rows(outlook, Layout.outlookWidth, marketFrame.axis, marketFrame.priceRows, s.chartMode)
           .zipWithIndex
           .foreach((text, i) => line(i, text))
         val latest = panel.alerts.lastOption
@@ -417,10 +440,11 @@ object Workspace:
         }
         line(
           marketFrame.priceRows + 5,
-          if headline.length <= rightWidth then headline
-          else headline.take(rightWidth - 13) + "... h Details"
+          if headline.length <= Layout.outlookWidth then headline
+          else headline.take(Layout.outlookWidth - 13) + "... h Details"
         )
-        line(marketFrame.priceRows + 6, panel.newsStatus + " | " + panel.soundStatus)
+        line(marketFrame.priceRows + 6, panel.newsStatus)
+        line(marketFrame.priceRows + 7, panel.soundStatus)
       button(rows - 3, 0, "a Ask", DeskAction.Ask)
       button(rows - 3, 8, if panel.details then "h Close" else "h Details", DeskAction.Details)
       button(rows - 3, 20, if panel.muted then "v Sound" else "v Mute", DeskAction.ToggleMute)
@@ -455,7 +479,10 @@ object Workspace:
             .replace("↑", style.wrap(style.bid, "↑"))
             .replace("↓", style.wrap(style.ask, "↓"))
         else right(i)
-        displayed + "|" + Chart.fit(panelLine, rightWidth)
+        displayed + "|" + Chart.fit(
+          panelLine,
+          if i < tradeTop then Layout.outlookWidth else rightWidth
+        )
       }
       WorkspaceFrame(
         lines,

@@ -2,7 +2,7 @@ package desk
 
 class WorkspaceViewportSpec extends munit.FunSuite:
   test("history moves by a quarter of the visible market plot after resize") {
-    for (width, seconds) <- Vector(100 -> 7L, 120 -> 16L, 160 -> 28L) do
+    for (width, seconds) <- Vector(100 -> 11L, 120 -> 21L, 160 -> 41L) do
       val initial = Snapshot.initial("XMR", 0L).copy(workspace = true)
       val sized = State.reduce(initial, Event.Resize(width, 40), 0L)
       val back = State.reduce(sized, Event.Key(Command.ScrubBack), 0L)

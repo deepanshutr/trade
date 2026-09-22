@@ -189,7 +189,8 @@ class UiBoundarySpec extends munit.FunSuite:
     assert(frame.lines.exists(_.startsWith("PAXG (token tied to gold)")))
     val tape = frame.lines.indexWhere(_.startsWith("TAPE"))
     assert(tape >= 0)
-    assertEquals(frame.lines(tape).take(53).takeRight(20), "gold 15m +1.00 15/15")
+    val correlation = frame.lines(tape).take(53).takeRight(25).trim
+    assertEquals(correlation, "gold 15m .|⣿ +1.00 15/15")
   }
 
   test("market-only charts use plain reference labels alongside the workspace correlations") {

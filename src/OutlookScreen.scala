@@ -40,7 +40,7 @@ object OutlookScreen:
       mode: ChartMode
   ): Vector[String] =
     val cellWidth = (width - 2) / 3
-    val columns = view.columns.map { column =>
+    val columns = view.columns.reverse.map { column =>
       val period = column.horizon.label match
         case "LONG" => "1d"
         case "MID"  => "4h"
@@ -53,7 +53,7 @@ object OutlookScreen:
         .flatMap((label, value) => value.filter(p => p > 0 && p.isFinite).map(label -> _))
       val marks = (0 until height).toVector.map { row =>
         axis match
-          case None    => if row == height / 2 then "No price scale" else ""
+          case None    => if row == height / 2 then "No prices" else ""
           case Some(a) =>
             val here = levels.filter { (_, price) =>
               val placed = if price > a.hi then 0

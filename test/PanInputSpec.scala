@@ -18,7 +18,7 @@ class PanInputSpec extends munit.FunSuite:
     val after = fold(initial, queue)
     assertEquals(after.cols, 120)
     assertEquals(after.rows, 40)
-    assertEquals(after.offsetSec, 16L)
+    assertEquals(after.offsetSec, 21L)
   }
 
   test("queued resizes retain the size measured for each pan") {
@@ -28,7 +28,7 @@ class PanInputSpec extends munit.FunSuite:
       WorkspaceApp.enqueueInput(Command.ScrubBack, size, queue, pending)
     val after = fold(initial, queue)
     assertEquals(after.cols, 100)
-    assertEquals(after.offsetSec, 23L)
+    assertEquals(after.offsetSec, 32L)
   }
 
   test("the prompt completion guard survives resized input enqueueing") {

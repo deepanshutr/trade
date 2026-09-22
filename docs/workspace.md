@@ -8,11 +8,18 @@ account. The right panel always names the current mode. The supported minimum is
 The book sits above the trade tape. Bitcoin and gold comparisons sit beside them.
 BTC means bitcoin. PAXG is a token tied to gold and is the gold reference here.
 Each comparison reports paired candle coverage. Missing, stale or incomplete
-readings stay unavailable. A correlation describes past movement together. It
+readings stay unavailable. Its marker moves from negative correlation on the
+left, through zero in the middle, to positive correlation on the right. The
+number runs from -1 to +1 and updates with the closed candles for that period.
+A correlation describes past movement together. It
 does not establish what either market will do next.
 
-The graph has Long one-day, Mid four-hour and Short one-hour level columns on
-the right of its price axis, with trade controls below. Historical percentages
+The graph has Short one-hour, Mid four-hour and Long one-day level columns on
+the right of its price axis, with trade controls below. Each column uses twelve
+characters so the graph has more room. Bitcoin and gold graphs show the upper
+and lower scale bounds, with the latest visible price marked in the middle.
+When viewing history, that middle price belongs to the visible window.
+Historical percentages
 describe measured target touches, with sample counts and unavailable states.
 The normal view keeps transcripts and logs
 out of the way. See [outlook and announcements](outlook-and-alerts.md) for the exact
@@ -49,6 +56,11 @@ controls.
 
 Paper mode starts with $10,000 and a 0.05 percent fee per fill. It uses visible
 depth, allows partial fills and saves the account before reporting success.
+Selected-market depth uses the faster five-level public stream. Simulated fills
+use only received liquidity. The one-second price-age check remains in force,
+so a connection outage can still make prices unavailable. History downloads
+run separately from connection changes and yield request capacity to price
+refreshes. Returning to a market requests its full candle history again.
 During a slow save, the screen stays responsive and shows the order as pending.
 Another order or mode change must wait for that result. A failed save leaves the
 last confirmed account visible and reports the storage failure. It supports one

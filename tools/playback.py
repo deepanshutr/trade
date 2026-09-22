@@ -318,8 +318,8 @@ class Playback:
             self.key("line", b"c", contains("1s/col"))
             before = self.frames.complete[-1]
             # Workspace has a 53-column market panel, leaving 28 one-second dots.
-            step = 7 if self.args.display_contract == "workspace" else 30
-            count = 1 if self.args.display_contract == "workspace" else 3
+            step = 11 if self.args.display_contract == "workspace" else 30
+            count = 2 if self.args.display_contract == "workspace" else 3
             history = self.key("history back", ESC + b"[D", lambda f: history_matches(before, f, -step, clock_count=count))
             self.key("history forward", ESC + b"[C",
                      lambda f: history_matches(history, f, step, clock_count=count) and history_matches(before, f, 0, 20, clock_count=count))

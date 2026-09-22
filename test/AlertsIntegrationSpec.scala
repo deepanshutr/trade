@@ -66,11 +66,14 @@ class AlertsIntegrationSpec extends munit.FunSuite:
       ZoneOffset.UTC,
       Style.mono
     )
-    val text = frame.lines.mkString("\n")
+    val text = frame.lines
+      .take(45 - 15)
+      .map(_.drop(Layout.workspaceChartWidth(160) + 1))
+      .mkString("\n")
     assert(text.contains("Published 2026-09-21T11:50:00Z"), text)
     assert(text.contains("Retrieved 2026-09-21T11:59:59Z"), text)
-    assert(text.contains("Missing source: calendar"), text)
-    assert(text.contains(item.url), text)
+    assert(text.replaceAll("\\s", "").contains("Missingsource:calendar"), text)
+    assert(text.replaceAll("\\s", "").contains(item.url), text)
   }
 
   test("full sound queues retain the visual notice without persisting on the input lock") {

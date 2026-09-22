@@ -122,7 +122,13 @@ object Screen:
     val referenceLines = references.flatMap { coin =>
       val data = s.refs.getOrElse(coin, Ref.empty)
       val values = Chart.referenceColumns(data, count, s, now)
-      val ax = Chart.axis(values, None, Layout.referenceRows)
+      val current = values.flatten.lastOption.map(_.last)
+      val ax = Chart.axis(values, None, Layout.referenceRows).map { a =>
+        current.fold(a) { price =>
+          val radius = (price - a.lo).max(a.hi - price)
+          Axis(price - radius, price + radius, a.rows)
+        }
+      }
       val ink = ax.fold(Vector.fill(Layout.referenceRows)(" " * cells))(a =>
         Chart.plot(values, a, cells, s.chartMode)
       )
@@ -130,7 +136,8 @@ object Screen:
         val label = if coin == "PAXG" then "PAXG (token tied to gold)" else coin
         Vector(Chart.fit(label, Layout.leftW)).padTo(Layout.referenceRows, " " * Layout.leftW)
       else Gauges.correlationRows(s, coin)
-      val prices = Chart.scaleRows(ax, Layout.referenceRows, None, None)
+      val currentText = current.map(p => Trading.display(BigDecimal(p), Layout.scaleW - 1))
+      val prices = Chart.scaleRows(ax, Layout.referenceRows, current.map(_ => 1), currentText)
       (0 until Layout.referenceRows).map(i => labels(i) + ink(i) + prices(i))
     }
     val (first, z) = Chart.window(s, count, now)

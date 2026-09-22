@@ -87,8 +87,8 @@ object Gauges:
 
   def fmt(v: Option[Double], letter: Char): String = v.fold(s"$letter   --")(x => f"$letter$x%+.2f")
 
-  private def label(s: Snapshot, name: String, secs: Long, now: Long): String =
-    val text = Chart.rjust(name, 4)
+  private def label(s: Snapshot, name: String, secs: Long, now: Long, width: Int = 4): String =
+    val text = Chart.rjust(name, width)
     if secs * 1000 > now - s.since then Screen.dim + text + Screen.reset else text
 
   def tapeStats(
@@ -166,3 +166,8 @@ object Gauges:
 
   def tapeRow(s: Snapshot, i: Int, now: Long, h: Int, st: Style): String =
     tapeText(s, i, now, tapeStats(s.tape, now, Vector(tapeLenses(i)._2)).head, h, st)
+
+  def compactTapeRow(s: Snapshot, i: Int, now: Long, h: Int, st: Style): String =
+    val (name, secs) = tapeLenses(i)
+    val (value, count) = tapeStats(s.tape, now, Vector(secs)).head
+    s"TAPE ${label(s, name, secs, now, 3)} ${track(value, h, sideStyle(value, st))} ${fmt(value, 'F')} n$count"

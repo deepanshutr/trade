@@ -62,12 +62,14 @@ class FeedSpec extends munit.FunSuite:
     assertEquals(j.append("x", last = true), Some("x"))
   }
   test(
-    "on open the whole subscription set goes out in order, history is fetched, the queue sees SocketUp"
+    "on open subscriptions and connection-up finish before the separate history repair"
   ) {
     val c = new FakeConnector
     val rest = restAnswering()
     val (feed, queue) = newFeed(c, rest)
     val t = startConnected(feed)
+    assert(rest.bodies.isEmpty)
+    feed.awaitHistoryRepair()
     val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
     while queue.asScala.count(_.isInstanceOf[Event.CandleHistory]) < 18 && System
         .nanoTime() < deadline
@@ -220,7 +222,7 @@ class FeedSpec extends munit.FunSuite:
     feed2.pollCoarse()
     assert(queue2.isEmpty)
   }
-  test("history is fetched on the first connect and again only a minute later") {
+  test("connection wakes repair and each interval retains its own retry schedule") {
     val c = new FakeConnector
     val rest = restAnswering()
     var t = 1_000_000L
@@ -228,6 +230,7 @@ class FeedSpec extends munit.FunSuite:
     val feed = new Feed(c, rest, queue, () => t, "XMR")
     def cycle(): Int =
       val thread = startConnected(feed)
+      feed.awaitHistoryRepair()
       c.onClose()
       val _ = thread.join(1000)
       rest.bodies.asScala.count(_.contains("candleSnapshot"))
@@ -235,7 +238,7 @@ class FeedSpec extends munit.FunSuite:
     t += 1_000L
     assertEquals(cycle(), 18)
     t += 59_000L
-    assertEquals(cycle(), 36)
+    assertEquals(cycle(), 21)
   }
   test("backoff is 1, 2, 4 then 8 seconds forever") {
     assertEquals((1 to 6).map(Feed.backoffMs), Seq(1000L, 2000L, 4000L, 8000L, 8000L, 8000L))
@@ -257,15 +260,18 @@ class FeedSpec extends munit.FunSuite:
     Thread.sleep(300)
     assertEquals(waits.asScala.toVector.take(3), Vector(1000L, 2000L, 1000L))
   }
-  test("a market switch resubscribes the whole set and refetches the main market's series") {
+  test("a market switch resubscribes immediately and wakes the latest market history repair") {
     val c = new FakeConnector
     val rest = restAnswering()
     val (feed, _) = newFeed(c, rest)
     val t = startConnected(feed)
+    feed.awaitHistoryRepair()
     val s = c.sockets.peek()
     s.sent.clear()
     rest.bodies.clear()
     feed.setMarket("ETH")
+    assert(rest.bodies.isEmpty)
+    feed.awaitHistoryRepair()
     assertEquals(feed.coin, "ETH")
     val sent = s.sent.asScala.toVector
     assertEquals(sent.size, 48)
@@ -339,10 +345,13 @@ class FeedSpec extends munit.FunSuite:
     val feed = new Feed(connector, rest, queue, () => 10_000_000L, "XMR", refs)
     val thread = startConnected(feed)
     try
+      feed.awaitHistoryRepair()
       val socket = connector.sockets.peek()
       socket.sent.clear()
       rest.bodies.clear()
       feed.setMarket("SOL")
+      assert(rest.bodies.isEmpty)
+      feed.awaitHistoryRepair()
       assertEquals(
         socket.sent.asScala.toVector,
         Feed.unsubscriptions("XMR", refs) ++ Feed.subscriptions("SOL", refs)

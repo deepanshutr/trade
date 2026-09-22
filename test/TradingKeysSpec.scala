@@ -141,6 +141,12 @@ class TradingKeysSpec extends munit.FunSuite:
         throw new IllegalStateException("not connected in this test")
     val feed = new Feed(connector, rest, queue, () => now, "XMR")
     val workers = Main.startFold(queue, state, feed, () => now)
+    val history = new Thread(() =>
+      try feed.awaitHistoryRepair()
+      catch case _: InterruptedException => ()
+    )
+    history.setDaemon(true)
+    history.start()
     val writer = new Thread(() =>
       Main.writeMarketFrame(
         "BTC",
@@ -187,6 +193,8 @@ class TradingKeysSpec extends munit.FunSuite:
       writer.join(3000)
       workers.foreach(_.interrupt())
       workers.foreach(_.join(3000))
+      history.interrupt()
+      history.join(3000)
   }
 
   test("a failed write or small-terminal message cannot publish a trading market") {
