@@ -59,6 +59,7 @@ object Onchain:
     ("eth_call", ujson.Arr(ujson.Obj("to" -> to, "data" -> data), "latest"))
 
   val logSpan = 200L
+  val logRetryMs = 600_000L
 
   /** Swap logs over an explicit block range. Nodes refuse an open upper bound. */
   def logs(pair: String, fromBlock: Long, toBlock: Long): (String, ujson.Value) =
@@ -141,12 +142,19 @@ object Onchain:
       .toPlainString
 
   /** The pool's own liquidity as a book: levels at fixed impact steps, the fee as the first spread.
+    * Each level holds what the pool absorbs between its impact and the one before, so sizes are per
+    * level as the depth gauges expect, and they sum to the deepest impact.
     */
   def book(price: Double, reserveTokens: Double, time: Long): Book =
-    val bids =
-      impacts.map(d => Level(figure(price * (1 - d), 8), figure(bidSize(reserveTokens, d), 6), 1))
-    val asks =
-      impacts.map(d => Level(figure(price * (1 + d), 8), figure(askSize(reserveTokens, d), 6), 1))
+    def bands(size: Double => Double): Vector[Double] =
+      val cumulative = impacts.map(size)
+      cumulative.zip(0.0 +: cumulative.init).map((to, from) => to - from)
+    val bids = impacts.zip(bands(bidSize(reserveTokens, _))).map { (d, size) =>
+      Level(figure(price * (1 - d), 8), figure(size, 6), 1)
+    }
+    val asks = impacts.zip(bands(askSize(reserveTokens, _))).map { (d, size) =>
+      Level(figure(price * (1 + d), 8), figure(size, 6), 1)
+    }
     Book(bids, asks, time)
 
   /** Swaps from the pair's logs as trades, priced in dollars, timed at the poll that saw them. */
@@ -186,7 +194,10 @@ object Onchain:
         (interval, candle)
       }
 
-/** Reads on-chain markets every poll and pushes the same events the venue feed does. */
+/** Reads on-chain markets every poll and pushes the market events the venue feed does. It never
+  * sends socket health events: the snapshot's one health field belongs to the venue link, and the
+  * trading workers read it. Its own state is its status line.
+  */
 final class OnchainFeed(
     markets: Vector[OnchainMarket],
     rpcFor: String => Rpc,
@@ -201,8 +212,7 @@ final class OnchainFeed(
   private var head = Map.empty[String, Long] // the last block number a poll learned
   private var builders = Map.empty[String, Onchain.CandleBuilder]
   private var endpoint = Map.empty[String, Int]
-  private var noLogs = Set.empty[String] // endpoints that refuse log queries
-  private var live = false
+  private var noLogs = Map.empty[String, Long] // endpoints that refused a log query, and when
   private var connectionStatus = "Connecting"
 
   def status: String = synchronized(connectionStatus)
@@ -220,7 +230,7 @@ final class OnchainFeed(
 
   private def host(url: String): String = Try(URI.create(url).getHost).toOption.getOrElse(url)
 
-  private[desk] def discover(m: OnchainMarket, rpc: Rpc): Option[Pools] =
+  private[desk] def discover(m: OnchainMarket, rpc: Rpc): Option[Pools] = Try {
     for
       first <- rpc.batch(
         Vector(
@@ -250,62 +260,62 @@ final class OnchainFeed(
       token == pair0,
       quote == pool1
     )
+  }.toOption.flatten
 
-  private def fail(m: OnchainMarket, url: String, reason: String): Unit =
-    synchronized {
-      connectionStatus = s"$reason at ${host(url)}. Retrying"
-      endpoint = endpoint.updated(m.name, endpoint.getOrElse(m.name, 0) + 1)
-      // Forget the log anchors: the next poll re-anchors without a log query.
-      anchor = anchor - m.name
-      head = head - m.name
-      if live then
-        live = false
-        push(Event.SocketDown)
-    }
+  private def fail(m: OnchainMarket, url: String, reason: String): Unit = synchronized {
+    connectionStatus = s"$reason at ${host(url)}. Retrying"
+    endpoint = endpoint.updated(m.name, endpoint.getOrElse(m.name, 0) + 1)
+    // Forget the log anchors: the next poll re-anchors without a log query.
+    anchor = anchor - m.name
+    head = head - m.name
+  }
 
+  /** One reading of the shown market. Nothing here may escape: a feed thread must not stop Desk, so
+    * any surprise counts as a failed read.
+    */
   def poll(): Unit =
     val name = coin
     market(name).foreach { m =>
       val (client, url) = rpc(m)
-      pools
-        .get(name)
-        .orElse(discover(m, client).map { p =>
-          pools = pools.updated(name, p)
-          p
-        }) match
-        case None    => fail(m, url, "Pool lookup failed")
-        case Some(p) =>
-          def attempt(window: Option[(Long, Long)]): Option[Vector[Event]] =
-            val calls = Vector(
-              Onchain.call(m.pair, Onchain.getReserves),
-              Onchain.call(m.quotePool, Onchain.slot0),
-              ("eth_blockNumber", ujson.Arr())
-            ) ++ window.map((from, to) => Onchain.logs(m.pair, from, to)).toVector
-            client.batch(calls).flatMap(read(m, p, _, window))
-          val window =
-            if noLogs.contains(url) then None
-            else Onchain.logWindow(anchor.get(name), head.get(name))
-          // A node that serves prices but refuses log queries keeps serving prices: the
-          // poll is retried once without logs and the node is remembered as tapeless.
-          val outcome = attempt(window).orElse(window.flatMap { _ =>
-            noLogs = noLogs + url
-            attempt(None)
-          })
-          outcome match
-            case None         => fail(m, url, "Read failed")
-            case Some(events) =>
-              synchronized {
-                connectionStatus =
-                  "Connected to " + host(url) + (if noLogs.contains(url) then ", no swaps from it"
-                                                 else "")
-                if !live then
-                  live = true
-                  push(Event.SocketUp)
-              }
-              events.foreach(push)
+      Try(read(m, name, client, url)).failed.foreach(_ => fail(m, url, "Read failed"))
     }
 
-  private def read(
+  private def read(m: OnchainMarket, name: String, client: Rpc, url: String): Unit =
+    pools
+      .get(name)
+      .orElse(discover(m, client).map { p =>
+        pools = pools.updated(name, p)
+        p
+      }) match
+      case None    => fail(m, url, "Pool lookup failed")
+      case Some(p) =>
+        def attempt(window: Option[(Long, Long)]): Option[Vector[Event]] =
+          val calls = Vector(
+            Onchain.call(m.pair, Onchain.getReserves),
+            Onchain.call(m.quotePool, Onchain.slot0),
+            ("eth_blockNumber", ujson.Arr())
+          ) ++ window.map((from, to) => Onchain.logs(m.pair, from, to)).toVector
+          client.batch(calls).flatMap(events(m, p, _, window))
+        val now = clock()
+        val tapeless = noLogs.get(url).exists(at => now - at < Onchain.logRetryMs)
+        val window = if tapeless then None else Onchain.logWindow(anchor.get(name), head.get(name))
+        // A node that serves prices but refuses log queries keeps serving prices: the poll
+        // is retried once without logs and the node is left alone about logs for a while.
+        val outcome = attempt(window).orElse(window.flatMap { _ =>
+          noLogs = noLogs.updated(url, now)
+          attempt(None)
+        })
+        outcome match
+          case None         => fail(m, url, "Read failed")
+          case Some(pushed) =>
+            val quiet = noLogs.get(url).exists(at => now - at < Onchain.logRetryMs)
+            synchronized {
+              connectionStatus =
+                "Connected to " + host(url) + (if quiet then ", no swaps from it" else "")
+            }
+            pushed.foreach(push)
+
+  private def events(
       m: OnchainMarket,
       p: Pools,
       results: Vector[ujson.Value],
@@ -332,9 +342,12 @@ final class OnchainFeed(
       candles.map((i, c) => Event.CandleUpdate(m.name, i, c))
   }.toOption
 
-/** Routes a market by name: on-chain names to the on-chain feed, the rest to the venue. */
+/** Routes a market by name. The on-chain feed always learns the shown name, so it polls nothing
+  * once a venue market is shown; the venue feed hears venue names only.
+  */
 final class CompositeFeed(venue: Feed, onchain: OnchainFeed, shown: () => String)
     extends MarketFeed:
   def status: String = if onchain.serves(shown()) then onchain.status else venue.status
   def setMarket(newCoin: String): Unit =
-    if onchain.serves(newCoin) then onchain.setMarket(newCoin) else venue.setMarket(newCoin)
+    onchain.setMarket(newCoin)
+    if !onchain.serves(newCoin) then venue.setMarket(newCoin)

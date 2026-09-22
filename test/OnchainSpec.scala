@@ -16,12 +16,16 @@ class OnchainSpec extends munit.FunSuite:
   private val pool = "0x4444444444444444444444444444444444444444"
   private val pools = Pools(token, quote, stable, 18, 18, 18, true, true)
   private val market =
-    OnchainMarket("DEMO", pair, pool, Vector("https://rpc.example/a", "https://rpc.example/b"))
+    OnchainMarket("DEMO", pair, pool, Vector("https://a.example", "https://b.example"))
 
   private def hexWord(n: BigInt): String = n.toString(16).reverse.padTo(64, '0').reverse
   private def hexAddress(a: String): String = "0x" + ("0" * 24) + a.stripPrefix("0x")
   private def within(actual: Double, expected: Double, tolerance: Double): Boolean =
-    math.abs(actual - expected) <= expected * tolerance
+    math.abs(actual - expected) <= expected.abs * tolerance
+  private def socketEvents(events: Vector[Event]): Vector[Event] =
+    events.filter(e => e == Event.SocketUp || e == Event.SocketDown)
+  private def drain(queue: LinkedBlockingQueue[Event]): Vector[Event] =
+    Iterator.continually(queue.poll()).takeWhile(_ != null).toVector
 
   test("the dollar price multiplies quote per token by dollars per quote") {
     val dollars = Onchain.dollarsPerQuote(sqrtPrice, pools)
@@ -34,11 +38,14 @@ class OnchainSpec extends munit.FunSuite:
     assert(within(Onchain.dollarsPerQuote(sqrtPrice, quoteFirst), 1 / 16.0, 0.002))
   }
 
-  test("decimals scale the price and empty pools are refused") {
+  test("decimals scale the price on every side and empty pools are refused") {
     val sixDecimalToken = pools.copy(tokenDecimals = 6)
     val price =
       Onchain.price(reserveToken / BigInt(10).pow(12), reserveQuote, sqrtPrice, sixDecimalToken)
     assert(within(price, 0.004, 0.002), price.toString)
+    // a six decimal stable against an eighteen decimal quote scales the dollar price by 1e12
+    val sixDecimalStable = Onchain.dollarsPerQuote(sqrtPrice, pools.copy(stableDecimals = 6))
+    assert(within(sixDecimalStable, 16.0e12, 0.002), sixDecimalStable.toString)
     intercept[IllegalArgumentException](Onchain.price(BigInt(0), reserveQuote, sqrtPrice, pools))
     intercept[IllegalArgumentException](Onchain.dollarsPerQuote(BigInt(0), pools))
   }
@@ -54,8 +61,9 @@ class OnchainSpec extends munit.FunSuite:
     assert(Onchain.bidSize(reserve, 0.01) > Onchain.askSize(reserve, 0.01))
   }
 
-  test("the book has bids below and asks above the price with the fee as the first spread") {
-    val book = Onchain.book(0.004, 20_000_000.0, 1000L)
+  test("the book has per level sizes, bids below and asks above, the fee as the first spread") {
+    val reserve = 20_000_000.0
+    val book = Onchain.book(0.004, reserve, 1000L)
     assertEquals(book.time, 1000L)
     assertEquals(book.bids.size, Onchain.impacts.size)
     assertEquals(book.bids.head.px, "0.00399")
@@ -65,6 +73,12 @@ class OnchainSpec extends munit.FunSuite:
     assert(bidPrices == bidPrices.sorted.reverse && askPrices == askPrices.sorted)
     assert(book.bids.forall(l => l.sz.toDouble > 0 && l.n == 1))
     assert(within(State.mid(book).get, 0.004, 1e-9))
+    // each level is the band between two impacts, so the levels sum to the deepest impact
+    assert(within(book.bids.head.sz.toDouble, Onchain.bidSize(reserve, 0.0025), 1e-5))
+    val secondBand = Onchain.bidSize(reserve, 0.005) - Onchain.bidSize(reserve, 0.0025)
+    assert(within(book.bids(1).sz.toDouble, secondBand, 1e-5))
+    assert(within(book.bids.map(_.sz.toDouble).sum, Onchain.bidSize(reserve, 0.1), 1e-5))
+    assert(within(book.asks.map(_.sz.toDouble).sum, Onchain.askSize(reserve, 0.1), 1e-5))
   }
 
   test("swap logs decode into dollar priced trades with stable ids") {
@@ -128,10 +142,29 @@ class OnchainSpec extends munit.FunSuite:
       Onchain.batchResults("""[{"id":0,"error":{"code":-32000}},{"id":1,"result":"0x1"}]""", 2),
       None
     )
+    // an error member disqualifies a reply even when a result member sits beside it
+    assertEquals(
+      Onchain.batchResults("""[{"id":0,"error":{"code":-32000},"result":"0x1"}]""", 1),
+      None
+    )
     assertEquals(Onchain.batchResults("""[{"id":0,"result":"0x1"}]""", 2), None)
     assertEquals(Onchain.batchResults("not json", 1), None)
   }
 
+  test("log windows follow the last known head and never exceed the span") {
+    assertEquals(Onchain.logWindow(None, Some(100L)), None)
+    assertEquals(Onchain.logWindow(Some(100L), None), None)
+    assertEquals(Onchain.logWindow(Some(100L), Some(100L)), None)
+    assertEquals(Onchain.logWindow(Some(100L), Some(101L)), Some((101L, 101L)))
+    assertEquals(Onchain.logWindow(Some(100L), Some(105L)), Some((101L, 105L)))
+    assertEquals(Onchain.logWindow(Some(100L), Some(1000L)), Some((801L, 1000L)))
+    val (method, params) = Onchain.logs(pair, 101L, 105L)
+    assertEquals(method, "eth_getLogs")
+    assertEquals(params(0)("fromBlock").str, "0x65")
+    assertEquals(params(0)("toBlock").str, "0x69")
+  }
+
+  /** A scripted client: each batch returns the next reply. None means a failed batch. */
   private final class FakeRpc(var replies: Vector[Option[Vector[ujson.Value]]]) extends Rpc:
     var seen = Vector.empty[Vector[(String, ujson.Value)]]
     def batch(calls: Vector[(String, ujson.Value)]): Option[Vector[ujson.Value]] =
@@ -159,29 +192,18 @@ class OnchainSpec extends munit.FunSuite:
     )
   )
 
-  test("log windows follow the last known head and never exceed the span") {
-    assertEquals(Onchain.logWindow(None, Some(100L)), None)
-    assertEquals(Onchain.logWindow(Some(100L), None), None)
-    assertEquals(Onchain.logWindow(Some(100L), Some(100L)), None)
-    assertEquals(Onchain.logWindow(Some(100L), Some(101L)), Some((101L, 101L)))
-    assertEquals(Onchain.logWindow(Some(100L), Some(105L)), Some((101L, 105L)))
-    assertEquals(Onchain.logWindow(Some(100L), Some(1000L)), Some((801L, 1000L)))
-    val (method, params) = Onchain.logs(pair, 101L, 105L)
-    assertEquals(method, "eth_getLogs")
-    assertEquals(params(0)("fromBlock").str, "0x65")
-    assertEquals(params(0)("toBlock").str, "0x69")
-  }
-
-  test("the feed discovers the pools, then pushes book, candles and health each poll") {
+  test("the feed discovers the pools, then pushes book and candles each poll, never health") {
     val queue = new LinkedBlockingQueue[Event]()
     val rpc = new FakeRpc(
       discovery ++ Vector(reading(100L).map(_.take(3)), reading(101L).map(_.take(3)), reading(102L))
     )
     var clock = 1_000_000L
-    val feed = new OnchainFeed(Vector(market), _ => rpc, queue, () => clock, "DEMO")
+    var observed = Vector.empty[Event]
+    val feed =
+      new OnchainFeed(Vector(market), _ => rpc, queue, () => clock, "DEMO", observed :+= _)
     feed.poll()
-    val first = Iterator.continually(queue.poll()).takeWhile(_ != null).toVector
-    assertEquals(first.head, Event.SocketUp)
+    val first = drain(queue)
+    assertEquals(socketEvents(first), Vector.empty)
     val book = first.collectFirst { case Event.BookUpdate(coin, b, fromSocket) =>
       (coin, b, fromSocket)
     }.get
@@ -192,12 +214,11 @@ class OnchainSpec extends munit.FunSuite:
       first.count { case Event.CandleUpdate("DEMO", _, _) => true; case _ => false },
       State.intervals.size
     )
-    assertEquals(feed.status, "Connected to rpc.example")
+    assertEquals(observed, first)
+    assertEquals(feed.status, "Connected to a.example")
     assertEquals(rpc.seen(2).map(_._1), Vector("eth_call", "eth_call", "eth_blockNumber"))
     clock += 2000L
     feed.poll()
-    val second = Iterator.continually(queue.poll()).takeWhile(_ != null).toVector
-    assert(!second.contains(Event.SocketUp))
     // the second poll learned head 101 but its logs window (101 to 100) is empty
     assertEquals(rpc.seen(3).map(_._1), Vector("eth_call", "eth_call", "eth_blockNumber"))
     feed.poll()
@@ -205,29 +226,42 @@ class OnchainSpec extends munit.FunSuite:
     assertEquals(third.map(_._1), Vector("eth_call", "eth_call", "eth_blockNumber", "eth_getLogs"))
     assertEquals(third(3)._2(0)("fromBlock").str, "0x65")
     assertEquals(third(3)._2(0)("toBlock").str, "0x65")
+    assertEquals(socketEvents(drain(queue)), Vector.empty)
   }
 
-  test("a failed read marks the feed down once, rotates the endpoint, and recovery marks it up") {
+  test("a failed read reports, rotates to the next endpoint, re-anchors, and pushes no health") {
     val queue = new LinkedBlockingQueue[Event]()
-    val rpc =
-      new FakeRpc(discovery ++ Vector(reading(100L).map(_.take(3)), None, None, reading(103L)))
-    val feed = new OnchainFeed(Vector(market), _ => rpc, queue, () => 5_000L, "DEMO")
+    val a = new FakeRpc(discovery ++ Vector(reading(100L).map(_.take(3)), None))
+    val b = new FakeRpc(
+      Vector(reading(103L).map(_.take(3)), reading(104L).map(_.take(3)), reading(105L))
+    )
+    val byUrl = Map("https://a.example" -> a, "https://b.example" -> b)
+    val feed = new OnchainFeed(Vector(market), byUrl(_), queue, () => 5_000L, "DEMO")
     feed.poll()
+    assertEquals(feed.status, "Connected to a.example")
     queue.clear()
     feed.poll()
-    assertEquals(queue.poll(), Event.SocketDown)
     assertEquals(queue.poll(), null)
-    assertEquals(feed.status, "Read failed at rpc.example. Retrying")
+    assertEquals(feed.status, "Read failed at a.example. Retrying")
     feed.poll()
-    assertEquals(queue.poll(), null)
-    feed.poll()
-    assertEquals(queue.poll(), Event.SocketUp)
+    assertEquals(feed.status, "Connected to b.example")
     // the poll after a failure re-anchors without a log query, so a wide range can never wedge it
-    assertEquals(rpc.seen.last.map(_._1), Vector("eth_call", "eth_call", "eth_blockNumber"))
+    assertEquals(b.seen.head.map(_._1), Vector("eth_call", "eth_call", "eth_blockNumber"))
+    feed.poll() // learns head 104, the window after the anchor is still empty
+    assertEquals(b.seen(1).map(_._1), Vector("eth_call", "eth_call", "eth_blockNumber"))
+    feed.poll() // asks for block 104's swaps
+    assertEquals(
+      b.seen(2).map(_._1),
+      Vector("eth_call", "eth_call", "eth_blockNumber", "eth_getLogs")
+    )
+    assertEquals(b.seen(2)(3)._2(0)("fromBlock").str, "0x68")
+    assertEquals(b.seen(2)(3)._2(0)("toBlock").str, "0x68")
+    assertEquals(socketEvents(drain(queue)), Vector.empty)
   }
 
-  test("a node that refuses log queries keeps serving prices and is remembered as tapeless") {
+  test("a node that refuses log queries keeps serving prices and is asked again later") {
     val queue = new LinkedBlockingQueue[Event]()
+    var clock = 1_000L
     final class TapelessRpc extends Rpc:
       var seen = Vector.empty[Vector[(String, ujson.Value)]]
       def batch(calls: Vector[(String, ujson.Value)]): Option[Vector[ujson.Value]] =
@@ -236,34 +270,40 @@ class OnchainSpec extends munit.FunSuite:
         else if calls.size == 4 then None // every log query is refused
         else reading(100L + seen.size).map(_.take(3)) // prices always work, the head advances
     val rpc = new TapelessRpc
-    val feed = new OnchainFeed(Vector(market), _ => rpc, queue, () => 1L, "DEMO")
+    val feed = new OnchainFeed(Vector(market), _ => rpc, queue, () => clock, "DEMO")
     feed.poll() // discovers and anchors
     feed.poll() // head moves, window still empty
     feed.poll() // first log window: refused, retried without logs at once
-    val events = Iterator.continually(queue.poll()).takeWhile(_ != null).toVector
-    assert(!events.contains(Event.SocketDown))
-    assertEquals(events.count(_ == Event.SocketUp), 1)
+    val events = drain(queue)
+    assertEquals(socketEvents(events), Vector.empty)
     assertEquals(rpc.seen.takeRight(2).map(_.size), Vector(4, 3))
-    assertEquals(feed.status, "Connected to rpc.example, no swaps from it")
+    assertEquals(feed.status, "Connected to a.example, no swaps from it")
     feed.poll()
-    assertEquals(rpc.seen.last.size, 3) // the tapeless node is never asked for logs again
+    assertEquals(rpc.seen.last.size, 3) // not asked for logs again for a while
+    clock += Onchain.logRetryMs + 1
+    feed.poll()
+    assertEquals(rpc.seen.takeRight(2).map(_.size), Vector(4, 3)) // asked again, refused again
   }
 
-  test("a market whose quote is in neither pool is reported and nothing is pushed") {
-    val queue = new LinkedBlockingQueue[Event]()
-    val wrong = Some(
-      Vector(hexAddress(token), hexAddress(quote), hexAddress(stable), hexAddress(pair)).map(
-        ujson.Str(_)
-      )
-    )
-    val feed =
-      new OnchainFeed(Vector(market), _ => new FakeRpc(Vector(wrong)), queue, () => 1L, "DEMO")
-    feed.poll()
-    assertEquals(queue.poll(), null)
-    assertEquals(feed.status, "Pool lookup failed at rpc.example. Retrying")
+  test("a pool lookup that fails, mismatches or throws is reported and nothing is pushed") {
+    def statusFor(reply: Option[Vector[ujson.Value]]): String =
+      val queue = new LinkedBlockingQueue[Event]()
+      val rpc = new FakeRpc(Vector(reply, Some(Vector.fill(3)(ujson.Str("0x")))))
+      val feed = new OnchainFeed(Vector(market), _ => rpc, queue, () => 1L, "DEMO")
+      feed.poll()
+      assertEquals(queue.poll(), null)
+      feed.status
+    val neither = Vector(token, quote, stable, pair).map(a => ujson.Str(hexAddress(a)))
+    assertEquals(statusFor(Some(neither)), "Pool lookup failed at a.example. Retrying")
+    val both = Vector(token, quote, token, quote).map(a => ujson.Str(hexAddress(a)))
+    assertEquals(statusFor(Some(both)), "Pool lookup failed at a.example. Retrying")
+    assertEquals(statusFor(None), "Pool lookup failed at a.example. Retrying")
+    // a decimals reply too short to hold a word must not escape the poll thread
+    val good = Vector(token, quote, stable, quote).map(a => ujson.Str(hexAddress(a)))
+    assertEquals(statusFor(Some(good)), "Pool lookup failed at a.example. Retrying")
   }
 
-  test("the composite routes by name and reports the status of the shown market's feed") {
+  test("the composite tells the on-chain feed every name and the venue only venue names") {
     val queue = new LinkedBlockingQueue[Event]()
     val rest = new Rest { def post(body: String): Option[String] = None }
     val connector = new Connector {
@@ -278,12 +318,14 @@ class OnchainSpec extends munit.FunSuite:
     assertEquals(composite.status, onchain.status)
     shown = "BTC"
     assertEquals(composite.status, venue.status)
-    composite.setMarket("DEMO")
-    assertEquals(onchain.coin, "DEMO")
-    assertEquals(venue.coin, "BTC")
     composite.setMarket("XMR")
     assertEquals(venue.coin, "XMR")
+    assertEquals(onchain.coin, "XMR") // the on-chain feed now serves nothing and polls nothing
+    onchain.poll()
+    assertEquals(queue.poll(), null)
+    composite.setMarket("DEMO")
     assertEquals(onchain.coin, "DEMO")
+    assertEquals(venue.coin, "XMR")
   }
 
   test("settings list on-chain markets and refuse bad names, addresses, endpoints and references") {

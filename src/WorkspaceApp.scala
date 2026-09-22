@@ -179,6 +179,7 @@ object WorkspaceApp:
         else args.coin
       val feed = new Feed(connector, rest, queue, now, venueCoin, config.references, observe)
       val clients = scala.collection.concurrent.TrieMap.empty[String, HttpRpc]
+      // The trading workers follow the venue only, so on-chain events reach the recorder alone.
       val onchain = Option.when(config.onchain.nonEmpty)(
         new OnchainFeed(
           config.onchain,
@@ -186,7 +187,7 @@ object WorkspaceApp:
           queue,
           now,
           args.coin,
-          observe
+          event => recorder.foreach(_.observe(event))
         )
       )
       val routed: MarketFeed =
