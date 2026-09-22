@@ -15,9 +15,11 @@ final case class TradingConfig(
     quoteAgeMs: Long = 1000L,
     positionAgeMs: Long = 2000L,
     paperBalance: BigDecimal = BigDecimal("10000"),
-    paperFee: BigDecimal = BigDecimal("0.0005")
+    paperFee: BigDecimal = BigDecimal("0.0005"),
+    onchain: Vector[OnchainMarket] = Vector.empty
 ):
   def configured: Boolean = owner.nonEmpty && agent.nonEmpty
+  def onchainMarket(name: String): Option[OnchainMarket] = onchain.find(_.name == name)
   def baseUrl: String =
     if network == "mainnet" then "https://api.hyperliquid.xyz"
     else "https://api.hyperliquid-testnet.xyz"
@@ -37,8 +39,34 @@ object TradingConfig:
     "quoteAgeMs",
     "positionAgeMs",
     "paperBalance",
-    "paperFee"
+    "paperFee",
+    "onchain"
   )
+  private val marketName = "[A-Z0-9][A-Z0-9._-]{0,19}"
+  private val endpoint = "https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?"
+
+  private[desk] def onchainMarkets(
+      j: ujson.Value,
+      references: Vector[String]
+  ): Vector[OnchainMarket] =
+    val markets = j.obj.get("onchain").map(_.arr.toVector).getOrElse(Vector.empty).map { m =>
+      val name = m("name").str
+      require(name.matches(marketName) && State.validMarket(name), "invalid on-chain market name")
+      def address(field: String): String =
+        val a = m(field).str.toLowerCase(java.util.Locale.ROOT)
+        require(a.matches("0x[0-9a-f]{40}"), "invalid on-chain address")
+        a
+      val rpc = m("rpc").arr.toVector.map(_.str)
+      require(
+        rpc.nonEmpty && rpc.size <= 8 && rpc.forall(_.matches(endpoint)),
+        "invalid on-chain endpoint"
+      )
+      OnchainMarket(name, address("pair"), address("quotePool"), rpc)
+    }
+    val names = markets.map(_.name)
+    require(markets.size <= 8 && names.distinct == names, "duplicate on-chain markets")
+    require(names.forall(n => !references.contains(n)), "an on-chain market cannot be a reference")
+    markets
   private val forbidden = Set(
     PosixFilePermission.GROUP_READ,
     PosixFilePermission.GROUP_WRITE,
@@ -111,6 +139,7 @@ object TradingConfig:
           millis("quoteAgeMs", 1000L),
           millis("positionAgeMs", 2000L),
           balance,
-          fee
+          fee,
+          onchainMarkets(j, refs)
         )
       }.toEither.left.map(_ => "invalid or unreadable trading settings")

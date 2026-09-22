@@ -20,6 +20,32 @@ default file permits public viewing and paper trading with these defaults:
 }
 ```
 
+An `onchain` list adds markets that trade on a BNB Chain automated market maker
+instead of the venue. Each entry names the market, the PancakeSwap V2 pair, the
+V3 pool that prices the pair's quote asset in a dollar stable, and the JSON-RPC
+endpoints to read from, tried in order:
+
+```json
+{
+  "onchain": [
+    {
+      "name": "DEMO",
+      "pair": "0x3333333333333333333333333333333333333333",
+      "quotePool": "0x4444444444444444444444444444444444444444",
+      "rpc": ["https://rpc-bsc.48.club", "https://bsc-dataseed.binance.org"]
+    }
+  ]
+}
+```
+
+Names follow the reference name rule and cannot be a reference. The feed reads
+the pair every two seconds, prices the token in dollars through the quote pool,
+shows the pool's own liquidity as the book at fixed impact steps, builds candles
+from its readings, and lists swaps as the tape timed at the reading that saw
+them. There is no candle history before Desk starts. Paper and live orders are
+not available on an on-chain market. The bitcoin and gold references keep coming
+from the venue.
+
 Amounts and age limits are quoted numeric strings. Small and big are total order
 value before fees. Target has its own value ceiling.
 Paper balance applies when creating an account. Existing saved balances remain
