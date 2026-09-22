@@ -159,9 +159,24 @@ class OnchainSpec extends munit.FunSuite:
     )
   )
 
+  test("log windows follow the last known head and never exceed the span") {
+    assertEquals(Onchain.logWindow(None, Some(100L)), None)
+    assertEquals(Onchain.logWindow(Some(100L), None), None)
+    assertEquals(Onchain.logWindow(Some(100L), Some(100L)), None)
+    assertEquals(Onchain.logWindow(Some(100L), Some(101L)), Some((101L, 101L)))
+    assertEquals(Onchain.logWindow(Some(100L), Some(105L)), Some((101L, 105L)))
+    assertEquals(Onchain.logWindow(Some(100L), Some(1000L)), Some((801L, 1000L)))
+    val (method, params) = Onchain.logs(pair, 101L, 105L)
+    assertEquals(method, "eth_getLogs")
+    assertEquals(params(0)("fromBlock").str, "0x65")
+    assertEquals(params(0)("toBlock").str, "0x69")
+  }
+
   test("the feed discovers the pools, then pushes book, candles and health each poll") {
     val queue = new LinkedBlockingQueue[Event]()
-    val rpc = new FakeRpc(discovery ++ Vector(reading(100L).map(_.take(3)), reading(101L)))
+    val rpc = new FakeRpc(
+      discovery ++ Vector(reading(100L).map(_.take(3)), reading(101L).map(_.take(3)), reading(102L))
+    )
     var clock = 1_000_000L
     val feed = new OnchainFeed(Vector(market), _ => rpc, queue, () => clock, "DEMO")
     feed.poll()
@@ -183,11 +198,13 @@ class OnchainSpec extends munit.FunSuite:
     feed.poll()
     val second = Iterator.continually(queue.poll()).takeWhile(_ != null).toVector
     assert(!second.contains(Event.SocketUp))
-    assertEquals(
-      rpc.seen(3).map(_._1),
-      Vector("eth_call", "eth_call", "eth_blockNumber", "eth_getLogs")
-    )
-    assertEquals(rpc.seen(3)(3)._2(0)("fromBlock").str, "0x65")
+    // the second poll learned head 101 but its logs window (101 to 100) is empty
+    assertEquals(rpc.seen(3).map(_._1), Vector("eth_call", "eth_call", "eth_blockNumber"))
+    feed.poll()
+    val third = rpc.seen(4)
+    assertEquals(third.map(_._1), Vector("eth_call", "eth_call", "eth_blockNumber", "eth_getLogs"))
+    assertEquals(third(3)._2(0)("fromBlock").str, "0x65")
+    assertEquals(third(3)._2(0)("toBlock").str, "0x65")
   }
 
   test("a failed read marks the feed down once, rotates the endpoint, and recovery marks it up") {
@@ -205,6 +222,31 @@ class OnchainSpec extends munit.FunSuite:
     assertEquals(queue.poll(), null)
     feed.poll()
     assertEquals(queue.poll(), Event.SocketUp)
+    // the poll after a failure re-anchors without a log query, so a wide range can never wedge it
+    assertEquals(rpc.seen.last.map(_._1), Vector("eth_call", "eth_call", "eth_blockNumber"))
+  }
+
+  test("a node that refuses log queries keeps serving prices and is remembered as tapeless") {
+    val queue = new LinkedBlockingQueue[Event]()
+    final class TapelessRpc extends Rpc:
+      var seen = Vector.empty[Vector[(String, ujson.Value)]]
+      def batch(calls: Vector[(String, ujson.Value)]): Option[Vector[ujson.Value]] =
+        seen = seen :+ calls
+        if seen.size <= 2 then discovery(seen.size - 1) // the two discovery batches
+        else if calls.size == 4 then None // every log query is refused
+        else reading(100L + seen.size).map(_.take(3)) // prices always work, the head advances
+    val rpc = new TapelessRpc
+    val feed = new OnchainFeed(Vector(market), _ => rpc, queue, () => 1L, "DEMO")
+    feed.poll() // discovers and anchors
+    feed.poll() // head moves, window still empty
+    feed.poll() // first log window: refused, retried without logs at once
+    val events = Iterator.continually(queue.poll()).takeWhile(_ != null).toVector
+    assert(!events.contains(Event.SocketDown))
+    assertEquals(events.count(_ == Event.SocketUp), 1)
+    assertEquals(rpc.seen.takeRight(2).map(_.size), Vector(4, 3))
+    assertEquals(feed.status, "Connected to rpc.example, no swaps from it")
+    feed.poll()
+    assertEquals(rpc.seen.last.size, 3) // the tapeless node is never asked for logs again
   }
 
   test("a market whose quote is in neither pool is reported and nothing is pushed") {

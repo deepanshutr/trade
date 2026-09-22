@@ -58,18 +58,31 @@ object Onchain:
   def call(to: String, data: String): (String, ujson.Value) =
     ("eth_call", ujson.Arr(ujson.Obj("to" -> to, "data" -> data), "latest"))
 
-  def logs(pair: String, fromBlock: Long): (String, ujson.Value) =
+  val logSpan = 200L
+
+  /** Swap logs over an explicit block range. Nodes refuse an open upper bound. */
+  def logs(pair: String, fromBlock: Long, toBlock: Long): (String, ujson.Value) =
     (
       "eth_getLogs",
       ujson.Arr(
         ujson.Obj(
           "address" -> pair,
           "fromBlock" -> ("0x" + fromBlock.toHexString),
-          "toBlock" -> "latest",
+          "toBlock" -> ("0x" + toBlock.toHexString),
           "topics" -> ujson.Arr(swapTopic)
         )
       )
     )
+
+  /** The blocks to ask logs for: after the anchor, up to the last known head, never more than
+    * logSpan blocks so a gap after an outage cannot exceed a node's range limit.
+    */
+  def logWindow(anchor: Option[Long], head: Option[Long]): Option[(Long, Long)] =
+    for
+      a <- anchor
+      h <- head
+      if h > a
+    yield ((a + 1).max(h - logSpan + 1), h)
 
   def batchBody(calls: Vector[(String, ujson.Value)]): String =
     ujson.write(ujson.Arr.from(calls.zipWithIndex.map { case ((method, params), i) =>
@@ -184,9 +197,11 @@ final class OnchainFeed(
 ) extends MarketFeed:
   @volatile var coin: String = coin0
   private var pools = Map.empty[String, Pools]
-  private var lastBlock = Map.empty[String, Long]
+  private var anchor = Map.empty[String, Long] // the last block whose swaps were read
+  private var head = Map.empty[String, Long] // the last block number a poll learned
   private var builders = Map.empty[String, Onchain.CandleBuilder]
   private var endpoint = Map.empty[String, Int]
+  private var noLogs = Set.empty[String] // endpoints that refuse log queries
   private var live = false
   private var connectionStatus = "Connecting"
 
@@ -240,6 +255,9 @@ final class OnchainFeed(
     synchronized {
       connectionStatus = s"$reason at ${host(url)}. Retrying"
       endpoint = endpoint.updated(m.name, endpoint.getOrElse(m.name, 0) + 1)
+      // Forget the log anchors: the next poll re-anchors without a log query.
+      anchor = anchor - m.name
+      head = head - m.name
       if live then
         live = false
         push(Event.SocketDown)
@@ -257,17 +275,29 @@ final class OnchainFeed(
         }) match
         case None    => fail(m, url, "Pool lookup failed")
         case Some(p) =>
-          val from = lastBlock.get(name).map(_ + 1)
-          val calls = Vector(
-            Onchain.call(m.pair, Onchain.getReserves),
-            Onchain.call(m.quotePool, Onchain.slot0),
-            ("eth_blockNumber", ujson.Arr())
-          ) ++ from.map(Onchain.logs(m.pair, _)).toVector
-          client.batch(calls).flatMap(read(m, p, _, from.nonEmpty)) match
+          def attempt(window: Option[(Long, Long)]): Option[Vector[Event]] =
+            val calls = Vector(
+              Onchain.call(m.pair, Onchain.getReserves),
+              Onchain.call(m.quotePool, Onchain.slot0),
+              ("eth_blockNumber", ujson.Arr())
+            ) ++ window.map((from, to) => Onchain.logs(m.pair, from, to)).toVector
+            client.batch(calls).flatMap(read(m, p, _, window))
+          val window =
+            if noLogs.contains(url) then None
+            else Onchain.logWindow(anchor.get(name), head.get(name))
+          // A node that serves prices but refuses log queries keeps serving prices: the
+          // poll is retried once without logs and the node is remembered as tapeless.
+          val outcome = attempt(window).orElse(window.flatMap { _ =>
+            noLogs = noLogs + url
+            attempt(None)
+          })
+          outcome match
             case None         => fail(m, url, "Read failed")
             case Some(events) =>
               synchronized {
-                connectionStatus = "Connected to " + host(url)
+                connectionStatus =
+                  "Connected to " + host(url) + (if noLogs.contains(url) then ", no swaps from it"
+                                                 else "")
                 if !live then
                   live = true
                   push(Event.SocketUp)
@@ -279,7 +309,7 @@ final class OnchainFeed(
       m: OnchainMarket,
       p: Pools,
       results: Vector[ujson.Value],
-      withLogs: Boolean
+      window: Option[(Long, Long)]
   ): Option[Vector[Event]] = Try {
     val now = clock()
     val reserves = results(0).str
@@ -290,10 +320,12 @@ final class OnchainFeed(
     val price = Onchain.price(reserve0, reserve1, sqrt, p)
     val tokens = (if p.tokenIsPairToken0 then reserve0 else reserve1).doubleValue /
       math.pow(10, p.tokenDecimals)
-    val trades = if withLogs then Onchain.swaps(results(3), p, dollars, now) else Vector.empty
+    val trades = window.fold(Vector.empty[Trade])(_ => Onchain.swaps(results(3), p, dollars, now))
     val builder = builders.getOrElse(m.name, new Onchain.CandleBuilder)
     builders = builders.updated(m.name, builder)
-    lastBlock = lastBlock.updated(m.name, block.max(lastBlock.getOrElse(m.name, 0L)))
+    // Swaps are read one poll behind: this poll's head bounds the next poll's query.
+    anchor = anchor.updated(m.name, window.fold(anchor.getOrElse(m.name, block))(_._2))
+    head = head.updated(m.name, block)
     val candles = builder.add(now, price, trades.map(_.displaySize).sum)
     Vector(Event.BookUpdate(m.name, Onchain.book(price, tokens, now), fromSocket = true)) ++
       Option.when(trades.nonEmpty)(Event.Trades(m.name, trades)).toVector ++

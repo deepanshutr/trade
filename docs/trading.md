@@ -41,8 +41,9 @@ endpoints to read from, tried in order:
 Names follow the reference name rule and cannot be a reference. The feed reads
 the pair every two seconds, prices the token in dollars through the quote pool,
 shows the pool's own liquidity as the book at fixed impact steps, builds candles
-from its readings, and lists swaps as the tape timed at the reading that saw
-them. There is no candle history before Desk starts. Paper and live orders are
+from its readings, and lists swaps as the tape, one reading behind and timed at
+the reading that saw them. A node that refuses log queries still serves prices,
+and the prices status says so. There is no candle history before Desk starts. Paper and live orders are
 not available on an on-chain market. The bitcoin and gold references keep coming
 from the venue.
 
