@@ -111,7 +111,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
       val s = market.copy(coin = coin)
       val normal = draw(s, outlook.copy(coin = coin))
       val details = draw(s, outlook.copy(coin = coin), panel = PanelView(details = true))
-      for action <- Vector(DeskAction.Target(Side.Buy), DeskAction.Mode("PAPER")) do
+      for action <- Vector(DeskAction.OrderType(OrderKind.Target), DeskAction.Mode("PAPER")) do
         val a = normal.buttons.find(_.action == action).get
         val b = details.buttons.find(_.action == action).get
         assertEquals(a, b)

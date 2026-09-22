@@ -191,15 +191,21 @@ class IndependentCompactDisplaySpec extends munit.FunSuite:
         )
         for button <- frame.controls do
           val rendered =
-            Chart.plain(frame.lines(button.y - 1)).slice(button.x - 1, button.x - 1 + button.width)
+            Chart
+              .plain(frame.lines(button.y - 1 + button.height / 2))
+              .slice(button.x - 1, button.x - 1 + button.width)
           val enabled = frame.buttons.contains(button)
-          assertEquals(
-            rendered,
-            (if enabled then "[" else "(") + button.label + (if enabled then "]" else ")")
-          )
+          if button.height == 1 then
+            assertEquals(
+              rendered,
+              (if enabled then "[" else "(") + button.label + (if enabled then "]" else ")")
+            )
+          else assert(rendered.contains(if enabled then button.label else "(" + button.label + ")"))
           if enabled then
-            for x <- button.x until button.x + button.width do
-              assertEquals(frame.hit(x, button.y, cols, rows, "XMR"), Some(button.action))
+            for
+              y <- button.y until button.y + button.height;
+              x <- button.x until button.x + button.width
+            do assertEquals(frame.hit(x, y, cols, rows, "XMR"), Some(button.action))
         val _ = requireButton(frame, DeskAction.Details)
         if p.input.nonEmpty then
           val _ = requireButton(frame, DeskAction.SendQuestion)

@@ -109,6 +109,7 @@ object Snapshot:
     )
 
 object State:
+  def validMarket(name: String): Boolean = name.matches("[A-Za-z0-9][A-Za-z0-9:._-]{0,39}")
   val tapeCap: Int = 200_000
   val refCoins: Vector[String] = Vector("BTC", "PAXG")
   val intervals: Vector[String] = Vector("1m", "5m", "15m", "1h", "4h", "1d")
@@ -280,7 +281,7 @@ object State:
     case Command.PromptCancel      => s.copy(prompt = None)
     case Command.PromptSubmit      =>
       s.prompt match
-        case Some(name) if name.nonEmpty && name != s.coin =>
+        case Some(name) if validMarket(name) && name != s.coin =>
           val refs = s.refs.get(s.coin).fold(s.refs) { old =>
             val samples = (old.samples ++ s.samples).toMap.toVector
               .filter(_._1 >= now / 1000 - samplesMs / 1000)

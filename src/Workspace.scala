@@ -3,6 +3,8 @@ package desk
 enum DeskAction:
   case Prepare(intent: OrderIntent)
   case Target(side: Side)
+  case OrderType(kind: OrderKind)
+  case OrderSize(big: Boolean)
   case Submit, Refresh, Cancel, Ask, SendQuestion, Status, Details, ToggleMute
   case Feedback(id: Long, accepted: Boolean)
   case Scroll(lines: Int)
@@ -52,9 +54,19 @@ final case class PanelView(
     actionNotice: Option[String] = None,
     historySavingAt: Option[Long] = None,
     historyFailure: Option[String] = None,
-    actionNumber: Long = 0L
+    actionNumber: Long = 0L,
+    orderKind: OrderKind = OrderKind.Hard,
+    bigOrder: Boolean = false
 )
-final case class DeskButton(label: String, action: DeskAction, x: Int, y: Int, width: Int)
+final case class DeskButton(
+    label: String,
+    action: DeskAction,
+    x: Int,
+    y: Int,
+    width: Int,
+    height: Int = 1
+):
+  def contains(px: Int, py: Int): Boolean = px >= x && px < x + width && py >= y && py < y + height
 final case class WorkspaceFrame(
     lines: Vector[String],
     buttons: Vector[DeskButton],
@@ -66,7 +78,8 @@ final case class WorkspaceFrame(
     mode: String = "VIEW",
     outlook: Option[OutlookView] = None,
     scrollLimit: Int = 0,
-    disabledButtons: Vector[DeskButton] = Vector.empty
+    disabledButtons: Vector[DeskButton] = Vector.empty,
+    shortcuts: Set[DeskAction] = Set.empty
 ):
   def controls: Vector[DeskButton] = buttons ++ disabledButtons
   def hit(
@@ -77,7 +90,7 @@ final case class WorkspaceFrame(
       actualCoin: String
   ): Option[DeskAction] =
     if actualCols != cols || actualRows != rows || actualCoin != coin then None
-    else buttons.find(b => b.y == y && x >= b.x && x < b.x + b.width).map(_.action)
+    else buttons.find(_.contains(x, y)).map(_.action)
 
 object Workspace:
   def safeText(text: String): String =
@@ -190,6 +203,7 @@ object Workspace:
       var scrollLimit = 0
       val buttons = Vector.newBuilder[DeskButton]
       val disabledButtons = Vector.newBuilder[DeskButton]
+      var shortcuts = Set.empty[DeskAction]
       def line(row: Int, text: String): Unit =
         if row >= 0 && row < rows then right(row) = safeText(text)
       def button(
@@ -215,9 +229,33 @@ object Workspace:
           action: DeskAction,
           enabled: Boolean = true
       ): Unit = button(tradeTop + row + (if row >= 3 then 1 else 0), column, label, action, enabled)
-      tradeLine(0, s"${panel.mode} ${s.coin}  ${panel.account}")
-      tradeButton(1, 0, "p Paper", DeskAction.Mode("PAPER"), !view.pending && panel.input.isEmpty)
-      tradeButton(1, 12, "l Live", DeskAction.Mode("LIVE"), !view.pending && panel.input.isEmpty)
+      def tile(
+          row: Int,
+          column: Int,
+          width: Int,
+          label: String,
+          action: DeskAction,
+          enabled: Boolean
+      ): Boolean =
+        val shown = if enabled then label else "(" + label + ")"
+        if shown.length > width - 2 || column + width > rightWidth || row + 3 > rows - 3 then false
+        else
+          val left = (width - 2 - shown.length) / 2
+          val border = "+" + "-" * (width - 2) + "+"
+          val middle = "|" + (" " * left + shown).padTo(width - 2, ' ') + "|"
+          Vector(border, middle, border).zipWithIndex.foreach { (text, i) =>
+            right(row + i) = right(row + i).padTo(column, ' ') + text
+          }
+          val control = DeskButton(label, action, leftWidth + 2 + column, row + 1, width, 3)
+          if enabled then buttons += control else disabledButtons += control
+          true
+      tradeLine(
+        0,
+        s"${panel.mode} ${s.coin}" + (if panel.mode == "LIVE" then " " + panel.account else "")
+      )
+      if panel.review.isEmpty then
+        tradeButton(1, 0, "p Paper", DeskAction.Mode("PAPER"), !view.pending && panel.input.isEmpty)
+        tradeButton(1, 12, "l Live", DeskAction.Mode("LIVE"), !view.pending && panel.input.isEmpty)
       tradeLine(
         2,
         view.position.fold("Position unavailable")(p =>
@@ -267,60 +305,101 @@ object Workspace:
             if panel.mode == "PAPER" then
               "Estimated fee $" + Trading.display(p.estimatedValue * panel.fee)
             else "Fee unknown. Value excludes fees",
-            settings + " captured " + java.time.Instant
-              .ofEpochMilli(review.createdAt)
-              .atZone(zone)
-              .toLocalTime
-              .toString
-              .take(8),
-            "Expires in " + ((BigInt(review.expiresAt) - now).max(BigInt(0)) / 1000) + "s"
+            settings + (if panel.mode == "LIVE" then " " + panel.account
+                        else
+                          " captured " + java.time.Instant
+                            .ofEpochMilli(review.createdAt)
+                            .atZone(zone)
+                            .toLocalTime
+                            .toString
+                            .take(8)),
+            "Expires in " + ((BigInt(review.expiresAt) - now).max(BigInt(0)) / 1000) + "s",
+            view.position.fold("Position unavailable")(p =>
+              "Position now " + Trading.displayExact(p)
+            )
           )
           complete = knownSettings && details.forall(
             _.length <= rightWidth
           ) && p.coin == s.coin && review.createdAt <= now && now < review.expiresAt
-          details.zipWithIndex.foreach((text, i) => tradeLine(i + 3, text))
+          details.zipWithIndex.foreach((text, i) => line(tradeTop + i, text))
+          line(tradeTop + 8, acknowledgement + tradeStatus.replace('\n', ' '))
+          val half = rightWidth / 2
           if complete then
-            tradeButton(10, 0, "Enter Send " + panel.mode, DeskAction.Submit, canTrade)
-          else if p.coin != s.coin then tradeLine(9, "Market changed. Cancel and review again")
-          else if !knownSettings then tradeLine(9, "Account settings missing. Review when ready")
+            val _ = tile(
+              tradeTop + 9,
+              0,
+              half - 1,
+              "Enter Send " + panel.mode,
+              DeskAction.Submit,
+              canTrade
+            )
+          else if p.coin != s.coin then
+            line(tradeTop + 8, "Market changed. Cancel and review again")
+          else if !knownSettings then
+            line(tradeTop + 8, "Account settings missing. Review when ready")
           else if review.createdAt > now || now >= review.expiresAt then
-            tradeLine(9, "Review expired. Enter reviews again")
-            tradeButton(10, 0, "Enter Review again", DeskAction.Refresh, canTrade)
-          else tradeLine(9, "Review does not fit. Widen the window")
-          tradeButton(10, 20, "Esc Cancel", DeskAction.Cancel)
+            line(tradeTop + 8, "Review expired. Enter reviews again")
+            val _ =
+              tile(tradeTop + 9, 0, half - 1, "Enter Review again", DeskAction.Refresh, canTrade)
+          else line(tradeTop + 8, "Review does not fit. Widen the window")
+          val _ = tile(tradeTop + 9, half, rightWidth - half, "Esc Cancel", DeskAction.Cancel, true)
         case None if panel.modeReview.isEmpty =>
           val half = rightWidth / 2
           def targetReady(side: Side): Boolean =
             !view.pending && panel.input.isEmpty && view.rules.exists(r =>
               view.reference(side).exists(Trading.validPrice(_, r))
             )
-          for index <- 0 until 8 do
-            val intent = Trading.action(index)
-            val amount = if intent.big then panel.sizes.big else panel.sizes.small
-            val label = s"${index + 1} ${intent.kind} ${
-                if intent.side == Side.Buy then "buy" else "sell"
-              } $$${Trading.display(amount)}"
+          val kind = if panel.target.nonEmpty then OrderKind.Target else panel.orderKind
+          val choosing = !view.pending && panel.input.isEmpty && s.prompt.isEmpty
+          Vector(OrderKind.Hard, OrderKind.Best, OrderKind.Target).zipWithIndex.foreach {
+            (value, i) =>
+              tradeButton(
+                3,
+                i * 10,
+                value.toString + (if value == kind then " *" else ""),
+                DeskAction.OrderType(value),
+                choosing
+              )
+          }
+          if kind == OrderKind.Target then
+            tradeLine(4, "Size $" + Trading.format(panel.sizes.target))
+          else
+            val small =
+              "$" + Trading.format(panel.sizes.small) + (if !panel.bigOrder then " *" else "")
+            tradeButton(4, 0, small, DeskAction.OrderSize(false), choosing)
             tradeButton(
-              3 + index / 2,
-              (index % 2) * half,
-              label,
-              DeskAction.Prepare(intent),
-              canTrade
+              4,
+              small.length + 3,
+              "$" + Trading.format(panel.sizes.big) + (if panel.bigOrder then " *" else ""),
+              DeskAction.OrderSize(true),
+              choosing
             )
-          tradeButton(
-            7,
-            0,
-            "9 Target buy",
-            DeskAction.Target(Side.Buy),
-            targetReady(Side.Buy)
-          )
-          tradeButton(
-            7,
-            half,
-            "0 Target sell",
-            DeskAction.Target(Side.Sell),
-            targetReady(Side.Sell)
-          )
+          val primary = Vector(Side.Buy, Side.Sell).zipWithIndex.map { (side, i) =>
+            val intent = OrderIntent(side, kind, big = panel.bigOrder)
+            val index = (if kind == OrderKind.Best then 4
+                         else
+                           0
+            ) + (if side == Side.Sell then 2 else 0) + (if panel.bigOrder then 1 else 0) + 1
+            val amount = if panel.bigOrder then panel.sizes.big else panel.sizes.small
+            val label = if kind == OrderKind.Target then
+              (if side == Side.Buy then "9 BUY target" else "0 SELL target"
+            )
+            else s"$index ${side.toString.toUpperCase} $$${Trading.format(amount)}"
+            val action = if kind == OrderKind.Target then DeskAction.Target(side)
+            else DeskAction.Prepare(intent)
+            tile(
+              tradeTop + 6,
+              i * half,
+              if i == 0 then half - 1 else rightWidth - half,
+              label,
+              action,
+              if kind == OrderKind.Target then targetReady(side) else canTrade
+            )
+          }
+          if primary.forall(identity) && panel.target.isEmpty && choosing then
+            shortcuts = (0 until 8).map(i => DeskAction.Prepare(Trading.action(i))).toSet ++
+              Set(DeskAction.Target(Side.Buy), DeskAction.Target(Side.Sell))
+          if !primary.forall(identity) then tradeLine(8, "Amount does not fit. Widen the window")
           panel.target.foreach { (side, price) =>
             tradeLine(
               8,
@@ -331,18 +410,10 @@ object Workspace:
               0,
               "Enter Review",
               DeskAction.Prepare(OrderIntent(side, OrderKind.Target, target = Some(price))),
-              canTrade
+              canTrade && Trading.displayExact(price).length + 20 <= rightWidth
             )
             tradeButton(9, 17, "Esc Cancel", DeskAction.Cancel)
           }
-          if panel.target.isEmpty then
-            tradeLine(
-              8,
-              if view.pending then "Waiting for result. Do not send again"
-              else if canTrade then "Trade buttons open a review"
-              else "( ) unavailable. Select one for the reason"
-            )
-          if panel.mode == "PAPER" then tradeLine(10, "1x simulation. No funding or liquidation")
           if panel.target.isEmpty then
             panel.actionNotice.foreach { text =>
               val notice = wrap(text, rightWidth)
@@ -468,17 +539,39 @@ object Workspace:
           line(rows - 2, historyStatus.getOrElse("q quit  m market  c chart"))
           line(
             rows - 1,
-            if panel.details then "Answers explain. Trade buttons submit."
-            else "S support R resist T target | h Details"
+            if panel.details then "1-8 review  9/0 target  Enter send"
+            else "S support R resist T target"
           )
+      val activeButtons = buttons.result()
+      val inactiveButtons = disabledButtons.result()
       val lines = market.zipWithIndex.map { (left, i) =>
         val displayed =
           if style == Style.mono then left.replaceAll("\\x1b\\[[0-9;]*m", "") else left
-        val panelLine = if !panel.details && panel.input.isEmpty && i == 0 then
+        val plainPanel = if !panel.details && panel.input.isEmpty && i == 0 then
           right(i)
             .replace("↑", style.wrap(style.bid, "↑"))
             .replace("↓", style.wrap(style.ask, "↓"))
         else right(i)
+        val panelLine = if !style.colour || i < tradeTop then plainPanel
+        else
+          (activeButtons ++ inactiveButtons)
+            .filter(b => b.height > 1 && i >= b.y - 1 && i < b.y - 1 + b.height)
+            .sortBy(-_.x)
+            .foldLeft(plainPanel) { (text, b) =>
+              val colour = if inactiveButtons.contains(b) then Screen.dim
+              else
+                b.action match
+                  case DeskAction.Prepare(intent) if intent.side == Side.Sell =>
+                    style.ask + Screen.bold
+                  case DeskAction.Target(Side.Sell) => style.ask + Screen.bold
+                  case DeskAction.Prepare(_) | DeskAction.Target(_) | DeskAction.Submit =>
+                    style.bid + Screen.bold
+                  case _ => Screen.bold
+              val begin = b.x - leftWidth - 2
+              text.take(begin) + style.wrap(colour, text.slice(begin, begin + b.width)) + text.drop(
+                begin + b.width
+              )
+            }
         displayed + "|" + Chart.fit(
           panelLine,
           if i < tradeTop then Layout.outlookWidth else rightWidth
@@ -486,7 +579,7 @@ object Workspace:
       }
       WorkspaceFrame(
         lines,
-        buttons.result(),
+        activeButtons,
         s.coin,
         cols,
         rows,
@@ -495,5 +588,6 @@ object Workspace:
         panel.mode,
         Some(outlook),
         scrollLimit,
-        disabledButtons.result()
+        inactiveButtons,
+        shortcuts
       )

@@ -71,7 +71,7 @@ account must separately approve Desk's trading address at the venue. Keep fundin
 and account setup separate from the key-creation command.
 
 Start `desk XMR --trade`, or select Live and confirm its account mode. XMR is the
-venue's Monero symbol. The panel names the network and shortened owner address.
+venue's Monero symbol. The live panel, review and Status name the network and shortened owner address.
 Check the full owner and agent in the local settings before enabling this mode.
 Test network access uses `"network": "testnet"`. Public feeds and the live worker
 use the same network. An account, delegation, funding and any real order remain

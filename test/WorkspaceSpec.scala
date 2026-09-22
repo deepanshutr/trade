@@ -93,7 +93,9 @@ class WorkspaceSpec extends munit.FunSuite:
     assert(frame.lines.exists(_.contains("old visible answer")))
     assert(!frame.lines.exists(_.contains("new hidden answer")))
     assertEquals(
-      frame.buttons.collect { case DeskButton(_, DeskAction.Feedback(id, _), _, _, _) => id }.toSet,
+      frame.buttons.collect { case DeskButton(_, DeskAction.Feedback(id, _), _, _, _, _) =>
+        id
+      }.toSet,
       Set(1L)
     )
     assert(frame.lines.exists(_.contains("Feedback for analysis #1")))

@@ -32,7 +32,10 @@ class PlaybackSpec(unittest.TestCase):
             moved["lines"][row - 1], moved["lines"][row] = moved["lines"][row], moved["lines"][row - 1]
             self.assertFalse(playback.target_matches(moved, "workspace", "XMR", "buy", "522.28", "522.26"))
             self.assertFalse(playback.idle_matches(selected, "workspace", "XMR", "522.26"))
-            self.assertTrue(playback.idle_matches(shown("( ) unavailable. Select one for the reason"), "workspace", "XMR", "522.26"))
+            idle = shown("")
+            idle["lines"][height - 8] = " " * divider + "|" + "| 9 BUY target | | 0 SELL target |".ljust(width - divider - 1)
+            self.assertTrue(playback.idle_matches(idle, "workspace", "XMR", "522.26"))
+            self.assertFalse(playback.idle_matches(shown(""), "workspace", "XMR", "522.26"))
 
     def test_frame_is_complete_only_after_the_final_clear(self):
         stream = playback.Frames()

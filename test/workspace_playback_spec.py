@@ -37,6 +37,15 @@ class WorkspaceCaptureSpec(unittest.TestCase):
         frame["lines"][25], frame["lines"][24] = frame["lines"][24], frame["lines"][25]
         self.assertFalse(playback.target_matches(frame, "workspace", "XMR", "buy", "522.28", "522.26"))
 
+    def test_cancelled_target_requires_idle_large_controls_and_no_selected_price(self):
+        frame = self.frame()
+        frame["lines"][22] = " " * 53 + "|" + "|   9 BUY target    | |  0 SELL target    |".ljust(46)
+        self.assertFalse(playback.idle_matches(frame, "workspace", "XMR", "522.26"))
+        frame["lines"][24] = " " * 53 + "|" + " " * 46
+        self.assertTrue(playback.idle_matches(frame, "workspace", "XMR", "522.26"))
+        frame["lines"][22] = " " * 53 + "|" + " " * 46
+        self.assertFalse(playback.idle_matches(frame, "workspace", "XMR", "522.26"))
+
 
 if __name__ == "__main__":
     unittest.main()

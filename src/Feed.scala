@@ -17,6 +17,8 @@ trait Socket:
 
 trait Connector:
   def connect(onText: String => Unit, onClose: () => Unit): Socket
+  def connectReporting(onText: String => Unit, onClose: String => Unit): Socket =
+    connect(onText, () => onClose("Connection closed"))
 
 trait Rest:
   def post(body: String): Option[String]
@@ -34,6 +36,21 @@ final class Joiner:
 object Feed:
   val ping = """{"method":"ping"}"""
   val historyEveryMs = 60_000L
+  val heartbeatEveryMs = 500L
+  val pingEveryMs = 5000L
+  val replyWaitMs = 5000L
+
+  def failure(error: Throwable): String = error match
+    case e: java.util.concurrent.ExecutionException if e.getCause != null => failure(e.getCause)
+    case _: java.util.concurrent.TimeoutException | _: java.net.http.HttpTimeoutException =>
+      "Connection timed out"
+    case e: java.net.http.WebSocketHandshakeException =>
+      s"Connection refused (${e.getResponse.statusCode()})"
+    case _: javax.net.ssl.SSLException    => "Secure connection failed"
+    case _: java.net.UnknownHostException => "Address unavailable"
+    case _: java.net.ConnectException     => "Network unavailable"
+    case _: java.io.IOException           => "Network error"
+    case _                                => "Connection failed"
 
   def backoffMs(attempt: Int): Long = attempt match
     case 1 => 1000L
@@ -76,13 +93,21 @@ final class Feed(
     clock: () => Long,
     coin0: String,
     referenceCoins: Vector[String] = State.refCoins,
-    observer: Event => Unit = _ => ()
+    observer: Event => Unit = _ => (),
+    monotonic: () => Long = () => System.nanoTime() / 1_000_000L
 ):
   @volatile var coin: String = coin0
   private final class Connection:
     val closed = new CountDownLatch(1)
     var socket: Option[Socket] = None
+    var openedAt = 0L
+    var received = false
+    var pingAt = Option.empty[Long]
+    var lastPingAt = Option.empty[Long]
   private var current: Option[Connection] = None
+  private var lastHealthy = false
+  private var connectionStatus = "Connecting"
+  def status: String = synchronized(connectionStatus)
   private var historyAt = Map.empty[(String, String), Long]
   private var historySuccess = Map.empty[(String, String), Long]
   private var historyInFlight = Set.empty[(String, String)]
@@ -97,9 +122,11 @@ final class Feed(
     observer(e)
     val _ = queue.add(e)
 
-  private def end(c: Connection): Unit = synchronized {
+  private def end(c: Connection, reason: String = "Connection closed"): Unit = synchronized {
     if current.contains(c) then
       current = None
+      lastHealthy = c.received && monotonic() - c.openedAt >= 10_000L
+      connectionStatus = reason
       try push(Event.SocketDown)
       finally
         c.closed.countDown()
@@ -108,25 +135,40 @@ final class Feed(
 
   private def transmit(c: Connection, text: String): Unit =
     val socket = synchronized { if current.contains(c) then c.socket else None }
-    socket.foreach(s => if Try(s.send(text)).isFailure then end(c))
+    socket.foreach(s => Try(s.send(text)).failed.foreach(e => end(c, Feed.failure(e))))
 
   def connectOnce(): Boolean =
     val c = new Connection
     synchronized {
-      current.foreach(end)
+      current.foreach(c => end(c))
       current = Some(c)
+      lastHealthy = false
+      connectionStatus = "Connecting"
     }
     def receive(text: String): Unit = synchronized {
-      if current.contains(c) && c.socket.nonEmpty then Events.parse(text).foreach(push)
+      if current.contains(c) && c.socket.nonEmpty then
+        Events.parse(text).foreach { event =>
+          event match
+            case Event.Pong =>
+              c.pingAt = None
+              c.received = true
+            case Event.Bad(_) => ()
+            case _            => c.received = true
+          push(event)
+        }
     }
     try
-      Try(connector.connect(receive, () => end(c))).toOption match
-        case None    => false
-        case Some(s) =>
+      Try(connector.connectReporting(receive, reason => end(c, reason))) match
+        case scala.util.Failure(error) =>
+          end(c, Feed.failure(error))
+          false
+        case scala.util.Success(s) =>
           val opened = sendLock.synchronized {
             val accepted = synchronized {
               if current.contains(c) then
                 c.socket = Some(s)
+                c.openedAt = monotonic()
+                connectionStatus = "Connected"
                 push(Event.SocketUp)
                 true
               else false
@@ -143,12 +185,27 @@ final class Feed(
   def runForever(sleep: Long => Unit): Unit =
     var attempt = 0
     while true do
-      val opened = connectOnce()
-      attempt = if opened then 1 else attempt + 1
-      sleep(Feed.backoffMs(attempt))
+      val _ = connectOnce()
+      attempt = if synchronized(lastHealthy) then 1 else (attempt + 1).min(4)
+      val delay = Feed.backoffMs(attempt)
+      synchronized { connectionStatus = s"$connectionStatus. Retrying in ${delay / 1000}s" }
+      sleep(delay)
 
   def heartbeat(): Unit = sendLock.synchronized {
-    synchronized(current).foreach(transmit(_, Feed.ping))
+    val send = synchronized {
+      current.filter(_.socket.nonEmpty).flatMap { c =>
+        val now = monotonic()
+        if c.pingAt.exists(at => now - at >= Feed.replyWaitMs) then
+          end(c, "No heartbeat reply")
+          None
+        else if c.pingAt.isEmpty && c.lastPingAt.forall(at => now - at >= Feed.pingEveryMs) then
+          c.pingAt = Some(now)
+          c.lastPingAt = Some(now)
+          Some(c)
+        else None
+      }
+    }
+    send.foreach(transmit(_, Feed.ping))
   }
 
   def poll(): Unit =
@@ -242,13 +299,30 @@ final class Feed(
     if changed then wakeHistory()
 
 final class SocketConnector(val url: String, waitMs: Long = 5000L) extends Connector:
-  private val client = HttpClient.newHttpClient()
+  private val client =
+    HttpClient.newBuilder().connectTimeout(java.time.Duration.ofMillis(waitMs)).build()
 
   def connect(onText: String => Unit, onClose: () => Unit): Socket =
     connectWith(
       onText,
       onClose,
-      listener => client.newWebSocketBuilder().buildAsync(URI.create(url), listener)
+      listener =>
+        client
+          .newWebSocketBuilder()
+          .connectTimeout(java.time.Duration.ofMillis(waitMs))
+          .buildAsync(URI.create(url), listener)
+    )
+
+  override def connectReporting(onText: String => Unit, onClose: String => Unit): Socket =
+    connectWith(
+      onText,
+      () => (),
+      listener =>
+        client
+          .newWebSocketBuilder()
+          .connectTimeout(java.time.Duration.ofMillis(waitMs))
+          .buildAsync(URI.create(url), listener),
+      onClose
     )
 
   private def await[A](future: CompletableFuture[A]): A = future.get(waitMs, TimeUnit.MILLISECONDS)
@@ -256,7 +330,8 @@ final class SocketConnector(val url: String, waitMs: Long = 5000L) extends Conne
   private[desk] def connectWith(
       deliver: String => Unit,
       closed: () => Unit,
-      open: WebSocket.Listener => CompletableFuture[WebSocket]
+      open: WebSocket.Listener => CompletableFuture[WebSocket],
+      report: String => Unit = _ => ()
   ): Socket =
     val joiner = new Joiner
     val listener = new WebSocket.Listener:
@@ -265,9 +340,12 @@ final class SocketConnector(val url: String, waitMs: Long = 5000L) extends Conne
         ws.request(1)
         null
       override def onClose(ws: WebSocket, code: Int, reason: String): CompletionStage[?] =
+        report(s"Server closed connection ($code)")
         closed()
         null
-      override def onError(ws: WebSocket, error: Throwable): Unit = closed()
+      override def onError(ws: WebSocket, error: Throwable): Unit =
+        report(Feed.failure(error))
+        closed()
     val pending = open(listener)
     var accepted = false
     try

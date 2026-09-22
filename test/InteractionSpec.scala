@@ -184,6 +184,7 @@ class InteractionSpec extends munit.FunSuite:
     assertEquals(f.sent, Vector.empty)
     f.controller.invalidate()
     f.controller.status("Public data updated", "Analysis ready", "same paper account")
+    f.time += 1000
     val after = f.draw()
     assertNotEquals(after.lines, before.lines)
     f.feed(esc + s"[<0;${send.x};${send.y}m")

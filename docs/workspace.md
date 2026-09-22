@@ -25,7 +25,10 @@ The normal view keeps transcripts and logs
 out of the way. See [outlook and announcements](outlook-and-alerts.md) for the exact
 method, source coverage and sound controls.
 
-Click a trade button or press its numbered key to prepare an order. Read the
+Choose an order type and size, then use the large Buy or Sell button. Each main
+button occupies three rows, including its border. The selected type and size
+have a star beside them. The numbered shortcuts remain available and are listed
+below. Read the
 quantity, exact limit, value and account settings, then press Enter or click Send.
 Each review expires after 30 seconds. Paper Send keeps that exact quantity and
 limit and uses fresh visible depth to calculate the fill. A new preview, changed
@@ -36,7 +39,10 @@ controls.
 
 | Input | Action |
 | --- | --- |
-| 1 to 8 | Prepare the displayed Hard or Best order |
+| 1 or 2 | Review a Hard buy at the small or large size |
+| 3 or 4 | Review a Hard sell at the small or large size |
+| 5 or 6 | Review a Best buy at the small or large size |
+| 7 or 8 | Review a Best sell at the small or large size |
 | 9 or 0 | Select a target buy or sell price |
 | Up or down with a target | Move its limit by one valid price step |
 | Enter with a target | Prepare its review |
@@ -58,7 +64,19 @@ Paper mode starts with $10,000 and a 0.05 percent fee per fill. It uses visible
 depth, allows partial fills and saves the account before reporting success.
 Selected-market depth uses the faster five-level public stream. Simulated fills
 use only received liquidity. The one-second price-age check remains in force,
-so a connection outage can still make prices unavailable. History downloads
+so an outage can still make prices unavailable. During stream recovery, simulated
+trading can use a fresh backup depth response. Both its receipt age and market
+timestamp must remain within the configured age limit. The execution status
+identifies backup prices. Stale, delayed and wrong-market responses cannot restore
+readiness. A failed background retry does not discard a review backed by still
+fresh prices. Send rechecks the review and fill as usual.
+
+Desk checks the stream every half second, sends at most one heartbeat every five
+seconds and reconnects when a reply has not arrived within five seconds. Repeated
+failed attempts wait one, two, four, then eight seconds. A connection with received
+data and at least ten seconds of life resets that delay. Status includes a short
+failure reason without copying remote error text. These bounds depend on the
+process being scheduled and cannot prevent an external outage. History downloads
 run separately from connection changes and yield request capacity to price
 refreshes. Returning to a market requests its full candle history again.
 During a slow save, the screen stays responsive and shows the order as pending.

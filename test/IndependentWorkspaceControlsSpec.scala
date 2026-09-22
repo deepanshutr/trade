@@ -79,13 +79,17 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
       for button <- actual.buttons do
         assert(button.x > Layout.workspaceMarketWidth(cols) + 1)
         assert(button.x + button.width - 1 <= cols && button.y >= 1 && button.y <= rows)
-        assertEquals(
-          actual.lines(button.y - 1).slice(button.x - 1, button.x - 1 + button.width),
-          "[" + button.label + "]",
-          s"$cols x $rows $panel details=$details pending=$pending"
+        val text = actual
+          .lines(button.y - 1 + button.height / 2)
+          .slice(button.x - 1, button.x - 1 + button.width)
+        assert(
+          text.contains(button.label),
+          s"$cols x $rows $panel details=$details pending=$pending: $text"
         )
-        for x <- button.x until button.x + button.width do
-          assertEquals(actual.hit(x, button.y, cols, rows, "XMR"), Some(button.action))
+        if button.height == 1 then assertEquals(text, "[" + button.label + "]")
+        for
+          y <- button.y until button.y + button.height; x <- button.x until button.x + button.width
+        do assertEquals(actual.hit(x, y, cols, rows, "XMR"), Some(button.action))
       if pending || panel.input.nonEmpty then
         assert(!actual.buttons.exists(b => tradeAction(b.action)))
   }
@@ -102,10 +106,10 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
         closed.buttons.filter(b => tradeAction(b.action)),
         opened.buttons.filter(b => tradeAction(b.action))
       )
-      assert(closed.buttons.filter(b => tradeAction(b.action)).forall(_.y >= rows - 13))
+      assert(closed.buttons.filter(b => tradeAction(b.action)).forall(_.y >= rows - 14))
       if panel.review.nonEmpty then
         assert(closed.completeReview && opened.completeReview)
-        assert(closed.lines(rows - 11).contains("XMR buy Hard"))
-        assert(closed.lines(rows - 5).contains("Expires in"))
+        assert(closed.lines(rows - 15).contains("XMR buy Hard"))
+        assert(closed.lines(rows - 9).contains("Expires in"))
         assert(closed.buttons.exists(_.action == DeskAction.Submit))
   }

@@ -292,10 +292,9 @@ class TradeProgressSpec extends munit.FunSuite:
       )
       val frame = draw(c, stale)
       if mouse then
-        val y = frame.lines.indexWhere(_.contains("1 Hard buy"))
-        val x = frame.lines(y).indexOf("1 Hard buy") + 1
-        c.handle(Command.PointerPress(x, y + 1, 0), snapshot, stale, (100, 30), false)
-        c.handle(Command.Pointer(x, y + 1, 0), snapshot, stale, (100, 30), false)
+        val b = frame.disabledButtons.find(_.action == DeskAction.Prepare(Trading.action(0))).get
+        c.handle(Command.PointerPress(b.x, b.y, 0), snapshot, stale, (100, 30), false)
+        c.handle(Command.Pointer(b.x, b.y + 2, 0), snapshot, stale, (100, 30), false)
       else c.handle(Command.PlaceOrder(Trading.action(0)), snapshot, stale, (100, 30), false)
       assert(c.panel.actionNotice.exists(_.toLowerCase.contains("stale")), c.panel.toString)
       assertEquals(c.panel.review, None)
@@ -366,7 +365,7 @@ class TradeProgressSpec extends munit.FunSuite:
   for mouse <- Vector(false, true) do
     test(s"Target with missing prices explains why it is unavailable, mouse=$mouse") {
       val c = new DeskController(
-        PanelView(mode = "PAPER"),
+        PanelView(mode = "PAPER", orderKind = OrderKind.Target),
         () => start,
         _ => fail("missing prices prepared a trade"),
         _ => false,
@@ -383,10 +382,9 @@ class TradeProgressSpec extends munit.FunSuite:
       )
       val frame = draw(c, missing)
       if mouse then
-        val y = frame.lines.indexWhere(_.contains("9 Target buy"))
-        val x = frame.lines(y).indexOf("9 Target buy") + 1
-        c.handle(Command.PointerPress(x, y + 1, 0), snapshot, missing, (100, 30), false)
-        c.handle(Command.Pointer(x, y + 1, 0), snapshot, missing, (100, 30), false)
+        val b = frame.disabledButtons.find(_.action == DeskAction.Target(Side.Buy)).get
+        c.handle(Command.PointerPress(b.x, b.y, 0), snapshot, missing, (100, 30), false)
+        c.handle(Command.Pointer(b.x, b.y + 2, 0), snapshot, missing, (100, 30), false)
       else c.handle(Command.SelectTarget(Side.Buy), snapshot, missing, (100, 30), false)
       assert(c.panel.actionNotice.exists(_.contains("waiting")), "Target was silently ignored")
       assertEquals(c.panel.target, None)

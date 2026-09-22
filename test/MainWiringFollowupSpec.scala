@@ -204,7 +204,9 @@ class MainWiringFollowupSpec extends munit.FunSuite:
       assertEquals(accepted, (true, None))
   }
 
-  test("prompt markets keep full order identity and disable keys when that identity cannot fit") {
+  test(
+    "oversized prompt markets are rejected and synthetic long identities still require a full display"
+  ) {
     val now = 1000L
     val rules = MarketRules(0, 3, 5)
     val book = Book(Vector(Level("99.99", "10", 1)), Vector(Level("100", "10", 1)), now)
@@ -218,8 +220,9 @@ class MainWiringFollowupSpec extends munit.FunSuite:
             now
           )
         )((s, c) => State.reduce(s, Event.Key(Command.PromptChar(c)), now))
-        val snapshot = State.reduce(editing, Event.Key(Command.PromptSubmit), now)
-        assertEquals(snapshot.coin, name)
+        val submitted = State.reduce(editing, Event.Key(Command.PromptSubmit), now)
+        assertEquals(submitted.coin, "XMR")
+        val snapshot = submitted.copy(coin = name)
         val view = TradingView(
           name,
           Some(BigDecimal(0)),

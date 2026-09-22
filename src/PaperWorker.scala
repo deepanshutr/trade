@@ -21,6 +21,7 @@ final class PaperWorker(
   )
   private var coin = initialCoin
   private var connected = false
+  private var backup = false
   private var book = Option.empty[(Book, Long)]
   private var touch = Option.empty[(BigDecimal, BigDecimal, Long, Long)]
   private var metadata = Option.empty[ujson.Value]
@@ -41,13 +42,15 @@ final class PaperWorker(
   private def block: Option[String] =
     if closed.get() then Some("Paper closed. Restart Desk")
     else if !ledger.available then Some("Paper storage unavailable. Restart to recover")
-    else if !connected then Some("Paper disconnected. Waiting to reconnect")
+    else if !connected && !backup then Some("Reconnecting. Waiting for fresh prices")
     else if rules.isEmpty then Some("Paper waiting for market details")
     else if book.isEmpty || touch.isEmpty then Some("Paper waiting for selected-market depth")
     else if !touch.exists(t => t._1 > 0 && t._2 > t._1) then
       Some("Paper quote invalid. Waiting for prices")
-    else if !book.exists(b => fresh(b._2)) || !touch.exists(t => fresh(t._4)) then
-      Some("Paper prices stale. Waiting for fresh depth")
+    else if !book.exists(b =>
+        fresh(b._2) && (!backup || (BigInt(wall()) - b._1.time).abs <= config.quoteAgeMs)
+      ) || !touch.exists(t => fresh(t._4))
+    then Some("Paper prices stale. Waiting for fresh depth")
     else if !book.exists(b =>
         touch.exists(t => (BigInt(b._1.time) - BigInt(t._3)).abs <= config.quoteAgeMs)
       )
@@ -69,7 +72,7 @@ final class PaperWorker(
     val working = pending.get()
     val elapsed = ((BigInt(monotonic()) - pendingAt).max(BigInt(0)) / 1000)
     val message = if working then s"PAPER $stage ${elapsed}s | $pendingCoin"
-    else if dataReady then "Paper ready"
+    else if dataReady then (if backup then "Paper ready: backup prices" else "Paper ready")
     else reason.get
     TradingView(
       coin,
@@ -91,6 +94,7 @@ final class PaperWorker(
       coin = next
       book = None
       touch = None
+      backup = false
       rules = metadata.flatMap(m => Try(Exchange.market(m, next)).toOption)
       lastPlan = None
       prepared = None
@@ -99,20 +103,24 @@ final class PaperWorker(
     val at = monotonic()
     event match
       case Event.SocketUp =>
-        if !connected then
+        if !connected && !backup then
           book = None
           touch = None
         connected = true
       case Event.SocketDown =>
         connected = false
-        book = None
-        touch = None
-        prepared = None
-      case Event.BookUpdate(c, b, _) if c == coin =>
+        if !backup then
+          book = None
+          touch = None
+          prepared = None
+      case Event.BookUpdate(c, b, fromSocket)
+          if c == coin &&
+            (fromSocket || (BigInt(wall()) - b.time).abs <= config.quoteAgeMs) =>
         val better = book.forall { (old, _) =>
           b.time > old.time || (b.time == old.time && b.bids.size >= old.bids.size && b.asks.size >= old.asks.size && b.bids.size + b.asks.size > old.bids.size + old.asks.size)
         }
         if better then
+          backup = !fromSocket
           book = Some((b, at))
           if touch.forall(_._3 <= b.time) then
             touch =

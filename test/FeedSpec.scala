@@ -117,7 +117,7 @@ class FeedSpec extends munit.FunSuite:
     c.onClose()
     t.join(1000)
   }
-  test("the heartbeat is the venue's text ping and sends never overlap") {
+  test("concurrent heartbeat ticks share one outstanding venue ping and sends never overlap") {
     val c = new FakeConnector
     val (feed, _) = newFeed(c, restAnswering())
     val t = startConnected(feed)
@@ -125,7 +125,7 @@ class FeedSpec extends munit.FunSuite:
     threads.foreach(_.start())
     threads.foreach(_.join())
     val s = c.sockets.peek()
-    assertEquals(s.sent.asScala.count(_ == """{"method":"ping"}"""), 8)
+    assertEquals(s.sent.asScala.count(_ == """{"method":"ping"}"""), 1)
     assert(!s.overlapped, "sends overlapped")
     c.onClose()
     t.join(1000)
@@ -243,22 +243,42 @@ class FeedSpec extends munit.FunSuite:
   test("backoff is 1, 2, 4 then 8 seconds forever") {
     assertEquals((1 to 6).map(Feed.backoffMs), Seq(1000L, 2000L, 4000L, 8000L, 8000L, 8000L))
   }
-  test("the reconnect loop waits by attempt and resets after a connection that opened") {
+  test("the reconnect loop resets after a connection has received data for ten seconds") {
     val c = new FakeConnector(failFirst = 2)
-    val (feed, _) = newFeed(c, restAnswering())
+    val clock = new java.util.concurrent.atomic.AtomicLong(0)
+    val feed = new Feed(
+      c,
+      restAnswering(),
+      new ConcurrentLinkedQueue[Event](),
+      () => 1_000_000L,
+      "XMR",
+      monotonic = () => clock.get()
+    )
     val waits = new ConcurrentLinkedQueue[Long]()
     val t = new Thread(() =>
-      feed.runForever { ms =>
-        val _ = waits.add(ms)
-        Thread.sleep(20)
-      }
+      try
+        feed.runForever { ms =>
+          val _ = waits.add(ms)
+          Thread.sleep(20)
+        }
+      catch case _: InterruptedException => ()
     )
     t.setDaemon(true)
     t.start()
-    Thread.sleep(300)
-    c.onClose()
-    Thread.sleep(300)
-    assertEquals(waits.asScala.toVector.take(3), Vector(1000L, 2000L, 1000L))
+    try
+      val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(3)
+      while (c.sockets.isEmpty || c.sockets.peek().sent.size() < 24) && System.nanoTime() < deadline
+      do Thread.sleep(1)
+      assert(!c.sockets.isEmpty && c.sockets.peek().sent.size() == 24)
+      c.onText(fixture("pong.json"))
+      clock.set(10000L)
+      c.onClose()
+      while waits.size() < 3 && System.nanoTime() < deadline do Thread.sleep(1)
+      assertEquals(waits.asScala.toVector.take(3), Vector(1000L, 2000L, 1000L))
+    finally
+      t.interrupt()
+      t.join(3000)
+      assert(!t.isAlive)
   }
   test("a market switch resubscribes immediately and wakes the latest market history repair") {
     val c = new FakeConnector

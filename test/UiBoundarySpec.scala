@@ -168,11 +168,14 @@ class UiBoundarySpec extends munit.FunSuite:
       assertEquals(send.y, cancel.y)
       assert(send.x + send.width <= cancel.x)
       for button <- Vector(send, cancel) do
-        assertEquals(
-          frame.lines(button.y - 1).slice(button.x - 1, button.x - 1 + button.width),
-          "[" + button.label + "]"
+        assert(
+          frame
+            .lines(button.y)
+            .slice(button.x - 1, button.x - 1 + button.width)
+            .contains(button.label)
         )
-        assertEquals(frame.hit(button.x, button.y, cols, 30, "XMR"), Some(button.action))
+        for y <- button.y until button.y + button.height do
+          assertEquals(frame.hit(button.x, y, cols, 30, "XMR"), Some(button.action))
       assert(frame.lines.forall(_.length == cols))
   }
 

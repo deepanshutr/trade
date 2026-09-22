@@ -68,7 +68,7 @@ object WorkspaceApp:
     background("feed")(feed.runForever(ms => Thread.sleep(ms))),
     background("heartbeat") {
       while true do
-        Thread.sleep(50000L)
+        Thread.sleep(Feed.heartbeatEveryMs)
         feed.heartbeat()
     },
     background("poll") {
@@ -380,7 +380,7 @@ object WorkspaceApp:
           val usage =
             connection.flatMap(_.totalTokens).fold("")(n => " last request " + n + " tokens")
           controller.status(
-            captureStatus,
+            "Prices: " + feed.status + ". " + captureStatus,
             analysis.status + usage + connectedNews.fold("")(n => ". " + n.status),
             worker.accountLabel
           )

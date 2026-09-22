@@ -45,8 +45,8 @@ object Main:
           loop(tail, chosen.copy(stateDirectory = Some(path)), hasCoin)
         case "--config" :: _ => Left("give one settings path after --config")
         case "--state" :: _  => Left("give one local state directory after --state")
-        case flag :: _ if flag.startsWith("--") => Left(s"unknown flag $flag")
-        case coin :: tail if !hasCoin && coin.matches("[A-Za-z0-9][A-Za-z0-9:._-]{0,39}") =>
+        case flag :: _ if flag.startsWith("--")                  => Left(s"unknown flag $flag")
+        case coin :: tail if !hasCoin && State.validMarket(coin) =>
           loop(tail, chosen.copy(coin = coin), true)
         case extra :: _ => Left(s"unexpected argument $extra")
     loop(args.toList, Args("XMR", false), false)

@@ -167,14 +167,25 @@ final class DeskController(
           addMessage("order", reason)
           shown = None
         case _ => ()
-    def act(action: DeskAction): Unit =
+    def act(action: DeskAction, shortcut: Boolean = false): Unit =
+      val fromKey = shortcut && available.exists(_.shortcuts.contains(action))
       if current.input.isEmpty && available.exists(_.disabledButtons.exists(_.action == action))
       then refuse()
-      else if visible(action) then
+      else if fromKey && action.isInstanceOf[DeskAction.Prepare] &&
+        (!view.ready || view.pending || current.mode == "VIEW")
+      then refuse()
+      else if visible(action) || fromKey then
         action match
           case DeskAction.Prepare(intent)
               if current.input.isEmpty && current.review.isEmpty && view.ready && !view.pending =>
+            current = current.copy(orderKind = intent.kind, bigOrder = intent.big)
             prepare(intent)
+          case DeskAction.OrderType(kind) if !view.pending && current.review.isEmpty =>
+            current = current.copy(orderKind = kind, target = None, actionNotice = None)
+            shown = None
+          case DeskAction.OrderSize(big) if !view.pending && current.review.isEmpty =>
+            current = current.copy(bigOrder = big, actionNotice = None)
+            shown = None
           case DeskAction.Refresh if current.input.isEmpty && view.ready && !view.pending =>
             current.review.foreach(review => prepare(review.intent))
           case DeskAction.Submit if current.input.isEmpty && view.ready && !view.pending =>
@@ -201,7 +212,12 @@ final class DeskController(
             yield (side, price)
             selected match
               case Some(target) =>
-                current = current.copy(target = Some(target), review = None, actionNotice = None)
+                current = current.copy(
+                  target = Some(target),
+                  review = None,
+                  actionNotice = None,
+                  orderKind = OrderKind.Target
+                )
                 shown = None
               case None =>
                 addMessage("order", view.block.getOrElse("Waiting for a current market quote"))
@@ -248,7 +264,7 @@ final class DeskController(
             current = current.copy(details = true, detailPage = DetailPage.Answers)
             addMessage(
               "data",
-              s"${current.mode} ${snapshot.coin}\n${current.account}\n${view.message}\n${current.dataStatus}\n${current.analysisStatus}"
+              s"${current.mode} ${snapshot.coin}\n${current.account}\n${view.message}\n${current.dataStatus}\n${current.analysisStatus}\nOrder keys: 1/2 Hard buy, 3/4 Hard sell, 5/6 Best buy, 7/8 Best sell. Each pair uses small/large size. 9/0 choose a buy/sell target. Enter reviews or sends the visible review. Esc cancels. Simulated trading uses 1x funds, without funding or liquidation."
             )
           case DeskAction.Feedback(id, accepted) =>
             current = current.copy(messages =
@@ -319,10 +335,10 @@ final class DeskController(
     else
       command match
         case Command.PlaceOrder(intent) =>
-          act(DeskAction.Prepare(intent))
+          act(DeskAction.Prepare(intent), shortcut = true)
           true
         case Command.SelectTarget(side) =>
-          act(DeskAction.Target(side))
+          act(DeskAction.Target(side), shortcut = true)
           true
         case Command.SubmitTarget =>
           if current.review.nonEmpty then
@@ -369,7 +385,7 @@ final class DeskController(
             .collectFirst {
               case action @ DeskAction.Feedback(_, value) if value == accepted => action
             }
-            .foreach(act)
+            .foreach(action => act(action))
           true
         case Command.ScrollMessages(lines) =>
           act(DeskAction.Scroll(lines))
@@ -388,7 +404,7 @@ final class DeskController(
         pressed = if button != 0 then None
         else
           available.flatMap { f =>
-            f.controls.find(b => b.y == y && x >= b.x && x < b.x + b.width).map(b => (f, b))
+            f.controls.find(_.contains(x, y)).map(b => (f, b))
           }
         true
       case Command.Pointer(x, y, 0) =>
@@ -398,7 +414,7 @@ final class DeskController(
           (before, button) <- click
           after <- available
           if sameControl(before, button, after)
-          if button.y == y && x >= button.x && x < button.x + button.width
+          if button.contains(x, y)
         do act(button.action)
         true
       case _ =>
