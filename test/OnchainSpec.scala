@@ -328,6 +328,30 @@ class OnchainSpec extends munit.FunSuite:
     assertEquals(venue.coin, "XMR")
   }
 
+  test("the composite answers the market check for on-chain names and asks the venue for others") {
+    val queue = new LinkedBlockingQueue[Event]()
+    var asked = Vector.empty[String]
+    val rest = new Rest {
+      def post(body: String): Option[String] =
+        asked = asked :+ ujson.read(body)("coin").str
+        Some("null")
+    }
+    val connector = new Connector {
+      def connect(onText: String => Unit, onClose: () => Unit): Socket =
+        throw new RuntimeException("no venue")
+    }
+    val venue = new Feed(connector, rest, queue, () => 1L, "BTC")
+    val onchain =
+      new OnchainFeed(Vector(market), _ => new FakeRpc(Vector.empty), queue, () => 1L, "DEMO")
+    val composite: MarketFeed = new CompositeFeed(venue, onchain, () => "DEMO")
+    assertEquals(composite.checkMarket("DEMO"), Right(()))
+    assertEquals(asked, Vector.empty) // an on-chain name never reaches the venue
+    assertEquals(onchain.checkMarket("XMR"), Left(Feed.unknownMarket))
+    assertEquals(composite.checkMarket("XMR"), Left(Feed.unknownMarket))
+    assertEquals(asked, Vector("XMR"))
+    assertEquals(queue.poll(), null) // a check sends no event by itself
+  }
+
   test("settings list on-chain markets and refuse bad names, addresses, endpoints and references") {
     val directory = Files.createTempDirectory("desk-onchain-")
     val path = directory.resolve("config.json")

@@ -43,6 +43,7 @@ final class HttpRpc(val url: String, waitMs: Long = 5000L) extends Rpc:
 trait MarketFeed:
   def status: String
   def setMarket(newCoin: String): Unit
+  def checkMarket(name: String): Either[String, Unit]
 
 object Onchain:
   val pollMs = 2000L
@@ -219,6 +220,8 @@ final class OnchainFeed(
   def market(name: String): Option[OnchainMarket] = markets.find(_.name == name)
   def serves(name: String): Boolean = market(name).nonEmpty
   def setMarket(newCoin: String): Unit = coin = newCoin
+  def checkMarket(name: String): Either[String, Unit] =
+    if serves(name) then Right(()) else Left(Feed.unknownMarket)
 
   private def push(e: Event): Unit =
     observer(e)
@@ -351,3 +354,5 @@ final class CompositeFeed(venue: Feed, onchain: OnchainFeed, shown: () => String
   def setMarket(newCoin: String): Unit =
     onchain.setMarket(newCoin)
     if !onchain.serves(newCoin) then venue.setMarket(newCoin)
+  def checkMarket(name: String): Either[String, Unit] =
+    if onchain.serves(name) then Right(()) else venue.checkMarket(name)
