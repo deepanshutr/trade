@@ -346,6 +346,7 @@ class OnchainSpec extends munit.FunSuite:
     val composite: MarketFeed = new CompositeFeed(venue, onchain, () => "DEMO")
     assertEquals(composite.checkMarket("DEMO"), Right(()))
     assertEquals(asked, Vector.empty) // an on-chain name never reaches the venue
+    assertEquals(onchain.checkMarket("DEMO"), Right(()))
     assertEquals(onchain.checkMarket("XMR"), Left(Feed.unknownMarket))
     assertEquals(composite.checkMarket("XMR"), Left(Feed.unknownMarket))
     assertEquals(asked, Vector("XMR"))
