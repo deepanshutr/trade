@@ -45,10 +45,14 @@ class MainSpec extends munit.FunSuite:
     private val rest = new Rest:
       def post(body: String): Option[String] =
         val _ = callers.add(Thread.currentThread())
-        val _ = bodies.add(body)
-        if !blockSocket then hold()
-        startup.countDown()
-        Some("[]")
+        val request = ujson.read(body)
+        if request("type").str == "l2Book" then
+          Some(MarketSelectionSpec.bookResponse(request("coin").str))
+        else
+          val _ = bodies.add(body)
+          if !blockSocket then hold()
+          startup.countDown()
+          Some("[]")
 
     val feed = new Feed(connector, rest, queue, () => time, "XMR")
     private val connection = new Thread(() =>
@@ -140,11 +144,12 @@ class MainSpec extends munit.FunSuite:
       f.market("ETH")
       assert(f.entered.await(3, TimeUnit.SECONDS), "first history request did not start")
       f.market("SOL")
+      awaitState("verified SOL selection did not arrive")(f.state.get().coin == "SOL")
       f.market("SOL")
       f.market("XMR")
       f.queue.put(Event.Resize(121, 41))
       awaitState("queued markets held up the fold")(f.state.get().cols == 121)
-      assertEquals(f.state.get().coin, "XMR")
+      awaitState("verified return selection did not arrive")(f.state.get().coin == "XMR")
       awaitState("history held up subscription changes")(
         f.feed.coin == "XMR" && f.sent.size() == 144
       )
@@ -238,9 +243,13 @@ class MainSpec extends munit.FunSuite:
     val called = new CountDownLatch(1)
     val rest = new Rest:
       def post(body: String): Option[String] =
-        val _ = events.add("history " + state.get().coin)
-        called.countDown()
-        Some("[]")
+        val request = ujson.read(body)
+        if request("type").str == "l2Book" then
+          Some(MarketSelectionSpec.bookResponse(request("coin").str))
+        else
+          val _ = events.add("history " + state.get().coin)
+          called.countDown()
+          Some("[]")
     val connector = new Connector:
       def connect(text: String => Unit, closed: () => Unit): Socket =
         throw new IllegalStateException("not connected in this test")

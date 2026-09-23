@@ -213,13 +213,14 @@ object Workspace:
           action: DeskAction,
           enabled: Boolean = true
       ): Unit =
-        val text = if enabled then "[" + label + "]" else "(" + label + ")"
+        val active = enabled && s.marketPending.isEmpty
+        val text = if active then "[" + label + "]" else "(" + label + ")"
         val width = if row < tradeTop then Layout.outlookWidth else rightWidth
         val origin = if row < tradeTop then chartWidth else leftWidth
         if row < rows && column + text.length <= width then
           right(row) = right(row).padTo(column, ' ') + text
           val control = DeskButton(label, action, origin + 2 + column, row + 1, text.length)
-          if enabled then buttons += control else disabledButtons += control
+          if active then buttons += control else disabledButtons += control
       def tradeLine(row: Int, text: String): Unit =
         line(tradeTop + row + (if row >= 3 then 1 else 0), text)
       def tradeButton(
@@ -237,7 +238,8 @@ object Workspace:
           action: DeskAction,
           enabled: Boolean
       ): Boolean =
-        val shown = if enabled then label else "(" + label + ")"
+        val active = enabled && s.marketPending.isEmpty
+        val shown = if active then label else "(" + label + ")"
         if shown.length > width - 2 || column + width > rightWidth || row + 3 > rows - 3 then false
         else
           val left = (width - 2 - shown.length) / 2
@@ -247,7 +249,7 @@ object Workspace:
             right(row + i) = right(row + i).padTo(column, ' ') + text
           }
           val control = DeskButton(label, action, leftWidth + 2 + column, row + 1, width, 3)
-          if enabled then buttons += control else disabledButtons += control
+          if active then buttons += control else disabledButtons += control
           true
       tradeLine(
         0,
@@ -272,7 +274,8 @@ object Workspace:
       else ""
       line(tradeTop + 3, acknowledgement + tradeStatus.replace('\n', ' '))
       val canTrade =
-        view.ready && !view.pending && panel.input.isEmpty && s.prompt.isEmpty && panel.mode != "VIEW"
+        view.ready && !view.pending && panel.input.isEmpty && s.prompt.isEmpty &&
+          s.marketPending.isEmpty && panel.mode != "VIEW"
       var complete = false
       panel.modeReview match
         case Some(name) =>
@@ -346,11 +349,12 @@ object Workspace:
         case None if panel.modeReview.isEmpty =>
           val half = rightWidth / 2
           def targetReady(side: Side): Boolean =
-            !view.pending && panel.input.isEmpty && view.rules.exists(r =>
-              view.reference(side).exists(Trading.validPrice(_, r))
+            !view.pending && panel.input.isEmpty && s.marketPending.isEmpty && view.rules.exists(
+              r => view.reference(side).exists(Trading.validPrice(_, r))
             )
           val kind = if panel.target.nonEmpty then OrderKind.Target else panel.orderKind
-          val choosing = !view.pending && panel.input.isEmpty && s.prompt.isEmpty
+          val choosing = !view.pending && panel.input.isEmpty && s.prompt.isEmpty &&
+            s.marketPending.isEmpty
           Vector(OrderKind.Hard, OrderKind.Best, OrderKind.Target).zipWithIndex.foreach {
             (value, i) =>
               tradeButton(

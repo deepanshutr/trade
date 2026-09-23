@@ -72,8 +72,12 @@ class PublicConnectionSpec extends munit.FunSuite:
     val history = new ConcurrentLinkedQueue[String]()
     val rest = new Rest:
       def post(body: String): Option[String] =
-        val _ = history.add(body)
-        Some("[]")
+        val request = ujson.read(body)
+        if request("type").str == "l2Book" then
+          Some(MarketSelectionSpec.bookResponse(request("coin").str))
+        else
+          val _ = history.add(body)
+          Some("[]")
     (new Feed(probe, rest, queue, () => 1_000_000L, "XMR"), queue, history)
 
   test("a refused public connection publishes down state and enters backoff") {

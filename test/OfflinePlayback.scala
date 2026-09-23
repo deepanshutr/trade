@@ -180,8 +180,12 @@ object OfflinePlayback:
           case "candleSnapshot" =>
             if request("req")("coin").str == "ETH" then hold("history")
             Some("[]")
-          case "l2Book" => Some(ujson.write(book(request("coin").str)))
-          case other    => deny("public request " + other)
+          case "l2Book" =>
+            val coin = request("coin").str
+            if coin == "BTC" then hold("selection")
+            Some(if Set("XMR", "ETH", "BTC", "PAXG").contains(coin) then ujson.write(book(coin))
+            else "null")
+          case other => deny("public request " + other)
 
     val exchange = new Exchange:
       def info(body: ujson.Value): Option[ujson.Value] =

@@ -4,6 +4,10 @@ import java.util.concurrent.{CountDownLatch, LinkedBlockingQueue, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 
 class PromptScheduleSpec extends munit.FunSuite:
+  private def awaitMarket(state: AtomicReference[Snapshot], coin: String): Unit =
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+    while state.get().coin != coin && System.nanoTime() < deadline do Thread.sleep(1)
+    assertEquals(state.get().coin, coin)
   private val now = 10000L
   private val view = TradingView(
     "XMR",
@@ -22,7 +26,8 @@ class PromptScheduleSpec extends munit.FunSuite:
       def connect(text: String => Unit, closed: () => Unit): Socket =
         throw new IllegalStateException("not connected in this test")
     val rest = new Rest:
-      def post(body: String): Option[String] = Some("[]")
+      def post(body: String): Option[String] =
+        Some(MarketSelectionSpec.bookResponse(ujson.read(body)("coin").str))
     new Feed(connector, rest, queue, () => now, "XMR")
 
   private final class Input(
@@ -95,8 +100,9 @@ class PromptScheduleSpec extends munit.FunSuite:
       assertEquals(input.target, None)
       release.countDown()
       assert(acknowledged.await(3, TimeUnit.SECONDS))
-      assertEquals(published.get(), Some("BTC"))
+      assertEquals(published.get(), Some("XMR"))
       assertEquals(pending.get(), 0)
+      awaitMarket(state, "BTC")
       input.byte(49)
       assertEquals(input.sent.toVector, Vector("BTC"))
     finally
@@ -141,14 +147,14 @@ class PromptScheduleSpec extends munit.FunSuite:
       assertEquals(input.sent.toVector, Vector.empty)
       releaseFirst.countDown()
       assert(firstDone.await(3, TimeUnit.SECONDS))
-      assertEquals(state.get().coin, "BTC")
+      assertEquals(state.get().coin, "XMR")
       assertEquals(state.get().prompt, None)
       assertEquals(pending.get(), 1)
       input.byte(49)
       assertEquals(input.sent.toVector, Vector.empty)
       releaseSecond.countDown()
       assert(secondDone.await(3, TimeUnit.SECONDS))
-      assertEquals(state.get().coin, "ETH")
+      awaitMarket(state, "ETH")
       assertEquals(pending.get(), 0)
       input.byte(49)
       assertEquals(input.sent.toVector, Vector("ETH"))

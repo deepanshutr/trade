@@ -370,6 +370,25 @@ class Playback:
                                  "write_completed_ns": arrived, "frame_completed_ns": frame["captured_ns"],
                                  "arrival_to_frame_ns": frame["captured_ns"] - arrived,
                                  "write_duration_ns": arrived - started})
+        elif self.mode == "selection":
+            rejected = self.key("unknown market keeps chart", b"mmcchhhhaa1pp\r",
+                                contains("Unknown market"))
+            assert "XMR" in rejected["lines"][0]
+            assert any("VIEW XMR" in row for row in rejected["lines"])
+            self.key("open another selection", b"m", contains("market:"))
+            self.key("cancel selection", ESC, market("XMR"))
+            self.write(b"mETH\r")
+            self.frame(contains("VIEW ETH"))
+            self.command("quote", coin="ETH")
+            self.frame(market("ETH"))
+            self.command("arm", work="selection")
+            self.event("armed")
+            self.write(b"mBTC\r")
+            self.event("work-held")
+            self.frame(contains("Checking BTC"))
+            self.key("cancel held selection", ESC, market("ETH"))
+            self.key("navigate after cancellation", ESC + b"[B",
+                     lambda f: market("ETH")(f) and contains("2s/col")(f))
         quit_started = time.monotonic_ns()
         self.write(b"q")
         quit_arrived = time.monotonic_ns()
@@ -420,7 +439,7 @@ def main():
     parser.add_argument("--classpath", required=True)
     parser.add_argument("--fixtures", default="fixtures")
     parser.add_argument("--output", required=True)
-    parser.add_argument("--mode", choices=("all", "normal", "send", "history", "queue"), default="all")
+    parser.add_argument("--mode", choices=("all", "normal", "send", "history", "queue", "selection"), default="all")
     parser.add_argument("--display-contract", choices=("original", "contextual", "workspace"), default="workspace")
     parser.add_argument("--repeats", type=int, default=1)
     args = parser.parse_args()
@@ -442,7 +461,7 @@ def main():
         assert Path(source).read_text().count(fragment) == 1, "scheduling premise changed: " + fragment
         schedule[source + ": " + fragment] = delay
     results = []
-    modes = ("normal", "send", "history", "queue") if args.mode == "all" else (args.mode,)
+    modes = ("normal", "send", "history", "queue", "selection") if args.mode == "all" else (args.mode,)
     try:
         for repetition in range(args.repeats):
             for mode in modes:

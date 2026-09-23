@@ -62,6 +62,8 @@ enum Event:
   case SocketDown
   case Key(command: Command)
   case Resize(cols: Int, rows: Int)
+  case MarketChecked(request: (Long, String), result: Either[String, Unit])
+  case MarketUnavailable(coin: String, reason: String)
 
 enum ChartMode:
   case Line, Candles
@@ -89,7 +91,9 @@ final case class Snapshot(
     lineZoom: Int = 0,
     referenceCoins: Vector[String] = State.refCoins,
     candleReceipts: Map[(String, String), Map[Long, Long]] = Map.empty,
-    workspace: Boolean = false
+    workspace: Boolean = false,
+    marketPending: Option[(Long, String)] = None,
+    marketNotice: Option[String] = None
 )
 
 object Snapshot:
@@ -264,9 +268,13 @@ object State:
     case Event.Pong         => s.copy(feed = Health.Live(now))
     case Event.Bad(_)       => s.copy(feed = Health.Live(now), bad = s.bad + 1)
     case Event.SocketDown   => s.copy(feed = Health.Down(now, lastMsgAt(s.feed)))
-    case Event.SocketUp     => s.copy(feed = Health.Live(now))
+    case Event.SocketUp     => s.copy(feed = Health.Live(now), marketNotice = None)
     case Event.Key(cmd)     => key(s, cmd, now)
     case Event.Resize(c, r) => s.copy(cols = c.max(Layout.minCols), rows = r.max(Layout.minRows))
+    // The runtime accepts only the result matching its current selection request.
+    case Event.MarketChecked(_, _)             => s
+    case Event.MarketUnavailable(coin, reason) =>
+      if coin == s.coin then s.copy(marketNotice = Some(reason)) else s
 
   private def key(s: Snapshot, cmd: Command, now: Long): Snapshot = cmd match
     case Command.PlaceOrder(_) | Command.SelectTarget(_) | Command.SubmitTarget |

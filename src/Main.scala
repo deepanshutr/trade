@@ -94,7 +94,8 @@ object Main:
       submit: (OrderIntent, String) => Boolean
   ): (Boolean, Option[(Side, BigDecimal)]) =
     val visible = size._1 >= Layout.minCols && size._2 >= Layout.minRows
-    val outsidePrompt = !promptOpen && snapshot.prompt.isEmpty && pendingPrompts == 0
+    val outsidePrompt = !promptOpen && snapshot.prompt.isEmpty &&
+      snapshot.marketPending.isEmpty && pendingPrompts == 0
     val matching = shownCoin.contains(snapshot.coin) && view.coin == snapshot.coin
     val permitted = visible && outsidePrompt && matching && !snapshot.quit &&
       view.ready && !view.pending
@@ -161,22 +162,66 @@ object Main:
       onMarket: String => Unit = _ => (),
       onPromptDone: () => Unit = () => ()
   ): Vector[Thread] =
-    val switches = new LinkedBlockingQueue[String]()
+    val switches = new LinkedBlockingQueue[Either[(Long, String), String]]()
     val market = daemon("market") {
-      while true do feed.setMarket(switches.take())
+      while true do
+        switches.take() match
+          case Right(coin)   => feed.setMarket(coin)
+          case Left(request) =>
+            if state.get().marketPending.contains(request) && !state.get().quit then
+              queue.put(Event.MarketChecked(request, feed.checkMarket(request._2)))
     }
     val fold = daemon("fold") {
+      var requestId = 0L
       while true do
         val event = queue.take()
         val before = state.get()
-        val after = State.reduce(before, event, now())
+        val after = event match
+          case Event.Key(Command.PromptSubmit) =>
+            before.prompt match
+              case Some(name) if State.validMarket(name) && name != before.coin =>
+                requestId += 1
+                before.copy(
+                  prompt = None,
+                  marketPending = Some((requestId, name)),
+                  marketNotice = None
+                )
+              case name =>
+                State
+                  .reduce(before, event, now())
+                  .copy(
+                    marketPending = None,
+                    marketNotice = Option.when(
+                      name.exists(n => n.nonEmpty && !State.validMarket(n))
+                    )("Invalid market name. Press m to retry")
+                  )
+          case Event.MarketChecked(request, result) =>
+            if before.marketPending.contains(request) && !before.quit then
+              result match
+                case Left(reason) => before.copy(marketPending = None, marketNotice = Some(reason))
+                case Right(_)     =>
+                  State
+                    .reduce(
+                      before.copy(prompt = Some(request._2)),
+                      Event.Key(Command.PromptSubmit),
+                      now()
+                    )
+                    .copy(marketPending = None, marketNotice = None)
+            else before
+          case Event.Key(Command.StartMarketPrompt | Command.PromptCancel | Command.Quit) =>
+            State.reduce(before, event, now()).copy(marketPending = None, marketNotice = None)
+          case Event.Key(Command.CancelTarget) if before.marketPending.nonEmpty =>
+            before.copy(marketPending = None, marketNotice = None)
+          case _ => State.reduce(before, event, now())
         if after.coin != before.coin then onMarket(after.coin)
         state.set(after)
         event match
           case Event.Key(Command.PromptSubmit | Command.PromptCancel) => onPromptDone()
           case _                                                      => ()
         if after.coin != before.coin then
-          val _ = switches.offer(after.coin)
+          val _ = switches.offer(Right(after.coin))
+        if after.marketPending != before.marketPending then
+          after.marketPending.foreach(request => { val _ = switches.offer(Left(request)) })
     }
     Vector(market, fold)
 

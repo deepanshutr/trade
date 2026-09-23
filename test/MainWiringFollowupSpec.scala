@@ -21,7 +21,8 @@ class MainWiringFollowupSpec extends munit.FunSuite:
     val enteredSecond = new CountDownLatch(1)
     val releaseSecond = new CountDownLatch(1)
     val rest = new Rest:
-      def post(body: String): Option[String] = Some("[]")
+      def post(body: String): Option[String] =
+        Some(MarketSelectionSpec.bookResponse(ujson.read(body)("coin").str))
     val connector = new Connector:
       def connect(text: String => Unit, closed: () => Unit): Socket =
         throw new IllegalStateException("no connection in this test")
@@ -47,22 +48,24 @@ class MainWiringFollowupSpec extends munit.FunSuite:
     )
     try
       assert(enteredSecond.await(3, TimeUnit.SECONDS))
-      assertEquals(state.get().coin, "BTC")
-      assertEquals(pending.get(), 1)
+      assertEquals(state.get().coin, "XMR")
+      assertEquals(pending.get(), 0)
+      assert(state.get().marketPending.nonEmpty)
       assertEquals(selected.get(), None)
       assertEquals(
         callbacks.asScala.toVector,
-        Vector(("BTC", "XMR", 2, true), ("ETH", "BTC", 1, true))
+        Vector(("ETH", "XMR", 0, true))
       )
       releaseSecond.countDown()
-      awaitCondition("the second published prompt was not acknowledged")(pending.get() == 0)
+      awaitCondition("the verified selection was not published")(state.get().coin == "ETH")
+      assertEquals(pending.get(), 0)
       assertEquals(state.get().coin, "ETH")
       assertEquals(state.get().prompt, None)
       Main.queueInput(Command.StartMarketPrompt, queue, pending)
       Main.queueInput(Command.PromptCancel, queue, pending)
       awaitCondition("the cancel was not acknowledged")(pending.get() == 0)
       assertEquals(state.get().prompt, None)
-      assertEquals(callbacks.size(), 2)
+      assertEquals(callbacks.size(), 1)
     finally
       releaseSecond.countDown()
       workers.foreach(_.interrupt())

@@ -132,7 +132,8 @@ final class DeskController(
       f.cols == size._1 && f.rows == size._2 && f.coin == snapshot.coin && f.mode == current.mode
     )
     val available = frame.filter(_ =>
-      !snapshot.quit && !promptOpen && snapshot.prompt.isEmpty && view.coin == snapshot.coin
+      !snapshot.quit && !promptOpen && snapshot.prompt.isEmpty &&
+        snapshot.marketPending.isEmpty && view.coin == snapshot.coin
     )
     def visible(action: DeskAction): Boolean =
       available.exists(_.buttons.exists(_.action == action))
@@ -400,6 +401,9 @@ final class DeskController(
         case _ => false
 
     command match
+      case Command.CancelTarget
+          if snapshot.marketPending.nonEmpty || promptOpen || snapshot.prompt.nonEmpty =>
+        false
       case Command.PointerPress(x, y, button) =>
         pressed = if button != 0 then None
         else

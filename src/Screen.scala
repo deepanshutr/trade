@@ -26,6 +26,11 @@ object Screen:
       .toPlainString()
 
   def stats(s: Snapshot, now: Long, cols: Int): String =
+    val selection = s.marketPending
+      .map(r => s"Checking ${r._2}. Esc cancels")
+      .orElse(s.marketNotice)
+    if s.prompt.isEmpty && selection.nonEmpty then
+      return Chart.fit(s.coin + "  " + selection.get, cols)
     val age = (now - State.lastMsgAt(s.feed)).max(0L) / 1000.0
     val health = s.feed match
       case Health.Down(_, _) => "disconnected"

@@ -34,6 +34,7 @@ final class Joiner:
     else None
 
 object Feed:
+  val unknownMarket = "Unknown market. Press m to retry"
   val ping = """{"method":"ping"}"""
   val historyEveryMs = 60_000L
   val heartbeatEveryMs = 500L
@@ -184,8 +185,26 @@ final class Feed(
 
   def runForever(sleep: Long => Unit): Unit =
     var attempt = 0
+    var verified = Option.empty[String]
     while true do
-      val _ = connectOnce()
+      val selected = coin
+      val unknown = if verified.contains(selected) then false
+      else
+        checkMarket(selected) match
+          case Right(_) =>
+            verified = Some(selected)
+            false
+          case Left(reason) if reason == Feed.unknownMarket =>
+            synchronized {
+              if coin == selected then
+                connectionStatus = reason
+                push(Event.MarketUnavailable(selected, reason))
+            }
+            true
+          // A public lookup outage must not disable the independent socket path.
+          case _ => false
+      if !unknown then
+        val _ = connectOnce()
       attempt = if synchronized(lastHealthy) then 1 else (attempt + 1).min(4)
       val delay = Feed.backoffMs(attempt)
       synchronized { connectionStatus = s"$connectionStatus. Retrying in ${delay / 1000}s" }
@@ -214,6 +233,18 @@ final class Feed(
       .post(s"""{"type":"l2Book","coin":"$c"}""")
       .flatMap(Events.parseRestBook)
       .foreach(b => push(Event.BookUpdate(c, b, fromSocket = false)))
+
+  def checkMarket(name: String): Either[String, Unit] =
+    val unavailable = "Cannot check market. Press m to retry"
+    Try {
+      rest.post(ujson.write(ujson.Obj("type" -> "l2Book", "coin" -> name))) match
+        case Some(text) if ujson.read(text).isNull =>
+          Left(Feed.unknownMarket)
+        case Some(text)
+            if ujson.read(text)("coin").str == name && Events.parseRestBook(text).nonEmpty =>
+          Right(())
+        case _ => Left(unavailable)
+    }.getOrElse(Left(unavailable))
 
   def pollCoarse(): Unit =
     val c = coin
