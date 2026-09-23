@@ -166,18 +166,32 @@ object WorkspaceApp:
       val recovered = Try(MarketArchive.restore(publicDirectory, seed))
       val state = new AtomicReference(recovered.getOrElse(seed))
       val recorder = Try(new PublicRecorder(MarketArchive.open(publicDirectory), now)).toOption
-      val feed = new Feed(
-        connector,
-        rest,
-        queue,
-        now,
-        args.coin,
-        config.references,
-        event => {
-          worker.observe(event)
-          recorder.foreach(_.observe(event))
-        }
+      val observe: Event => Unit = event => {
+        worker.observe(event)
+        recorder.foreach(_.observe(event))
+      }
+      // The venue feed always runs, for the references. When the chosen market is
+      // on-chain it follows the first reference so nothing is asked of the venue for
+      // a name it does not list.
+      val venueCoin =
+        if config.onchainMarket(args.coin).nonEmpty then
+          config.references.headOption.getOrElse("BTC")
+        else args.coin
+      val feed = new Feed(connector, rest, queue, now, venueCoin, config.references, observe)
+      val clients = scala.collection.concurrent.TrieMap.empty[String, HttpRpc]
+      // The trading workers follow the venue only, so on-chain events reach the recorder alone.
+      val onchain = Option.when(config.onchain.nonEmpty)(
+        new OnchainFeed(
+          config.onchain,
+          url => clients.getOrElseUpdate(url, new HttpRpc(url)),
+          queue,
+          now,
+          args.coin,
+          event => recorder.foreach(_.observe(event))
+        )
       )
+      val routed: MarketFeed =
+        onchain.fold[MarketFeed](feed)(o => new CompositeFeed(feed, o, () => state.get().coin))
       val connectedNews = Option.when(args.analysis)(new News.Worker(now))
       val connection =
         Option.when(args.analysis)(CodexConnection.create(directory.resolve("analysis-workspace")))
@@ -281,11 +295,17 @@ object WorkspaceApp:
           )
           Thread.sleep(250L)
       }
-      val publicThreads = publicLoops(feed)
+      val publicThreads = publicLoops(feed) ++ onchain.toVector.map(o =>
+        background("onchain") {
+          while true do
+            o.poll()
+            Thread.sleep(Onchain.pollMs)
+        }
+      )
       val foldThreads = Main.startFold(
         queue,
         state,
-        feed,
+        routed,
         now,
         coin =>
           inputLock.synchronized {
@@ -380,7 +400,7 @@ object WorkspaceApp:
           val usage =
             connection.flatMap(_.totalTokens).fold("")(n => " last request " + n + " tokens")
           controller.status(
-            "Prices: " + feed.status + ". " + captureStatus,
+            "Prices: " + routed.status + ". " + captureStatus,
             analysis.status + usage + connectedNews.fold("")(n => ". " + n.status),
             worker.accountLabel
           )

@@ -5,6 +5,15 @@ symbol. Run `desk XMR` for viewing, or `desk XMR --trade` for the configured rea
 account. The right panel always names the current mode. The supported minimum is
 100 columns by 30 rows. Use 120 by 40 for more chart and message space.
 
+A market listed under `onchain` in the settings, such as `desk DEMO`, shows a
+token from a BNB Chain pool. Its book is the pool's own liquidity at fixed
+impact steps, its tape the pool's swaps, and its context line stays empty
+because funding, open interest and an oracle do not exist there. The prices
+status names the endpoint in use and reports its failures; the connection
+words at the top describe the venue link that feeds the references. Type the
+market name exactly as the settings spell it. The [trading guide](trading.md) describes the
+settings and the limits.
+
 The book sits above the trade tape. Bitcoin and gold comparisons sit beside them.
 BTC means bitcoin. PAXG is a token tied to gold and is the gold reference here.
 Each comparison reports paired candle coverage. Missing, stale or incomplete

@@ -96,7 +96,7 @@ final class Feed(
     referenceCoins: Vector[String] = State.refCoins,
     observer: Event => Unit = _ => (),
     monotonic: () => Long = () => System.nanoTime() / 1_000_000L
-):
+) extends MarketFeed:
   @volatile var coin: String = coin0
   private final class Connection:
     val closed = new CountDownLatch(1)

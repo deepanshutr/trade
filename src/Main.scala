@@ -157,7 +157,7 @@ object Main:
   def startFold(
       queue: LinkedBlockingQueue[Event],
       state: AtomicReference[Snapshot],
-      feed: Feed,
+      feed: MarketFeed,
       now: () => Long,
       onMarket: String => Unit = _ => (),
       onPromptDone: () => Unit = () => ()
@@ -228,7 +228,7 @@ object Main:
   def startTradingFold(
       queue: LinkedBlockingQueue[Event],
       state: AtomicReference[Snapshot],
-      feed: Feed,
+      feed: MarketFeed,
       now: () => Long,
       pendingPrompts: AtomicInteger,
       targetLock: Object,
