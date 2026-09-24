@@ -4,7 +4,7 @@ import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 
 class MainRuntimeSpec extends munit.FunSuite:
-  test("live review captures and displays observed leverage and margin") {
+  test("live one-click submission captures observed leverage and margin") {
     val now = 1800000000000L
     val snapshot = Snapshot.initial("XMR", now)
     val intent = OrderIntent(Side.Buy, OrderKind.Hard)
@@ -29,11 +29,12 @@ class MainRuntimeSpec extends munit.FunSuite:
       leverage = Some(3),
       marginMode = Some("isolated")
     )
+    var submitted = Option.empty[OrderReview]
     val controller = new DeskController(
       PanelView(mode = "LIVE"),
       () => now,
       _ => Right(plan),
-      _ => true,
+      order => { submitted = Some(order); true },
       _ => true,
       _ => Left("unused")
     )
@@ -49,12 +50,12 @@ class MainRuntimeSpec extends munit.FunSuite:
     )
     controller.publish(draw())
     controller.handle(Command.PlaceOrder(intent), snapshot, view, (120, 40), false)
-    val review = controller.panel.review.get
+    val review = submitted.get
     assertEquals(review.leverage, Some(3))
     assertEquals(review.marginMode, Some("isolated"))
     val frame = draw()
-    assert(frame.completeReview)
-    assert(frame.lines.exists(_.contains("3x isolated")))
+    assert(!frame.completeReview)
+    assert(!frame.buttons.exists(_.action == DeskAction.Submit))
   }
 
   test("paper and recorder modes have explicit independent startup choices") {

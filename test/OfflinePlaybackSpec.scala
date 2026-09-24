@@ -182,3 +182,26 @@ class OfflinePlaybackSpec extends munit.FunSuite:
           descendant.get().destroyForcibly()
           descendant.get().onExit().get(5, TimeUnit.SECONDS)
   }
+
+  test("six hundred terminal clicks at ten per second record fills or explicit refusals") {
+    val directory = Files.createTempDirectory("desk-click-speed-")
+    val output = directory.resolve("capture")
+    run(
+      Vector(
+        "python3",
+        "tools/playback.py",
+        "--java",
+        Path.of(System.getProperty("java.home"), "bin/java").toString,
+        "--classpath",
+        System.getProperty("java.class.path"),
+        "--output",
+        output.toString,
+        "--mode",
+        "speed"
+      ),
+      directory,
+      80.seconds
+    )
+    val summary = ujson.read(Files.readString(output.resolve("summary.json")))
+    println("Terminal click speed: " + ujson.write(summary("runs")(0)("speed")))
+  }

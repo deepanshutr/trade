@@ -5,7 +5,7 @@ class WorkspaceSpec extends munit.FunSuite:
   private val s = Snapshot.initial("XMR", now)
   private val view = TradingView("XMR", message = "View only")
 
-  test("book is above tape, references beside them, controls and messages at right") {
+  test("book is above tape, references beside them, simple trading controls at right") {
     for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
       val frame = Workspace.draw(
         s,
@@ -23,8 +23,8 @@ class WorkspaceSpec extends munit.FunSuite:
       val tape = frame.lines.indexWhere(_.startsWith("TAPE"))
       assert(book >= 0 && tape == book + 6)
       assert(frame.lines(book).contains("BTC"))
-      assert(frame.lines(tape).contains("gold"))
-      assert(frame.lines.exists(_.contains("Ask")))
+      assert(frame.lines(tape).contains("GOLD"))
+      assert(!frame.lines.exists(_.contains("Ask")))
       assert(frame.buttons.nonEmpty)
       assertEquals(frame.hit(1, 1, cols - 1, rows, "XMR"), None)
       assertEquals(frame.hit(1, 1, cols, rows, "BTC"), None)
@@ -74,32 +74,6 @@ class WorkspaceSpec extends munit.FunSuite:
     val frame = Workspace.draw(s, view, panel, 120, 40, now, java.time.ZoneId.of("UTC"), Style.mono)
     assert(!frame.lines.mkString.contains(27.toChar))
     assert(!frame.lines.mkString.contains(7.toChar))
-  }
-
-  test("feedback identifies the visible analysis after scrolling past a newer answer") {
-    val messages = Vector(DeskMessage(1, now, "analysis", "old visible answer")) ++
-      (2L to 11L).map(id => DeskMessage(id, now, "news", "news " + id)) ++
-      Vector(DeskMessage(99, now, "analysis", "new hidden answer"))
-    val frame = Workspace.draw(
-      s,
-      view,
-      PanelView(messages = messages, scroll = 5, details = true, detailPage = DetailPage.Answers),
-      120,
-      40,
-      now,
-      java.time.ZoneId.of("UTC"),
-      Style.mono
-    )
-    assert(frame.lines.exists(_.contains("old visible answer")))
-    assert(!frame.lines.exists(_.contains("new hidden answer")))
-    assertEquals(
-      frame.buttons.collect { case DeskButton(_, DeskAction.Feedback(id, _), _, _, _, _) =>
-        id
-      }.toSet,
-      Set(1L)
-    )
-    assert(frame.lines.exists(_.contains("Feedback for analysis #1")))
-    assert(frame.lines.exists(_.contains("analysis #1:")))
   }
 
   test("no feedback control is offered when no analysis text is visible") {

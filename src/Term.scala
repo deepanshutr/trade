@@ -1,6 +1,5 @@
 package desk
 
-import scala.sys.process.*
 import scala.util.Try
 
 object Term:
@@ -9,7 +8,23 @@ object Term:
   val leaveCodes: String = esc + "[?2004l" + esc + "[?25h" + esc + "[?1049l"
 
   private def stty(args: String): String =
-    Seq("/bin/sh", "-c", s"/bin/stty $args < /dev/tty").!!.trim
+    val process = new ProcessBuilder((Vector("/bin/stty") ++ args.split("\\s+"))*)
+      .redirectInput(new java.io.File("/dev/tty"))
+      .redirectError(ProcessBuilder.Redirect.DISCARD)
+      .start()
+    try
+      if !process.waitFor(1000L, java.util.concurrent.TimeUnit.MILLISECONDS) then
+        throw new java.io.IOException("terminal settings timed out")
+      if process.exitValue() != 0 then
+        throw new java.io.IOException("terminal settings unavailable")
+      val output = process.getInputStream.readNBytes(4097)
+      if output.length > 4096 then throw new java.io.IOException("terminal settings too large")
+      new String(output, java.nio.charset.StandardCharsets.UTF_8).trim
+    finally
+      if process.isAlive then
+        process.destroyForcibly()
+        val _ = process.waitFor(100L, java.util.concurrent.TimeUnit.MILLISECONDS)
+      process.getInputStream.close()
 
   def enterRaw(): String =
     val saved = Try(stty("-g")).getOrElse("")

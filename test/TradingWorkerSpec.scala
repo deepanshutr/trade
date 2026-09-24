@@ -24,7 +24,8 @@ class TradingWorkerSpec extends munit.FunSuite:
       warmSigning: () => Unit = () => OrderSigning.warm(),
       autoStart: Boolean = true,
       orderPermission: (() => Unit) => Unit = run => run(),
-      accountPaused: () => Boolean = () => false
+      accountPaused: () => Boolean = () => false,
+      balanceMode: String = "disabled"
   ):
     private val key = Array.fill[Byte](32)(1)
     val agent = OrderSigning.address(key)
@@ -38,6 +39,13 @@ class TradingWorkerSpec extends munit.FunSuite:
     val orderPosts = new AtomicInteger()
     val roleReads = new AtomicInteger()
     val recoveryReads = new AtomicInteger()
+    val modeReads = new AtomicInteger()
+    val spotReads = new AtomicInteger()
+    val coreReads = new AtomicInteger()
+    val spotEntered = new CountDownLatch(1)
+    val spotRelease = new CountDownLatch(1)
+    val secondSpotEntered = new CountDownLatch(1)
+    val secondSpotRelease = new CountDownLatch(1)
     val recoveryEntered = new CountDownLatch(1)
     val recoveryRelease = new CountDownLatch(1)
     val entered = new CountDownLatch(1)
@@ -50,6 +58,10 @@ class TradingWorkerSpec extends munit.FunSuite:
     @volatile var position = "0"
     @volatile var readFailure = false
     @volatile var holdAccount = false
+    @volatile var holdBalance = false
+    @volatile var holdSecondBalance = false
+    @volatile var balanceFailure = false
+    @volatile var stable = "1000"
     @volatile var leverage = initialLeverage
     @volatile var activeMode = marginMode
     @volatile var holdRecovery = false
@@ -100,6 +112,7 @@ class TradingWorkerSpec extends munit.FunSuite:
                 )
               )
             case "clearinghouseState" =>
+              coreReads.incrementAndGet()
               val captured = position
               if holdAccount then
                 holdAccount = false
@@ -107,11 +120,43 @@ class TradingWorkerSpec extends munit.FunSuite:
                 accountRelease.await()
               Some(
                 ujson.Obj(
+                  "marginSummary" -> ujson.Obj("accountValue" -> stable),
                   "assetPositions" -> ujson.Arr(
-                    ujson.Obj("position" -> ujson.Obj("coin" -> "XMR", "szi" -> captured))
+                    ujson.Obj(
+                      "position" -> ujson.Obj(
+                        "coin" -> "XMR",
+                        "szi" -> captured,
+                        "positionValue" -> (BigDecimal(captured).abs * 100).toString,
+                        "entryPx" -> "100",
+                        "liquidationPx" -> "50",
+                        "unrealizedPnl" -> "0"
+                      )
+                    )
                   )
                 )
               )
+            case "userAbstraction" =>
+              modeReads.incrementAndGet()
+              if balanceFailure then None else Some(ujson.Str(balanceMode))
+            case "spotClearinghouseState" =>
+              val read = spotReads.incrementAndGet()
+              val captured = stable
+              if holdBalance then
+                holdBalance = false
+                spotEntered.countDown()
+                spotRelease.await()
+              else if holdSecondBalance && read == 2 then
+                secondSpotEntered.countDown()
+                secondSpotRelease.await()
+              if balanceFailure then None
+              else
+                Some(
+                  ujson.Obj(
+                    "balances" -> ujson.Arr(
+                      ujson.Obj("coin" -> "USDC", "token" -> 0, "total" -> captured)
+                    )
+                  )
+                )
             case "orderStatus" =>
               recoveryReads.incrementAndGet()
               if holdRecovery then
@@ -217,9 +262,79 @@ class TradingWorkerSpec extends munit.FunSuite:
       release.countDown()
       accountRelease.countDown()
       recoveryRelease.countDown()
+      spotRelease.countDown()
+      secondSpotRelease.countDown()
       worker.close()
 
   private val buy = OrderIntent(Side.Buy, OrderKind.Hard)
+
+  test(
+    "optional held spot balance cannot delay readiness or publish a pre-fill balance after completion"
+  ) {
+    val f = new Fixture(autoStart = false, balanceMode = "unifiedAccount")
+    f.holdBalance = true
+    f.holdSecondBalance = true
+    f.worker.start()
+    try
+      assert(f.spotEntered.await(3, TimeUnit.SECONDS))
+      f.ready()
+      assertEquals(f.worker.view.portfolio.stables, None)
+      assert(f.worker.submitReviewed(f.review()))
+      waitFor("order did not finish")(f.worker.view.outcome.nonEmpty)
+      f.stable = "999"
+      f.position = "1"
+      waitFor("fresh core account did not return")(
+        f.worker.view.ready && f.worker.view.position.contains(BigDecimal(1))
+      )
+      assertEquals(f.worker.view.portfolio.stables, None)
+      f.spotRelease.countDown()
+      assert(f.secondSpotEntered.await(3, TimeUnit.SECONDS), "replacement read did not start")
+      assertEquals(
+        f.worker.view.portfolio.stables,
+        None,
+        "old balance escaped its completed-order version"
+      )
+      f.secondSpotRelease.countDown()
+      waitFor("post-fill balance missing")(
+        f.worker.view.portfolio.stables.contains(BigDecimal(999))
+      )
+      assertEquals(f.worker.view.portfolio.entry, Some(BigDecimal(100)))
+      assertEquals(f.worker.view.portfolio.liquidation, Some(BigDecimal(50)))
+      assertEquals(f.worker.view.portfolio.net, None)
+    finally f.close()
+  }
+
+  test("expensive account-mode reads are cached while cheap balances and core accounts refresh") {
+    val f = new Fixture(balanceMode = "unifiedAccount")
+    try
+      f.ready()
+      waitFor("optional balance did not refresh three times")(f.spotReads.get() >= 3)
+      assertEquals(f.modeReads.get(), 1)
+      assert(f.coreReads.get() >= 2)
+      f.clock.addAndGet(60001L)
+      waitFor("expired mode was not rechecked")(f.modeReads.get() == 2)
+    finally f.close()
+  }
+
+  test("undocumented or failed balance modes remain unknown without blocking core readiness") {
+    val f = new Fixture(balanceMode = "default")
+    try
+      f.ready()
+      waitFor("mode was not checked")(f.modeReads.get() > 0)
+      assertEquals(f.worker.view.portfolio.stables, None)
+      f.balanceFailure = true
+      f.clock.addAndGet(60001L)
+      f.fresh(f.worker, time = 2000L)
+      waitFor("failed optional request did not complete")(f.modeReads.get() == 2)
+      f.ready()
+      assertEquals(f.worker.view.portfolio.stables, None)
+      f.clock.addAndGet(10000L)
+      Thread.sleep(1200L)
+      assertEquals(f.modeReads.get(), 2, "failed mode lookup retried inside its ten-second delay")
+      f.clock.incrementAndGet()
+      waitFor("failed mode lookup was never retried")(f.modeReads.get() == 3)
+    finally f.close()
+  }
 
   test("a paused account stays visible and cannot unlock a key or submit") {
     val f = new Fixture(accountPaused = () => true)

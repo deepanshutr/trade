@@ -30,16 +30,9 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
   private val review = OrderReview(intent, plan, now, now + 30000, Some(3), Some("isolated"))
   private val panels = Vector(
     PanelView(mode = "PAPER"),
-    PanelView(mode = "PAPER", target = Some(Side.Buy -> BigDecimal("108.5"))),
-    PanelView(mode = "PAPER", review = Some(review)),
-    PanelView(mode = "LIVE", review = Some(review)),
-    PanelView(mode = "PAPER", modeReview = Some("LIVE")),
-    PanelView(
-      mode = "PAPER",
-      detailPage = DetailPage.Answers,
-      messages = Vector(DeskMessage(1, now, "analysis", "A visible analysis"))
-    ),
-    PanelView(mode = "PAPER", input = Some("A question"), detailPage = DetailPage.Answers)
+    PanelView(mode = "PAPER", bigOrder = true),
+    PanelView(mode = "LIVE"),
+    PanelView(mode = "PAPER", modeReview = Some("LIVE"))
   )
 
   private def draw(
@@ -94,22 +87,14 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
         assert(!actual.buttons.exists(b => tradeAction(b.action)))
   }
 
-  test("opening Details keeps every trade action at the same coordinates") {
-    for
-      cols <- Vector(100, 101, 117, 120, 160)
-      rows <- Vector(30, 31, 40)
-      panel <- panels
-    do
-      val closed = draw(panel, cols, rows)
-      val opened = draw(panel.copy(details = true), cols, rows)
-      assertEquals(
-        closed.buttons.filter(b => tradeAction(b.action)),
-        opened.buttons.filter(b => tradeAction(b.action))
-      )
-      assert(closed.buttons.filter(b => tradeAction(b.action)).forall(_.y >= rows - 14))
-      if panel.review.nonEmpty then
-        assert(closed.completeReview && opened.completeReview)
-        assert(closed.lines(rows - 15).contains("XMR buy Hard"))
-        assert(closed.lines(rows - 9).contains("Expires in"))
-        assert(closed.buttons.exists(_.action == DeskAction.Submit))
+  test("trade buttons retain their coordinates across size and pending changes") {
+    for cols <- Vector(100, 101, 117, 120, 160); rows <- Vector(30, 31, 40) do
+      def trades(f: WorkspaceFrame) = f.controls
+        .filter(_.action.isInstanceOf[DeskAction.Prepare])
+        .map(b => (b.x, b.y, b.width, b.height))
+      val small = draw(PanelView(mode = "PAPER"), cols, rows)
+      val large = draw(PanelView(mode = "PAPER", bigOrder = true), cols, rows)
+      val pending = draw(PanelView(mode = "PAPER"), cols, rows, pending = true)
+      assertEquals(trades(small), trades(large))
+      assertEquals(trades(small), trades(pending))
   }

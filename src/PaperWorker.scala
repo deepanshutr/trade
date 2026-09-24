@@ -86,7 +86,14 @@ final class PaperWorker(
       lastPlan,
       reason,
       outcome,
-      outcomeId = outcomeId
+      outcomeId = outcomeId,
+      portfolio = if ledger.available then
+        PortfolioView.paper(
+          ledger.account,
+          coin,
+          Option.when(dataReady)(touch.map(t => (t._1 + t._2) / 2)).flatten
+        )
+      else PortfolioView()
     )
   }
   def select(next: String): Unit = synchronized {

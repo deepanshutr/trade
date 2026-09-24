@@ -6,29 +6,26 @@ class IndependentCompactDisplaySpec extends munit.FunSuite:
   import CompactDisplayFixtures.*
 
   private def correlation(frame: WorkspaceFrame): Vector[String] =
-    val (start, end) = frame.cols match
-      case 100 => (28, 53)
-      case 120 => (41, 72)
-      case 160 => (65, 96)
-      case _   => fail("unlisted fixture width")
-    frame.lines.takeRight(12).map(line => Chart.plain(line).slice(start, end).trim)
+    val width = (Layout.workspaceMarketWidth(frame.cols) - 1) / 2
+    frame.lines.takeRight(12).map(line => Chart.plain(line).slice(width + 1, width * 2 + 1).trim)
 
   for (cols, rows) <- sizes do
     test(s"moving correlation endpoints retain every exact paired count at $cols x $rows") {
       for style <- Vector(Style.mono, Style.colour) do
         val frame = draw(snapshot(cols = cols, rows = rows), panel(), style)
         val readings = correlation(frame)
-        val half = if cols == 100 then 1 else 4
-        val positive = "." * half + "|" + "." * (half - 1) + Chart.FULL
-        val negative = Chart.FULL + "." * (half - 1) + "|" + "." * half
         for ((hz, _, n), i) <- Gauges.horizons.zipWithIndex do
-          val btcPrefix = if i == 0 then "BTC " else ""
-          val goldPrefix = if i == 0 then "gold " else ""
-          assertEquals(readings(i), s"$btcPrefix$hz $positive +1.00 $n/$n")
-          assertEquals(readings(i + 6), s"$goldPrefix$hz $negative -1.00 $n/$n")
+          for (name, index, positive) <- Vector(("BTC", i, true), ("GOLD", i + 6, false)) do
+            val reading = readings(index)
+            assert(reading.startsWith(name + " " + hz + " "), reading)
+            assert(reading.endsWith((if positive then "+1.00 " else "-1.00 ") + s"$n/$n"), reading)
+            val track = reading.split(" ")(2)
+            assertEquals(track.count(_ == Chart.FULL.head), 1)
+            assert(if positive then track.endsWith(Chart.FULL) else track.startsWith(Chart.FULL))
         if style == Style.colour then
-          assert(frame.lines(rows - 12).contains(style.bid + Chart.FULL + Screen.reset))
-          assert(frame.lines(rows - 6).contains(style.ask + Chart.FULL + Screen.reset))
+          assert(frame.lines(rows - 12).contains(style.bitcoin))
+          assert(frame.lines(rows - 6).contains(style.gold))
+
     }
 
   test("zero correlation places its marker in the middle and keeps a numeric zero") {
@@ -45,7 +42,8 @@ class IndependentCompactDisplaySpec extends munit.FunSuite:
       refs = original.refs.updated("BTC", Ref.empty.copy(candles = Map("1m" -> b)))
     )
     val reading = correlation(draw(s, panel())).head
-    assert(reading.startsWith("BTC 15m ." + Chart.FULL + ". "), reading)
+    val track = reading.split(" ")(2)
+    assertEquals(track.indexOf(Chart.FULL), track.length / 2)
     assert(reading.endsWith("0.00 15/15"), reading)
   }
 
@@ -60,7 +58,7 @@ class IndependentCompactDisplaySpec extends munit.FunSuite:
       for style <- Vector(Style.mono, Style.colour) do
         val readings = correlation(draw(inactive(kind), panel(), style))
         assertEquals(readings.head, "BTC 15m " + expected)
-        assertEquals(readings(6), "gold 15m " + expected)
+        assertEquals(readings(6), "GOLD 15m " + expected)
         assert(readings.forall(!_.contains(Chart.FULL)), readings.mkString("\n"))
     }
 
@@ -161,87 +159,3 @@ class IndependentCompactDisplaySpec extends munit.FunSuite:
       assert(first > 0)
       assert(plain.slice(first, first + 3).forall(_.slice(52, 61).trim.isEmpty))
   }
-
-  private def requireButton(frame: WorkspaceFrame, action: DeskAction): DeskButton =
-    frame.buttons.find(_.action == action).getOrElse(fail(s"missing $action"))
-
-  for (cols, rows) <- sizes do
-    test(
-      s"Details and Ask retain chart history, complete controls and readable source content at $cols x $rows"
-    ) {
-      val s = snapshot(cols = cols, rows = rows, offset = 60L)
-      val normal = draw(s, panel())
-      val chartWidth = cols - 39
-      val tradeTop = rows - 15
-      val cases = Vector(
-        panel().copy(details = true, detailPage = DetailPage.Method),
-        panel().copy(details = true, detailPage = DetailPage.Sources),
-        panel().copy(details = true, detailPage = DetailPage.Answers),
-        panel().copy(
-          details = true,
-          detailPage = DetailPage.Answers,
-          input = Some("A full question with retained input")
-        )
-      )
-      for p <- cases do
-        val frame = draw(s, p)
-        assertEquals(
-          frame.lines.take(tradeTop).map(Chart.plain).map(_.take(chartWidth)),
-          normal.lines.take(tradeTop).map(Chart.plain).map(_.take(chartWidth))
-        )
-        for button <- frame.controls do
-          val rendered =
-            Chart
-              .plain(frame.lines(button.y - 1 + button.height / 2))
-              .slice(button.x - 1, button.x - 1 + button.width)
-          val enabled = frame.buttons.contains(button)
-          if button.height == 1 then
-            assertEquals(
-              rendered,
-              (if enabled then "[" else "(") + button.label + (if enabled then "]" else ")")
-            )
-          else assert(rendered.contains(if enabled then button.label else "(" + button.label + ")"))
-          if enabled then
-            for
-              y <- button.y until button.y + button.height;
-              x <- button.x until button.x + button.width
-            do assertEquals(frame.hit(x, y, cols, rows, "XMR"), Some(button.action))
-        val _ = requireButton(frame, DeskAction.Details)
-        if p.input.nonEmpty then
-          val _ = requireButton(frame, DeskAction.SendQuestion)
-          val _ = requireButton(frame, DeskAction.Cancel)
-          assert(!frame.buttons.exists(_.action == DeskAction.Status))
-        else
-          for page <- DetailPage.values do
-            val _ = requireButton(frame, DeskAction.Page(page))
-          if p.detailPage == DetailPage.Answers then
-            val _ = requireButton(frame, DeskAction.Feedback(1L, true))
-            val _ = requireButton(frame, DeskAction.Feedback(1L, false))
-      val sources = cases(1)
-      val first = draw(s, sources)
-      val pages =
-        Vector(0, first.scrollLimit).distinct.map(scroll => draw(s, sources.copy(scroll = scroll)))
-      val text = pages
-        .map(_.lines.slice(3, tradeTop).map(Chart.plain).map(_.drop(chartWidth + 1)).mkString)
-        .mkString
-        .replaceAll("\\s", "")
-      assert(text.contains(sourceText.replaceAll("\\s", "")), text)
-      assert(text.contains(sourceUrl), text)
-      assert(text.contains("Published2027-01-15T07:50:00Z"), text)
-      assert(text.contains("Retrieved2027-01-15T07:59:59Z"), text)
-    }
-
-    test(s"complete order review keeps exact terms and all send hit cells at $cols x $rows") {
-      for details <- Vector(false, true) do
-        val p = panel().copy(review = Some(review), details = details)
-        val frame = draw(snapshot(cols = cols, rows = rows), p)
-        val text = frame.lines.map(Chart.plain).mkString("\n")
-        assert(frame.completeReview, text)
-        for term <- Vector("5.4321", "101", "548.6421", "1x paper", "Expires in") do
-          assert(text.contains(term), text)
-        val send = requireButton(frame, DeskAction.Submit)
-        val cancel = requireButton(frame, DeskAction.Cancel)
-        for button <- Vector(send, cancel); x <- button.x until button.x + button.width do
-          assertEquals(frame.hit(x, button.y, cols, rows, "XMR"), Some(button.action))
-        assert(send.y > rows - 15)
-    }

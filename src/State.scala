@@ -93,7 +93,8 @@ final case class Snapshot(
     candleReceipts: Map[(String, String), Map[Long, Long]] = Map.empty,
     workspace: Boolean = false,
     marketPending: Option[(Long, String)] = None,
-    marketNotice: Option[String] = None
+    marketNotice: Option[String] = None,
+    marketHistory: Vector[(String, Ref)] = Vector.empty
 )
 
 object Snapshot:
@@ -113,6 +114,23 @@ object Snapshot:
     )
 
 object State:
+  val marketHistoryLimit = 32
+  private def mergeHistory(older: Ref, newer: Ref, now: Long): Ref =
+    val samples = (older.samples ++ newer.samples).toMap.toVector
+      .filter(_._1 >= now / 1000 - samplesMs / 1000)
+      .sortBy(_._1)
+    val candles =
+      newer.candles.filter(_._2.nonEmpty).foldLeft(older.candles) { case (all, (interval, bars)) =>
+        val joined = (all.getOrElse(interval, Vector.empty) ++ bars)
+          .map(c => c.t -> c)
+          .toMap
+          .values
+          .toVector
+          .sortBy(_.t)
+          .takeRight(seriesCap)
+        all.updated(interval, joined)
+      }
+    Ref(samples, candles)
   def validMarket(name: String): Boolean = name.matches("[A-Za-z0-9][A-Za-z0-9:._-]{0,39}")
   val tapeCap: Int = 200_000
   val refCoins: Vector[String] = Vector("BTC", "PAXG")
@@ -290,32 +308,28 @@ object State:
     case Command.PromptSubmit      =>
       s.prompt match
         case Some(name) if validMarket(name) && name != s.coin =>
-          val refs = s.refs.get(s.coin).fold(s.refs) { old =>
-            val samples = (old.samples ++ s.samples).toMap.toVector
-              .filter(_._1 >= now / 1000 - samplesMs / 1000)
-              .sortBy(_._1)
-            val candles = s.candles.foldLeft(old.candles) { case (merged, (interval, cs)) =>
-              if cs.isEmpty then merged
-              else
-                val combined = merged.getOrElse(interval, Vector.empty) ++ cs
-                val kept = combined.map(c => c.t -> c).toMap.values.toVector.sortBy(_.t)
-                merged.updated(interval, kept.takeRight(seriesCap))
-            }
-            s.refs.updated(s.coin, Ref(samples, candles))
-          }
+          val current = Ref(s.samples, s.candles)
+          val refs = s.refs
+            .get(s.coin)
+            .fold(s.refs)(old => s.refs.updated(s.coin, mergeHistory(old, current, now)))
+          val history = (s.marketHistory.filterNot(_._1 == s.coin) :+ (s.coin -> current))
+            .takeRight(marketHistoryLimit)
+          val remembered = s.marketHistory.find(_._1 == name).map(_._2).getOrElse(Ref.empty)
+          val next = mergeHistory(remembered, refs.getOrElse(name, Ref.empty), now)
           s.copy(
             coin = name,
             refs = refs,
             book = None,
             tape = Vector.empty,
-            candles = Map.empty,
+            candles = next.candles,
             coarse = Map.empty,
             ctx = None,
             prompt = None,
-            samples = Vector.empty,
+            samples = next.samples,
             books = Vector.empty,
             since = now,
-            offsetSec = 0L
+            offsetSec = 0L,
+            marketHistory = history
           )
         case _ => s.copy(prompt = None)
     case Command.ZoomOut => s.copy(zoom = (s.zoom + 1).min(zooms.size - 1))

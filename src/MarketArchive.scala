@@ -93,7 +93,11 @@ object MarketArchive:
       candles = saved.markets.getOrElse(initial.coin, Map.empty),
       refs = initial.refs.map { (coin, ref) =>
         coin -> ref.copy(candles = saved.markets.getOrElse(coin, Map.empty))
-      }
+      },
+      marketHistory = saved.markets.toVector
+        .sortBy(_._1)
+        .takeRight(State.marketHistoryLimit)
+        .map((coin, candles) => coin -> Ref(Vector.empty, candles))
     )
 
   def lastWrite(directory: Path): Long = load(directory).at

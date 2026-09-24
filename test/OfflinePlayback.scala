@@ -87,7 +87,7 @@ object OfflinePlayback:
 
   def main(args: Array[String]): Unit =
     require(
-      args.length == 3,
+      args.length == 3 || (args.length == 4 && args(3) == "speed"),
       "give control socket, fixture directory and settings path"
     )
     val channel = SocketChannel.open(StandardProtocolFamily.UNIX)
@@ -110,6 +110,13 @@ object OfflinePlayback:
     val holdFinishedAt = new AtomicLong(0L)
     val forbidden = new ConcurrentLinkedQueue[String]()
     val metadataCalls = new AtomicInteger(0)
+    def metadata: ujson.Value = ujson.Obj(
+      "universe" -> ujson.Arr.from(
+        Vector("XMR", "ETH", "BTC", "PAXG").map(c =>
+          ujson.Obj("name" -> c, "szDecimals" -> 3, "maxLeverage" -> 20)
+        )
+      )
+    )
     @volatile var holdKind = ""
     @volatile var receive: String => Unit = _ => ()
     @volatile var closed: () => Unit = () => ()
@@ -171,12 +178,16 @@ object OfflinePlayback:
         new Socket:
           def send(text: String): Unit =
             if text.contains("\"method\":\"unsubscribe\"") then hold("send")
+            else if text == Feed.ping then onText("""{"channel":"pong"}""")
           def close(): Unit = closed()
 
     val rest = new Rest:
       def post(body: String): Option[String] =
         val request = ujson.read(body)
         request("type").str match
+          case "meta" =>
+            metadataCalls.incrementAndGet()
+            Some(ujson.write(metadata))
           case "candleSnapshot" =>
             if request("req")("coin").str == "ETH" then hold("history")
             Some("[]")
@@ -265,6 +276,7 @@ object OfflinePlayback:
         true,
         config = Some(args(2)),
         analysis = false,
+        paper = args.length == 4,
         stateDirectory = Some(Path.of(args(2)).getParent.resolve("state").toString),
         audio = "mute"
       ),

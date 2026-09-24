@@ -70,10 +70,10 @@ class AlertsIntegrationSpec extends munit.FunSuite:
       .take(45 - 15)
       .map(_.drop(Layout.workspaceChartWidth(160) + 1))
       .mkString("\n")
-    assert(text.contains("Published 2026-09-21T11:50:00Z"), text)
-    assert(text.contains("Retrieved 2026-09-21T11:59:59Z"), text)
-    assert(text.replaceAll("\\s", "").contains("Missingsource:calendar"), text)
-    assert(text.replaceAll("\\s", "").contains(item.url), text)
+    assertEquals(alerts.head.publishedAt, item.publishedAt)
+    assertEquals(alerts.head.retrievedAt, Some(item.retrievedAt))
+    assert(!text.contains("Missing source"))
+    assert(!text.contains(item.url))
   }
 
   test("full sound queues retain the visual notice without persisting on the input lock") {
@@ -111,7 +111,7 @@ class AlertsIntegrationSpec extends munit.FunSuite:
         ZoneOffset.UTC,
         Style.mono
       )
-      assert(frame.lines.mkString.contains("Headline 5"))
-      assert(frame.lines.mkString.contains("1 dropped"))
+      assertEquals(controller.panel.alerts.last.text, "Headline 5")
+      assert(controller.panel.soundStatus.contains("1 dropped"))
     finally sound.close()
   }

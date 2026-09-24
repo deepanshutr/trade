@@ -1,8 +1,9 @@
 # Configure live trading
 
-The [workspace guide](workspace.md) describes the layout, paper account, text
-assistant and trade buttons. Every live order needs a visible review and an
-explicit Send. Starting the program preserves observed leverage and margin mode.
+The [workspace guide](workspace.md) describes the layout, simulated account and
+trade buttons. Clicking Buy or Sell submits the selected amount immediately.
+Switching into real trading requires a visible mode confirmation. Starting the
+program preserves observed leverage and margin mode.
 
 The default settings file is `~/.config/desk/config.json`. `--config /path` selects
 another file. It must be a private regular file with permissions `600`. An absent
@@ -98,34 +99,28 @@ account must separately approve Desk's trading address at the venue. Keep fundin
 and account setup separate from the key-creation command.
 
 Start `desk XMR --trade`, or select Live and confirm its account mode. XMR is the
-venue's Monero symbol. The live panel, review and Status name the network and shortened owner address.
+venue's Monero symbol. The panel identifies the current trading mode and market.
 Check the full owner and agent in the local settings before enabling this mode.
 Test network access uses `"network": "testnet"`. Public feeds and the live worker
 use the same network. An account, delegation, funding and any real order remain
 separate user actions.
 
 Observed leverage must be a positive integer within the market's limit. Its
-margin mode and leverage are captured in each review and rechecked before sending.
-Changing them at the venue invalidates a pending review. Missing or stale position
+margin mode and leverage are captured with each order and rechecked before sending.
+Changing them at the venue invalidates a captured order. Missing or stale position
 data remains unavailable and is never interpreted as a flat account.
 
-Hard uses its configured value and a price limit no more than 0.1 percent from the
-captured best quote. Best chooses a smaller size with a limit strictly inside that
-range. Target takes visible volume through its selected price, within the target
-value ceiling. All three are immediate orders that can fill partly or not at all.
-Visible depth does not promise a fill. An opposite fill reduces an existing
-position before its remainder opens the other direction.
-
-The review shows exact quantity and limit. Its maximum value excludes fees. The
-live account's fee rate is not currently loaded, so the review states that limit.
-Paper mode shows its configured fee estimate. A leading `~` denotes a rounded
-display number. Calculations retain full precision. Very large exact numbers
-can use scientific notation.
+The workspace uses immediate orders with the selected value and a price limit
+no more than 0.1 percent from the captured best quote. Available depth can produce
+a partial fill or no fill. An opposite fill reduces the existing position before
+its remainder opens the other direction. The selected value excludes fees.
+Calculations retain full precision. Compact dollar figures are rounded for display.
+Best and Target orders are no longer exposed in the normal workspace.
 
 Live orders keep durable recovery state under the chosen state directory,
 separated by network and delegated signer. One process holds each account lock.
-The accepted review is compared against the current full plan before it is queued
-and again immediately before its signed request is sent. An uncertain response
+The captured quantity, limit and account settings are compared with the current
+full plan before queuing and immediately before signing. An uncertain response
 blocks further orders while status is checked. The pending order is not resent.
 Do not delete saved recovery state to release this block. Resolve it using the
 account's order history.

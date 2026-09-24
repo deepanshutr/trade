@@ -19,7 +19,8 @@ final case class TradingView(
     outcome: Option[String] = None,
     leverage: Option[Int] = None,
     marginMode: Option[String] = None,
-    outcomeId: Long = 0L
+    outcomeId: Long = 0L,
+    portfolio: PortfolioView = PortfolioView()
 ):
   def reference(side: Side): Option[BigDecimal] = if side == Side.Buy then ask else bid
   def forMarket(current: String): TradingView =
@@ -91,6 +92,11 @@ final class TradingWorker private[desk] (
   private var touch = Option.empty[Touch]
   private var rules = Option.empty[MarketRules]
   private var position = Option.empty[BigDecimal]
+  private var portfolio = PortfolioView()
+  private var marginCash = Option.empty[BigDecimal]
+  private var balance = Option.empty[(String, Option[BigDecimal], Long)]
+  private var abstraction = Option.empty[(String, Long)]
+  private var abstractionAttemptAt = Long.MinValue
   private var accountAt = Long.MinValue
   private var leverageReady = false
   private var activeAt = Long.MinValue
@@ -160,7 +166,14 @@ final class TradingWorker private[desk] (
       outcome,
       Option.when(leverageReady)(activeLeverage),
       Option.when(leverageReady)(activeMode),
-      outcomeId
+      outcomeId,
+      if fresh(accountAt, config.positionAgeMs) && !waitingRefresh then
+        portfolio.copy(stables = balance.filter(b => fresh(b._3, config.positionAgeMs)).flatMap {
+          case ("disabled", _, _)                              => marginCash
+          case ("unifiedAccount" | "portfolioMargin", cash, _) => cash
+          case _                                               => None
+        })
+      else PortfolioView()
     )
   }
 
@@ -172,6 +185,8 @@ final class TradingWorker private[desk] (
       touch = None
       rules = None
       position = None
+      portfolio = PortfolioView()
+      marginCash = None
       accountAt = Long.MinValue
       leverageReady = false
       activeAt = Long.MinValue
@@ -312,6 +327,7 @@ final class TradingWorker private[desk] (
         waitingRefresh = true
         accountVersion += 1
         accountAt = Long.MinValue
+        balance = None
       }
     catch case _: Exception => storageFailure()
 
@@ -462,6 +478,8 @@ final class TradingWorker private[desk] (
         synchronized {
           if generation == g && version == accountVersion then
             position = Some(quantity)
+            portfolio = PortfolioView.live(account, current, None)
+            marginCash = PortfolioView.marginCash(account)
             accountAt = startedAt
             if waitingRefresh && !fatal && saved.isEmpty && !executing.get() then
               waitingRefresh = false
@@ -487,6 +505,28 @@ final class TradingWorker private[desk] (
               "Signer does not match the configured owner"
             else "Waiting for market or account data"
         }
+
+  // Optional display reads run separately. Their failure or delay cannot hold
+  // the account refresh needed to submit and reconcile orders.
+  private def refreshBalance(): Unit =
+    val at = monotonic()
+    val version = synchronized(accountVersion)
+    val value = Try {
+      if !abstraction.exists(m => fresh(m._2, 60000L)) && !fresh(abstractionAttemptAt, 10000L) then
+        abstractionAttemptAt = at
+        abstraction = exchange
+          .info(ujson.Obj("type" -> "userAbstraction", "user" -> config.owner.get))
+          .flatMap(_.strOpt)
+          .map(_ -> at)
+      val mode = abstraction.filter(m => fresh(m._2, 60000L)).get._1
+      val cash = if mode == "unifiedAccount" || mode == "portfolioMargin" then
+        exchange
+          .info(ujson.Obj("type" -> "spotClearinghouseState", "user" -> config.owner.get))
+          .flatMap(PortfolioView.usdcCash)
+      else None
+      (mode, cash, at)
+    }.toOption
+    synchronized { if version == accountVersion then balance = value }
 
   def start(): Unit =
     if started.compareAndSet(false, true) then
@@ -522,7 +562,13 @@ final class TradingWorker private[desk] (
               refresh()
               Thread.sleep(1000)
         }
-      )
+      ) ++ config.owner.toVector.map { _ =>
+        daemon("balance-display") {
+          while !closed.get() do
+            refreshBalance()
+            Thread.sleep(1000L)
+        }
+      }
       workers.foreach(_.start())
 
   def close(): Unit =

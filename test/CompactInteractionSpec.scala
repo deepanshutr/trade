@@ -35,31 +35,16 @@ class CompactInteractionSpec extends munit.FunSuite:
     val f = new Fixture
     f.draw()
     f.key(Command.PlaceOrder(OrderIntent(Side.Buy, OrderKind.Hard)))
-    assert(f.draw().lines.mkString.contains("Order price is unavailable"))
+    assert(f.draw().lines.mkString.contains("Waiting for prices"))
     f.key(Command.Mode("LIVE"))
     f.draw()
     f.key(Command.SubmitTarget)
-    assert(f.draw().lines.mkString.contains("Live account is not configured"))
+    assert(f.draw().lines.mkString.contains("Account unavailable"))
     assertEquals(f.controller.panel.mode, "PAPER")
     assertEquals(f.sent, 0)
   }
 
-  test("method and source details remain directly accessible after a long conversation") {
-    val f = new Fixture
-    for i <- 1 to 30 do f.controller.addMessage("analysis", s"Answer $i " + "text " * 30)
-    f.draw()
-    f.key(Command.Details)
-    assert(f.draw().lines.mkString.contains("Base counts past periods"))
-    f.click("Sources")
-    assert(f.draw().lines.mkString.contains("News waiting"))
-    f.click("Answers")
-    assert(f.draw().lines.mkString.contains("Answer 30"))
-    f.key(Command.CancelTarget)
-    assert(f.draw().lines.mkString.contains("LONG"))
-    assertEquals(f.sent, 0)
-  }
-
-  test("mute is immediate and command letters remain text in a question") {
+  test("mute remains immediate and market prompt text cannot toggle it") {
     val f = new Fixture
     f.draw()
     f.key(Command.ToggleMute)
@@ -75,7 +60,7 @@ class CompactInteractionSpec extends munit.FunSuite:
       pending = next
       command.foreach(f.key)
     }
-    assertEquals(f.controller.panel.input, Some("hv123"))
+    assertEquals(f.controller.panel.input, None)
     assertEquals(f.muted, Vector(true, false))
     assertEquals(f.sent, 0)
   }

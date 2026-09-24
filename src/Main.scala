@@ -160,7 +160,8 @@ object Main:
       feed: MarketFeed,
       now: () => Long,
       onMarket: String => Unit = _ => (),
-      onPromptDone: () => Unit = () => ()
+      onPromptDone: () => Unit = () => (),
+      onFold: (Snapshot, Event, Snapshot) => Unit = (_, _, _) => ()
   ): Vector[Thread] =
     val switches = new LinkedBlockingQueue[Either[(Long, String), String]]()
     val market = daemon("market") {
@@ -215,6 +216,7 @@ object Main:
           case _ => State.reduce(before, event, now())
         if after.coin != before.coin then onMarket(after.coin)
         state.set(after)
+        onFold(before, event, after)
         event match
           case Event.Key(Command.PromptSubmit | Command.PromptCancel) => onPromptDone()
           case _                                                      => ()

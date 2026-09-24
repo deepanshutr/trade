@@ -103,18 +103,17 @@ class AlignedOutlookSpec extends munit.FunSuite:
     )
     val frame = draw(o = close)
     assert(cells(frame, 3).forall(_ == "⣀STR *"), frame.lines.mkString("\n"))
-    assert(frame.lines.last.contains("S support R resist T target"))
   }
 
-  test("trade controls stay below the columns and at the same coordinates in Details") {
+  test("trade controls stay below the columns when selected size changes") {
     for coin <- Vector("XMR", "BTC", "PAXG") do
       val s = market.copy(coin = coin)
       val normal = draw(s, outlook.copy(coin = coin))
-      val details = draw(s, outlook.copy(coin = coin), panel = PanelView(details = true))
-      for action <- Vector(DeskAction.OrderType(OrderKind.Target), DeskAction.Mode("PAPER")) do
+      val details = draw(s, outlook.copy(coin = coin), panel = PanelView(bigOrder = true))
+      for action <- Vector(DeskAction.OrderSize(false), DeskAction.Mode("PAPER")) do
         val a = normal.buttons.find(_.action == action).get
         val b = details.buttons.find(_.action == action).get
-        assertEquals(a, b)
+        assertEquals((a.x, a.y, a.height), (b.x, b.y, b.height))
         assert(a.y >= 17)
         assert(
           Chart.plain(normal.lines(a.y - 1)).substring(a.x - 1).startsWith("[" + a.label + "]")

@@ -23,16 +23,16 @@ class CompactWorkspaceSpec extends munit.FunSuite:
       assert(frame.lines.forall(_.length == cols))
   }
 
-  test("compact view exposes details and mute below the visible trade controls") {
+  test("compact view keeps navigation below large trading controls") {
     val frame = Workspace.draw(market, view, PanelView(), 100, 30, now, ZoneOffset.UTC, Style.mono)
-    assert(frame.lines.exists(_.contains("Details")))
-    assert(frame.lines.exists(_.contains("Mute")))
+    assert(!frame.lines.exists(_.contains("Details")))
+    assert(frame.lines.exists(_.contains("v Sound")))
     val buy = frame.disabledButtons
       .find(_.action == DeskAction.Prepare(OrderIntent(Side.Buy, OrderKind.Hard)))
       .get
-    assertEquals(buy.height, 3)
-    assert(frame.buttons.find(_.action == DeskAction.Details).get.y >= buy.y + buy.height)
-    assert(frame.lines(buy.y).contains("(1 BUY $500)"))
+    assertEquals(buy.height, 5)
+    assert(frame.buttons.find(_.action == DeskAction.Mode("PAPER")).get.y >= buy.y + buy.height)
+    assert(frame.lines(buy.y + 1).contains("1 BUY $500"))
     assert(!frame.lines.exists(_.contains("tokens")))
   }
 

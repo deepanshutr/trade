@@ -91,46 +91,30 @@ class SimpleExecutionSpec extends munit.FunSuite:
       key(Command.PointerPress(b.x, b.y, 0))
       key(Command.Pointer(b.x + b.width - 1, b.y + b.height - 1, 0))
 
-  test("size and type selectors update the two large actions before reviewing") {
+  test("selected size changes both displayed actions and one click submits exactly that size") {
     val f = new Fixture
-    f.click(f.draw(), DeskAction.OrderType(OrderKind.Best))
     f.click(f.draw(), DeskAction.OrderSize(true))
-    val intent = OrderIntent(Side.Sell, OrderKind.Best, big = true)
+    val intent = OrderIntent(Side.Sell, OrderKind.Hard, big = true)
     val selected = f.draw()
     assertEquals(selected.buttons.count(_.action.isInstanceOf[DeskAction.Prepare]), 2)
     f.click(selected, DeskAction.Prepare(intent))
-    assertEquals(f.controller.panel.review.map(_.intent), Some(intent))
-    assertEquals(f.sent.size, 0)
-    val reviewed = f.draw()
-    assert(reviewed.completeReview)
-    assertEquals(reviewed.buttons.find(_.action == DeskAction.Submit).get.height, 3)
-    f.click(reviewed, DeskAction.Submit)
     assertEquals(f.sent.map(_.intent), Vector(intent))
+    assertEquals(f.controller.panel.review, None)
   }
 
-  test("all eight existing numbered shortcuts retain their exact intent and require Send") {
-    val intents = Vector(
-      OrderIntent(Side.Buy, OrderKind.Hard),
-      OrderIntent(Side.Buy, OrderKind.Hard, true),
-      OrderIntent(Side.Sell, OrderKind.Hard),
-      OrderIntent(Side.Sell, OrderKind.Hard, true),
-      OrderIntent(Side.Buy, OrderKind.Best),
-      OrderIntent(Side.Buy, OrderKind.Best, true),
-      OrderIntent(Side.Sell, OrderKind.Best),
-      OrderIntent(Side.Sell, OrderKind.Best, true)
-    )
-    intents.zipWithIndex.foreach { (intent, index) =>
+  test("only currently displayed numbered shortcuts may submit") {
+    for big <- Vector(false, true); index <- 0 until 8 do
       val f = new Fixture
+      if big then f.click(f.draw(), DeskAction.OrderSize(true))
       f.draw()
+      val intent = Trading.action(index)
       val command = Keys.step(Vector.empty, '1'.toInt + index, false)._2.get
       f.key(command)
-      assertEquals(f.controller.panel.review.map(_.intent), Some(intent))
+      val expected =
+        if intent.kind == OrderKind.Hard && intent.big == big then Vector(intent) else Vector.empty
+      assertEquals(f.sent.map(_.intent), expected)
       f.key(Command.SubmitTarget)
-      assertEquals(f.sent.size, 0, "an unpublished review cannot send")
-      assert(f.draw().completeReview)
-      f.key(Command.SubmitTarget)
-      assertEquals(f.sent.map(_.intent), Vector(intent))
-    }
+      assertEquals(f.sent.map(_.intent), expected)
   }
 
   test("a size change between press and release cannot prepare the old or new amount") {
@@ -144,20 +128,6 @@ class SimpleExecutionSpec extends munit.FunSuite:
     f.key(Command.Pointer(buy.x, buy.y + 2, 0))
     assertEquals(f.controller.panel.review, None)
     assertEquals(f.sent.size, 0)
-  }
-
-  test("target selection and adjustment still require a full exact review") {
-    val f = new Fixture
-    f.click(f.draw(), DeskAction.OrderType(OrderKind.Target))
-    f.click(f.draw(), DeskAction.Target(Side.Buy))
-    f.key(Command.ZoomIn)
-    val target = f.controller.panel.target.get._2
-    assert(target > 100)
-    f.draw()
-    f.key(Command.SubmitTarget)
-    assertEquals(f.sent.size, 0)
-    assertEquals(f.controller.panel.review.map(_.plan.limit), Some(target))
-    assert(f.draw().completeReview)
   }
 
   test("controls fit without overlap across execution states and monochrome and colour") {

@@ -290,7 +290,9 @@ final class Feed(
                 push(Event.CandleHistory(c, i, cs, requestedAt))
             }
           case None => if relevant() then push(Event.CandleHistoryFailed)
-      finally synchronized { historyInFlight -= key }
+      finally
+        synchronized { historyInFlight -= key }
+        if !relevant() then wakeHistory()
 
   def fetchHistoryFor(c: String): Unit = State.intervals.foreach(i => history(c, i, true))
 
@@ -309,6 +311,14 @@ final class Feed(
   def awaitHistoryRepair(): Unit =
     val _ = historyWakeup.poll(Feed.historyEveryMs, TimeUnit.MILLISECONDS)
     repairHistory()
+
+  def reloadHistory(): Unit =
+    synchronized {
+      marketGeneration += 1L
+      historyAt = historyAt.filterNot(_._1._1 == coin)
+      historySuccess = historySuccess.filterNot(_._1._1 == coin)
+    }
+    wakeHistory()
 
   def setMarket(newCoin: String): Unit =
     val changed = sendLock.synchronized {

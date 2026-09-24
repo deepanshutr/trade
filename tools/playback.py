@@ -127,6 +127,12 @@ def percentile(values, percent):
     return ordered[max(0, (len(ordered) * percent + 99) // 100 - 1)]
 
 
+def frame_gaps(frames, began, ended):
+    assert frames[0] <= began <= ended <= frames[-1], "frames do not cover the click window"
+    return [min(b, ended) - max(a, began) for a, b in zip(frames, frames[1:])
+            if a < ended and b > began]
+
+
 def validate_result(result, mode):
     assert result["forbidden"] == [], result["forbidden"]
     assert result["metadata_calls"] > 0, "the offline worker was not exercised"
@@ -187,10 +193,14 @@ class Playback:
     def __init__(self, args, mode, directory):
         self.args, self.mode, self.directory = args, mode, directory
         self.frames, self.events, self.actions = Frames(), [], []
+        self.clicks = []
+        self.receipts, self.progress = {}, []
+        self.receipts_at = 0
         self.raw, self.control_pending = bytearray(), b""
         self.control, self.eof = None, False
         self.temporary = tempfile.TemporaryDirectory(prefix="desk-playback-")
         private = Path(self.temporary.name)
+        self.state_directory = private / "state"
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(private / "control"))
         self.listener.listen(1)
@@ -210,12 +220,16 @@ class Playback:
         self.child = subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve()), "--terminal-child",
              args.java, "-cp", args.classpath, "desk.OfflinePlayback",
-             str(private / "control"), str(Path(args.fixtures).resolve()), str(settings)],
+             str(private / "control"), str(Path(args.fixtures).resolve()), str(settings)]
+             + (["speed"] if mode == "speed" else []),
             stdin=self.slave, stdout=self.slave, stderr=self.stderr,
             preexec_fn=terminal_session,
         )
 
     def pump(self, timeout):
+        if self.mode == "speed" and time.monotonic() >= self.receipts_at:
+            self.read_receipts()
+            self.receipts_at = time.monotonic() + 1
         readers = [self.listener if self.control is None else self.control]
         if not self.eof:
             readers.append(self.master)
@@ -245,6 +259,18 @@ class Playback:
                     self.frames.feed(data, time.monotonic_ns())
                 else:
                     self.eof = True
+
+    def read_receipts(self):
+        path = self.state_directory / "messages" / "messages.json"
+        if path.exists():
+            for value in json.loads(path.read_text()):
+                key = int(value["id"])
+                assert key not in self.receipts or self.receipts[key] == value, "receipt changed"
+                self.receipts[key] = value
+        if self.clicks:
+            count = len(self.receipts)
+            self.progress.append({"at_ns": time.monotonic_ns(), "clicks": len(self.clicks),
+                                  "results": count, "backlog": len(self.clicks) - count})
 
     def wait(self, predicate, label):
         deadline = time.monotonic() + 10
@@ -325,10 +351,14 @@ class Playback:
             history = self.key("history back", ESC + b"[D", lambda f: history_matches(before, f, -step, clock_count=count))
             self.key("history forward", ESC + b"[C",
                      lambda f: history_matches(history, f, step, clock_count=count) and history_matches(before, f, 0, 20, clock_count=count))
-            self.key("select public Target", b"9", target("522.28"))
-            self.key("move public Target", ESC + b"[A", target("522.29"))
-            self.key("cancel Target with lone Escape", ESC,
-                     lambda f: idle_matches(f, self.args.display_contract, "XMR", "522.26"))
+            if self.args.display_contract == "workspace":
+                self.key("open market prompt", b"m", contains("market:"))
+                self.key("cancel market prompt with lone Escape", ESC, market("XMR"))
+            else:
+                self.key("select public Target", b"9", target("522.28"))
+                self.key("move public Target", ESC + b"[A", target("522.29"))
+                self.key("cancel Target with lone Escape", ESC,
+                         lambda f: idle_matches(f, self.args.display_contract, "XMR", "522.26"))
             pasted = ESC + b"[200~qmETH\r1234567890" + ESC + b"[201~c"
             frame = self.key("discard pasted actions", pasted, contains("1m/candle"))
             assert market("XMR")(frame), "pasted input changed the market"
@@ -337,6 +367,61 @@ class Playback:
             wide = self.action("wide size", lambda: self.resize(120, 40),
                                lambda f: len(f["lines"]) == 40 and market("XMR")(f))
             assert all(len(row) == 120 for row in wide["lines"])
+        elif self.mode == "speed":
+            self.frame(lambda f: contains("PAPER XMR")(f) and f["lines"][-11].split("|")[-1].strip() == "")
+            clicks = self.clicks
+            began = time.monotonic_ns()
+            for index in range(600):
+                deadline = began + index * 100_000_000
+                while time.monotonic_ns() < deadline:
+                    self.pump(max(0, min(0.01, (deadline - time.monotonic_ns()) / 1e9)))
+                self.command("quote", coin="XMR")
+                x, y = (65 if index % 2 == 0 else 89), 25
+                clicks.append(time.monotonic_ns())
+                self.write(ESC + f"[<0;{x};{y}M".encode() + ESC + f"[<0;{x};{y}m".encode())
+                self.pump(0)
+            self.frame(contains("#600"))
+            def recorded():
+                self.read_receipts()
+                return len(self.receipts) >= 600
+            self.wait(recorded, "all six hundred results saved")
+            assert set(self.receipts) == set(range(1, 601)), "missing or duplicate result"
+            results = [self.receipts[i] for i in range(1, 601)]
+            assert all(r["kind"] == "order" for r in results)
+            assert not any(" partial " in r["text"] for r in results), "unexpected partial fill with full depth"
+            filled = [r["text"] for r in results if " filled " in r["text"]]
+            refused = [r["text"] for r in results if r["text"] not in filled]
+            assert all(s in ("Order pending", "Not sent: controls changed") for s in refused), refused
+            assert len(filled) >= 570, "fewer than 95 percent of healthy-fixture clicks filled"
+            saved = json.loads((self.state_directory / "paper" / "paper-mainnet.json").read_text())
+            assert int(saved["count"]) == len(filled), saved["count"]
+            assert saved["orders"] == filled, "a receipt differs from the persisted fill"
+            results_saved_ms = (time.monotonic_ns() - clicks[-1]) / 1e6
+            settled_at = time.monotonic() + 1
+            while time.monotonic() < settled_at:
+                self.command("quote", coin="XMR")
+                self.pump(max(0, min(0.05, settled_at - time.monotonic())))
+            self.read_receipts()
+            assert set(self.receipts) == set(range(1, 601)), "unexpected later result"
+            settled = json.loads((self.state_directory / "paper" / "paper-mainnet.json").read_text())
+            assert settled == saved, "a refused click executed later"
+            gaps = frame_gaps([f["captured_ns"] for f in self.frames.complete], clicks[0], clicks[-1])
+            backlog = max(p["backlog"] for p in self.progress)
+            assert 0 <= backlog <= 30, "input stalled for more than three seconds worth of results"
+            self.speed = {"clicks": 600, "recorded_results": len(results),
+                          "saved_orders": int(saved["count"]), "refused": len(refused),
+                          "filled_percent": len(filled) * 100 / 600,
+                          "refused_percent": len(refused) * 100 / 600,
+                          "duration_ms": (clicks[-1] - clicks[0]) / 1e6,
+                          "frame_gap_p50_ms": percentile(gaps, 50) / 1e6,
+                          "frame_gap_p95_ms": percentile(gaps, 95) / 1e6,
+                          "frame_gap_p99_ms": percentile(gaps, 99) / 1e6,
+                          "frame_gap_max_ms": max(gaps) / 1e6,
+                          "time_in_gaps_over_100ms": sum(g for g in gaps if g > 100_000_000) / 1e6,
+                          "maximum_sampled_result_backlog": backlog,
+                          "final_results_saved_ms": results_saved_ms,
+                          "settle_check_ms": 1000}
+            assert self.speed["frame_gap_p95_ms"] <= 100, self.speed
         elif self.mode in ("send", "history"):
             self.command("arm", work=self.mode)
             self.event("armed")
@@ -399,6 +484,11 @@ class Playback:
         self.wait(lambda: self.child.poll() is not None, "application exit")
         status = self.child.wait()
         assert status == 0, status
+        if self.mode == "speed":
+            self.read_receipts()
+            assert set(self.receipts) == set(range(1, 601)), "unexpected result during shutdown"
+            closed = json.loads((self.state_directory / "paper" / "paper-mainnet.json").read_text())
+            assert closed == saved, "ledger changed during shutdown"
         samples = validate_result(result, self.mode)
         assert any(any(0x2800 <= ord(c) <= 0x28FF for c in line)
                    for f in self.frames.complete for line in f["lines"]), "no recorded braille output"
@@ -407,6 +497,7 @@ class Playback:
         key_ages = [int(s["age_ns"]) for s in samples if s["event"].startswith("key ")]
         feed_ages = [int(s["age_ns"]) for s in samples if s["method"] == "offer"]
         return {"mode": self.mode, "status": status, "frames": len(self.frames.complete),
+                "speed": getattr(self, "speed", None),
                 "wall_ns": time.monotonic_ns() - self.started_ns,
                 "child_cpu_seconds": cpu_after.ru_utime + cpu_after.ru_stime
                     - self.cpu_before.ru_utime - self.cpu_before.ru_stime,
@@ -425,6 +516,17 @@ class Playback:
             (self.directory / "terminal.bin").write_bytes(self.raw)
             (self.directory / "frames.json").write_text(json.dumps(self.frames.complete, indent=2) + "\n")
             (self.directory / "events.json").write_text(json.dumps(self.events, indent=2) + "\n")
+            if self.mode == "speed":
+                self.read_receipts()
+                (self.directory / "receipts.json").write_text(json.dumps(self.receipts, indent=2) + "\n")
+                (self.directory / "progress.json").write_text(json.dumps(self.progress, indent=2) + "\n")
+                (self.directory / "clicks.json").write_text(json.dumps(self.clicks) + "\n")
+                saved = self.state_directory / "paper" / "paper-mainnet.json"
+                if saved.exists():
+                    (self.directory / "simulated-ledger.json").write_bytes(saved.read_bytes())
+                records = self.state_directory / "diagnostics" / "events-0.jsonl"
+                if records.exists():
+                    (self.directory / "diagnostics.jsonl").write_bytes(records.read_bytes())
             for connection in (self.control, self.listener):
                 if connection is not None:
                     connection.close()
@@ -439,7 +541,7 @@ def main():
     parser.add_argument("--classpath", required=True)
     parser.add_argument("--fixtures", default="fixtures")
     parser.add_argument("--output", required=True)
-    parser.add_argument("--mode", choices=("all", "normal", "send", "history", "queue", "selection"), default="all")
+    parser.add_argument("--mode", choices=("all", "normal", "send", "history", "queue", "selection", "speed"), default="all")
     parser.add_argument("--display-contract", choices=("original", "contextual", "workspace"), default="workspace")
     parser.add_argument("--repeats", type=int, default=1)
     args = parser.parse_args()
@@ -447,7 +549,7 @@ def main():
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=False)
     if args.display_contract == "workspace":
-        anchors = [("src/WorkspaceApp.scala", "Thread.sleep(100L)", 100),
+        anchors = [("src/WorkspaceApp.scala", "Thread.sleep(25L)", 25),
                    ("src/WorkspaceApp.scala", "Thread.sleep(10L)", 10),
                    ("src/Main.scala", "val escapeWaitNanos = 40_000_000L", 40),
                    ("src/WorkspaceApp.scala", "if time - sizeAt >= 500L then", 500)]

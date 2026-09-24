@@ -101,7 +101,8 @@ object Screen:
       style: Style,
       marketOnly: Boolean,
       reservedRows: Int,
-      maxPriceRows: Int = Int.MaxValue
+      maxPriceRows: Int = Int.MaxValue,
+      portfolio: PortfolioView = PortfolioView()
   ): MarketFrame =
     val references = s.referenceCoins.distinct.filterNot(_ == s.coin)
     val priceRows = (Layout.priceRows(
@@ -116,11 +117,13 @@ object Screen:
     val mid = s.book.flatMap(midOf)
     val midRow = for a <- axis; m <- mid yield a.row(m.toDouble)
     val left = Chart.ladderRows(s.book, s.coarse, axis, priceRows, midRow, style)
-    val chart = axis.fold(Vector.fill(priceRows)(" " * cells))(a =>
+    val plotted = axis.fold(Vector.fill(priceRows)(" " * cells))(a =>
       Chart.plot(columns, a, cells, s.chartMode)
     )
+    val markers = portfolio.markerRows(axis, s.chartMode, Layout.leftW, style)
     val scale = Chart.scaleRows(axis, priceRows, midRow, mid)
-    val priceLines = (0 until priceRows).toVector.map(r => left(r) + chart(r) + scale(r))
+    val priceLines =
+      (0 until priceRows).toVector.map(r => markers.getOrElse(r, left(r)) + plotted(r) + scale(r))
     val (volume, maximum) = Chart.volumeRows(columns, Style.mono, s.chartMode, cells)
     val volumeLine = Chart.rjust("volume", Layout.leftW - 1) + " " + volume.head +
       Chart.rjust("v " + short(maximum), Layout.scaleW)

@@ -12,13 +12,17 @@ final class DeskController(
 ) extends AutoCloseable:
   private var current = initial
   private var shown = Option.empty[WorkspaceFrame]
-  private var pressed = Option.empty[(WorkspaceFrame, DeskButton)]
+  private var pressed = Option.empty[(WorkspaceFrame, DeskButton, Boolean)]
   private var serial = initial.messages.map(_.id).maxOption.getOrElse(0L)
   private var storageFailed = false
   private var messagesToSave = Option.empty[Vector[DeskMessage]]
   private var stopping = false
   private var historyThread = Option.empty[Thread]
+  private val orderUpdates = new OrderUpdates
   def panel: PanelView = synchronized(current)
+  def orders(view: TradingView): Unit = synchronized {
+    orderUpdates.collect(view)(addMessage("order", _))
+  }
   private def sameControl(
       before: WorkspaceFrame,
       button: DeskButton,
@@ -30,13 +34,20 @@ final class DeskController(
         button
       )
   def publish(frame: WorkspaceFrame): Unit = synchronized {
-    pressed = pressed.filter((before, button) => sameControl(before, button, frame))
+    pressed = pressed.map((before, button, valid) =>
+      (before, button, valid && sameControl(before, button, frame))
+    )
     shown = Some(frame)
   }
   def invalidate(): Unit = synchronized { shown = None }
   def resetMarket(): Unit = synchronized {
-    current =
-      current.copy(review = None, target = None, modeReview = None, outlook = Outlook.empty(""))
+    current = current.copy(
+      review = None,
+      target = None,
+      modeReview = None,
+      outlook = Outlook.empty(""),
+      actionNotice = None
+    )
     shown = None
     pressed = None
   }
@@ -128,159 +139,58 @@ final class DeskController(
       size: (Int, Int),
       promptOpen: Boolean
   ): Boolean = synchronized {
+    orders(view)
     val frame = shown.filter(f =>
-      f.cols == size._1 && f.rows == size._2 && f.coin == snapshot.coin && f.mode == current.mode
+      f.cols == size._1 && f.rows == size._2 &&
+        f.coin == snapshot.coin && f.mode == current.mode
     )
     val available = frame.filter(_ =>
       !snapshot.quit && !promptOpen && snapshot.prompt.isEmpty &&
         snapshot.marketPending.isEmpty && view.coin == snapshot.coin
     )
-    def visible(action: DeskAction): Boolean =
-      available.exists(_.buttons.exists(_.action == action))
     def refuse(): Unit =
-      val reason = if view.pending then "Order pending. Wait for its result before another order"
-      else if current.mode == "VIEW" then "Select Paper or Live before reviewing a trade"
-      else
-        view.block.getOrElse(if !view.ready then view.message
-        else "Review the order again before Send")
-      addMessage("order", "Not sent: " + reason)
-    def prepare(intent: OrderIntent): Unit =
-      preview(intent) match
-        case Right(plan) if plan.coin == snapshot.coin =>
-          val at = wall()
-          current = current.copy(
-            review = Some(
-              OrderReview(
-                intent,
-                plan,
-                at,
-                Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
-                view.leverage,
-                view.marginMode
-              )
-            ),
-            modeReview = None,
-            actionNotice = None
-          )
-          shown = None
-        case Left(reason) =>
-          current = current.copy(review = None)
-          addMessage("order", reason)
-          shown = None
-        case _ => ()
+      addMessage(
+        "order",
+        if view.pending then "Order pending"
+        else view.block.getOrElse("Not sent: price or account changed")
+      )
     def act(action: DeskAction, shortcut: Boolean = false): Unit =
+      val visible = available.exists(_.buttons.exists(_.action == action))
       val fromKey = shortcut && available.exists(_.shortcuts.contains(action))
-      if current.input.isEmpty && available.exists(_.disabledButtons.exists(_.action == action))
-      then refuse()
-      else if fromKey && action.isInstanceOf[DeskAction.Prepare] &&
-        (!view.ready || view.pending || current.mode == "VIEW")
-      then refuse()
-      else if visible(action) || fromKey then
+      if available.exists(_.disabledButtons.exists(_.action == action)) then
+        if view.ready && !view.pending && view.block.isEmpty then
+          addMessage("order", "Not sent: controls changed")
+        else refuse()
+      else if visible || fromKey then
         action match
           case DeskAction.Prepare(intent)
-              if current.input.isEmpty && current.review.isEmpty && view.ready && !view.pending =>
-            current = current.copy(orderKind = intent.kind, bigOrder = intent.big)
-            prepare(intent)
-          case DeskAction.OrderType(kind) if !view.pending && current.review.isEmpty =>
-            current = current.copy(orderKind = kind, target = None, actionNotice = None)
-            shown = None
-          case DeskAction.OrderSize(big) if !view.pending && current.review.isEmpty =>
-            current = current.copy(bigOrder = big, actionNotice = None)
-            shown = None
-          case DeskAction.Refresh if current.input.isEmpty && view.ready && !view.pending =>
-            current.review.foreach(review => prepare(review.intent))
-          case DeskAction.Submit if current.input.isEmpty && view.ready && !view.pending =>
-            val valid = current.review
-              .filter(r =>
-                r.createdAt <= wall() && wall() < r.expiresAt && available
-                  .exists(f => f.completeReview && f.review.contains(r))
-              )
-            valid match
-              case Some(review) =>
-                shown = None
-                current = current.copy(review = None, target = None)
-                if !submit(review) then
-                  addMessage(
-                    "order",
-                    "Price, account or readiness changed. Review the order again."
+              if view.ready && !view.pending && current.mode != "VIEW" &&
+                current.modeReview.isEmpty && intent.kind == OrderKind.Hard && intent.big == current.bigOrder =>
+            val settings = current.mode != "LIVE" || (view.leverage
+              .exists(n => n > 0 && view.rules.exists(r => n <= r.maxLeverage)) &&
+              view.marginMode.exists(m => m == "cross" || m == "isolated"))
+            if !settings then refuse()
+            else
+              preview(intent) match
+                case Right(plan) if plan.coin == snapshot.coin =>
+                  val at = wall()
+                  val order = OrderReview(
+                    intent,
+                    plan,
+                    at,
+                    Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
+                    view.leverage,
+                    view.marginMode
                   )
-              case None => addMessage("order", "Review expired. Press Enter to review again")
-          case DeskAction.Target(side) if current.input.isEmpty && !view.pending =>
-            val selected = for
-              rules <- view.rules
-              price <- view.reference(side)
-              if Trading.validPrice(price, rules)
-            yield (side, price)
-            selected match
-              case Some(target) =>
-                current = current.copy(
-                  target = Some(target),
-                  review = None,
-                  actionNotice = None,
-                  orderKind = OrderKind.Target
-                )
-                shown = None
-              case None =>
-                addMessage("order", view.block.getOrElse("Waiting for a current market quote"))
-          case DeskAction.Cancel =>
-            current = current.copy(
-              review = None,
-              target = None,
-              input = None,
-              modeReview = None,
-              details = false
-            )
+                  current = current.copy(review = None, target = None)
+                  if submit(order) then current = current.copy(actionNotice = Some("Sending"))
+                  else refuse()
+                case Left(reason) => addMessage("order", reason)
+                case _            => refuse()
+          case DeskAction.OrderSize(big) if !view.pending && current.modeReview.isEmpty =>
+            current = current.copy(bigOrder = big, orderKind = OrderKind.Hard, actionNotice = None)
             shown = None
-          case DeskAction.Ask if current.input.isEmpty =>
-            current = current.copy(
-              input = Some(""),
-              review = None,
-              target = None,
-              modeReview = None,
-              details = true,
-              detailPage = DetailPage.Answers,
-              scroll = 0
-            )
-            shown = None
-          case DeskAction.SendQuestion => sendQuestion()
-          case DeskAction.Details      =>
-            current = current.copy(
-              details = !current.details,
-              input = None,
-              detailPage = if current.actionNotice.nonEmpty || current.historyFailure.nonEmpty then
-                DetailPage.Answers
-              else DetailPage.Method,
-              scroll = 0
-            )
-            shown = None
-          case DeskAction.Page(page) if current.input.isEmpty =>
-            current = current.copy(details = true, detailPage = page, scroll = 0)
-            shown = None
-          case DeskAction.ToggleMute =>
-            val next = !current.muted
-            mute(next)
-            current = current.copy(muted = next, soundStatus = if next then "Muted" else "Sound on")
-            shown = None
-          case DeskAction.Status if current.input.isEmpty =>
-            current = current.copy(details = true, detailPage = DetailPage.Answers)
-            addMessage(
-              "data",
-              s"${current.mode} ${snapshot.coin}\n${current.account}\n${view.message}\n${current.dataStatus}\n${current.analysisStatus}\nOrder keys: 1/2 Hard buy, 3/4 Hard sell, 5/6 Best buy, 7/8 Best sell. Each pair uses small/large size. 9/0 choose a buy/sell target. Enter reviews or sends the visible review. Esc cancels. Simulated trading uses 1x funds, without funding or liquidation."
-            )
-          case DeskAction.Feedback(id, accepted) =>
-            current = current.copy(messages =
-              current.messages.map(m =>
-                if m.id == id && m.kind == "analysis" then m.copy(feedback = Some(accepted)) else m
-              )
-            )
-            saveMessages()
-          case DeskAction.Scroll(lines) =>
-            val delta = if current.detailPage == DetailPage.Answers then lines else -lines
-            current = current.copy(scroll =
-              (current.scroll + delta).max(0).min(available.fold(0)(_.scrollLimit))
-            )
-          case DeskAction.Mode(name)
-              if current.input.isEmpty && !view.pending && name != current.mode =>
+          case DeskAction.Mode(name) if !view.pending && name != current.mode =>
             current = current.copy(modeReview = Some(name), review = None, target = None)
             shown = None
           case DeskAction.ConfirmMode(name) if current.modeReview.contains(name) && !view.pending =>
@@ -291,115 +201,24 @@ final class DeskController(
                   account = account,
                   modeReview = None,
                   review = None,
-                  target = None
+                  target = None,
+                  actionNotice = None
                 )
-                addMessage("mode", name + " selected. Each trade still needs review and Send.")
               case Left(reason) =>
                 current = current.copy(modeReview = None)
                 addMessage("mode", reason)
             shown = None
-          case DeskAction.Prepare(_) | DeskAction.Submit | DeskAction.Refresh |
-              DeskAction.Target(_) =>
-            refuse()
-          case _ => ()
-    def sendQuestion(): Unit =
-      current.input.map(_.trim).filter(_.nonEmpty).foreach { question =>
-        if ask(question) then
-          addMessage("question", question)
-          current = current.copy(input = None)
-          shown = None
-        else addMessage("analysis", "Question queue is full. Try again after the pending answer.")
-      }
-
-    def regular(): Boolean = if current.input.nonEmpty then
-      command match
-        case Command.PromptChar(c) =>
-          current = current.copy(input = current.input.map(t => (t + c).take(4000)))
-          true
-        case Command.PromptText(text) =>
-          current = current.copy(input =
-            current.input.map(t => (t + Workspace.safeText(text).replace('\n', ' ')).take(4000))
-          )
-          true
-        case Command.PromptBackspace =>
-          current = current.copy(input = current.input.map(_.dropRight(1)))
-          true
-        case Command.PromptCancel | Command.CancelTarget =>
-          current = current.copy(input = None)
-          shown = None
-          true
-        case Command.PromptSubmit =>
-          sendQuestion()
-          true
-        case Command.Quit => false
-        case _            => true
-    else
-      command match
-        case Command.PlaceOrder(intent) =>
-          act(DeskAction.Prepare(intent), shortcut = true)
-          true
-        case Command.SelectTarget(side) =>
-          act(DeskAction.Target(side), shortcut = true)
-          true
-        case Command.SubmitTarget =>
-          if current.review.nonEmpty then
-            if available.exists(_.controls.exists(_.action == DeskAction.Refresh)) then
-              act(DeskAction.Refresh)
-            else act(DeskAction.Submit)
-          else if current.modeReview.nonEmpty then
-            act(DeskAction.ConfirmMode(current.modeReview.get))
-          else
-            current.target.foreach((side, price) =>
-              act(DeskAction.Prepare(OrderIntent(side, OrderKind.Target, target = Some(price))))
+          case DeskAction.Cancel =>
+            current = current.copy(
+              modeReview = None,
+              review = None,
+              target = None,
+              input = None,
+              details = false
             )
-          true
-        case Command.CancelTarget =>
-          current = current.copy(review = None, target = None, modeReview = None, details = false)
-          shown = None
-          true
-        case Command.ZoomIn | Command.ZoomOut if current.target.nonEmpty =>
-          current.target.foreach { (side, price) =>
-            view.rules
-              .flatMap(r => Trading.nextPrice(price, r, command == Command.ZoomIn))
-              .foreach { next =>
-                current = current.copy(target = Some((side, next)), review = None)
-                shown = None
-              }
-          }
-          true
-        case Command.Ask =>
-          act(DeskAction.Ask)
-          true
-        case Command.Details =>
-          act(DeskAction.Details)
-          true
-        case Command.ToggleMute =>
-          act(DeskAction.ToggleMute)
-          true
-        case Command.Mode(name) =>
-          act(DeskAction.Mode(name))
-          true
-        case Command.Feedback(accepted) =>
-          available.toVector
-            .flatMap(_.buttons)
-            .map(_.action)
-            .collectFirst {
-              case action @ DeskAction.Feedback(_, value) if value == accepted => action
-            }
-            .foreach(action => act(action))
-          true
-        case Command.ScrollMessages(lines) =>
-          act(DeskAction.Scroll(lines))
-          true
-        case Command.Pointer(x, y, button) =>
-          if (button == 64 || button == 65) && available.exists(f => x > f.cols * 3 / 5) then
-            act(DeskAction.Scroll(if button == 64 then 5 else -5))
-          true
-        case Command.StartMarketPrompt | Command.Quit =>
-          resetMarket()
-          false
-        case _ => false
-
+            shown = None
+          case DeskAction.Prepare(_) => refuse()
+          case _                     => ()
     command match
       case Command.CancelTarget
           if snapshot.marketPending.nonEmpty || promptOpen || snapshot.prompt.nonEmpty =>
@@ -408,20 +227,51 @@ final class DeskController(
         pressed = if button != 0 then None
         else
           available.flatMap { f =>
-            f.controls.find(_.contains(x, y)).map(b => (f, b))
+            f.controls.find(_.contains(x, y)).map(b => (f, b, true))
           }
         true
       case Command.Pointer(x, y, 0) =>
         val click = pressed
         pressed = None
-        for
-          (before, button) <- click
-          after <- available
-          if sameControl(before, button, after)
-          if button.contains(x, y)
-        do act(button.action)
+        click.filter((_, button, _) => button.contains(x, y)).foreach { (before, button, valid) =>
+          if valid && available.exists(sameControl(before, button, _)) then act(button.action)
+          else if button.action.isInstanceOf[DeskAction.Prepare] then
+            addMessage("order", "Not sent: controls changed")
+        }
         true
-      case _ =>
+      case other =>
         pressed = None
-        regular()
+        other match
+          case Command.PlaceOrder(intent) =>
+            act(DeskAction.Prepare(intent), shortcut = true)
+            true
+          case Command.SubmitTarget =>
+            current.modeReview.foreach(name => act(DeskAction.ConfirmMode(name)))
+            true
+          case Command.CancelTarget =>
+            current = current.copy(
+              modeReview = None,
+              review = None,
+              target = None,
+              input = None,
+              details = false
+            )
+            shown = None
+            true
+          case Command.Mode(name) =>
+            act(DeskAction.Mode(name))
+            true
+          case Command.StartMarketPrompt | Command.Quit =>
+            resetMarket()
+            false
+          case Command.ToggleMute =>
+            val muted = !current.muted
+            current =
+              current.copy(muted = muted, soundStatus = if muted then "Muted" else "Sound on")
+            mute(muted)
+            true
+          case Command.Ask | Command.Details | Command.Feedback(_) | Command.ScrollMessages(_) |
+              Command.SelectTarget(_) | Command.Pointer(_, _, _) =>
+            true
+          case _ => false
   }

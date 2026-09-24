@@ -41,6 +41,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
         else if kind == "clearinghouseState" then Some(ujson.Obj("assetPositions" -> ujson.Arr()))
         else if kind == "userRole" && allowLive then
           Some(ujson.Obj("role" -> "agent", "data" -> ujson.Obj("user" -> config.owner.get)))
+        else if kind == "userAbstraction" then Some(ujson.Str("disabled"))
         else fail("unexpected account request: " + kind)
       def post(body: ujson.Value): Option[ujson.Value] = fail("paper reached a live order endpoint")
       def watch(
@@ -131,26 +132,24 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       frame
     def key(command: Command, cols: Int = 120, rows: Int = 40): Unit =
       controller.handle(command, snapshot, route.view, (cols, rows), false)
+    private var selected = Trading.action(0)
     def prepare(intent: OrderIntent, cols: Int = 120, rows: Int = 40): OrderReview =
-      draw(cols, rows)
-      if intent.kind == OrderKind.Target then
-        key(Command.SelectTarget(intent.side), cols, rows)
-        draw(cols, rows)
-        key(Command.SubmitTarget, cols, rows)
-      else key(Command.PlaceOrder(intent), cols, rows)
-      val review = controller.panel.review.getOrElse(fail("order did not open a review"))
-      val frame = draw(cols, rows)
-      assert(frame.completeReview)
-      assert(frame.buttons.exists(_.action == DeskAction.Submit))
-      review
+      assertEquals(intent.kind, OrderKind.Hard)
+      selected = intent
+      if controller.panel.bigOrder != intent.big then
+        val size = draw(cols, rows).buttons.find(_.action == DeskAction.OrderSize(intent.big)).get
+        key(Command.PointerPress(size.x, size.y, 0), cols, rows)
+        key(Command.Pointer(size.x, size.y, 0), cols, rows)
+      assert(draw(cols, rows).buttons.exists(_.action == DeskAction.Prepare(intent)))
+      OrderReview(intent, route.preview(intent).toOption.get, clock.get(), clock.get() + 30000L)
     def send(cols: Int = 120, rows: Int = 40, mouse: Boolean = false): Unit =
       val frame = draw(cols, rows)
       if mouse then
-        val button = frame.buttons.find(_.action == DeskAction.Submit).get
+        val button = frame.buttons.find(_.action == DeskAction.Prepare(selected)).get
         key(Command.PointerPress(button.x, button.y, 0), cols, rows)
         draw(cols, rows)
         key(Command.Pointer(button.x, button.y, 0), cols, rows)
-      else key(Command.SubmitTarget, cols, rows)
+      else key(Command.PlaceOrder(selected), cols, rows)
     def open(): Unit =
       route.start()
       route.observe(Event.SocketUp)
@@ -161,7 +160,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
     def close(): Unit = route.close()
 
   for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
-    for index <- 0 until 8 do
+    for index <- 0 until 4 do
       test(
         s"paper order ${index + 1} reaches persisted fill through visible controls at ${cols}x${rows}"
       ) {
@@ -183,23 +182,10 @@ class PaperFlowReviewSpec extends munit.FunSuite:
               .lines
               .map(Chart.plain)
               .mkString("\n")
-              .contains("Position " + Trading.format(review.plan.positionAfter))
+              .contains("Stables")
           )
         finally f.close()
       }
-
-  for side <- Vector(Side.Buy, Side.Sell) do
-    test(s"target $side reaches persisted fill through select, review and Send") {
-      val f = new Fixture()
-      try
-        f.open()
-        f.prepare(OrderIntent(side, OrderKind.Target))
-        f.send()
-        waitFor("target did not finish")(f.route.view.outcome.nonEmpty)
-        assert(f.route.view.outcome.exists(_.contains("filled")), f.route.view.outcome.toString)
-        assertEquals(f.saved("count").num.toLong, 1L)
-      finally f.close()
-    }
 
   test(
     "view-to-paper selection needs no enabled live worker and accepts a fresh subsequent quote"
@@ -264,42 +250,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test(
-    "one safe improved ask during a complete human review preserves reviewed quantity and limit"
-  ) {
-    val f = new Fixture()
-    try
-      f.open()
-      val reviewed = f.prepare(OrderIntent(Side.Buy, OrderKind.Target)).plan
-      f.clock.addAndGet(250)
-      f.publish(
-        Book(Vector(Level("99.98", "50", 1)), Vector(Level("99.99", "50", 1)), f.clock.get())
-      )
-      val current = Trading
-        .plan(
-          "XMR",
-          f.route.view.rules.get,
-          f.latest,
-          BigDecimal(f.latest.asks.head.px),
-          f.route.view.position.get,
-          OrderIntent(Side.Buy, OrderKind.Target, target = Some(reviewed.limit)),
-          f.config.sizes
-        )
-        .toOption
-        .get
-      assertEquals(current.quantity, reviewed.quantity)
-      assertEquals(current.limit, reviewed.limit)
-      assertEquals(current.positionAfter, reviewed.positionAfter)
-      assert(current.estimatedValue < reviewed.estimatedValue)
-      assert(f.route.view.ready)
-      f.send()
-      assert(f.controller.panel.actionNotice.isEmpty, f.controller.panel.actionNotice.toString)
-      waitFor("improved quote was not filled")(f.route.view.outcome.exists(_.contains("filled")))
-      assertEquals(f.saved("count").num.toLong, 1L)
-    finally f.close()
-  }
-
-  test("same quote and reviewed terms survive only a safer depth estimate changing") {
+  test("one click uses the current safe depth estimate") {
     val f = new Fixture()
     try
       f.open()
@@ -340,7 +291,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       assert(current.estimatedValue < reviewed.estimatedValue)
       assert(f.route.view.ready)
       f.send()
-      assert(f.controller.panel.actionNotice.isEmpty, f.controller.panel.actionNotice.toString)
+      assertEquals(f.controller.panel.actionNotice, Some("Sending"))
       waitFor("changed estimate was not filled")(f.route.view.outcome.exists(_.contains("filled")))
       assertEquals(f.saved("count").num.toLong, 1L)
     finally f.close()

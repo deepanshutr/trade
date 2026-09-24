@@ -163,7 +163,8 @@ class IndependentFreshnessSpec extends munit.FunSuite:
     def loaded: Boolean = State.intervals.forall(i => state.candles.get(i).exists(_.nonEmpty))
     def select(coin: String): Unit =
       state = State.reduce(state.copy(prompt = Some(coin)), Event.Key(Command.PromptSubmit), at)
-      assert(state.candles.isEmpty)
+      assertEquals(state.coin, coin)
+      if coin == "XMR" then assert(loaded, "return did not restore cached candles")
       feed.setMarket(coin)
       feed.awaitHistoryRepair()
       drain()

@@ -352,7 +352,11 @@ final class CompositeFeed(venue: Feed, onchain: OnchainFeed, shown: () => String
     extends MarketFeed:
   def status: String = if onchain.serves(shown()) then onchain.status else venue.status
   def setMarket(newCoin: String): Unit =
+    val returning =
+      onchain.serves(onchain.coin) && !onchain.serves(newCoin) && venue.coin == newCoin
     onchain.setMarket(newCoin)
-    if !onchain.serves(newCoin) then venue.setMarket(newCoin)
+    if !onchain.serves(newCoin) then
+      venue.setMarket(newCoin)
+      if returning then venue.reloadHistory()
   def checkMarket(name: String): Either[String, Unit] =
     if onchain.serves(name) then Right(()) else venue.checkMarket(name)

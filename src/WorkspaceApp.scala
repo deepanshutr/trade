@@ -46,8 +46,10 @@ object WorkspaceApp:
       measure: () => (Int, Int)
   ): (Boolean, (Int, Int)) =
     val measured = command match
-      case Command.PromptChar(_) | Command.PromptText(_) | Command.PromptBackspace => size
-      case _                                                                       => measure()
+      case Command.PromptChar(_) | Command.PromptText(_) | Command.PromptBackspace |
+          Command.PointerPress(_, _, _) =>
+        size
+      case _ => measure()
     if measured != size then controller.invalidate()
     val (snapshot, view) = context()
     (controller.handle(command, snapshot, view, measured, promptOpen), measured)
@@ -139,6 +141,7 @@ object WorkspaceApp:
       // runner. Its factory rejects any attempt to enable real trading.
       val initialLive = createWorker(config, args.trade, args.coin, directory)
       val now = () => System.currentTimeMillis()
+      val diagnostics = Diagnostics.open(directory, now, config.quoteAgeMs)
       val monotonic = () => TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
       val mode = if args.trade then "LIVE" else if args.paper then "PAPER" else "VIEW"
       val worker = new ExecutionRouter(
@@ -154,6 +157,7 @@ object WorkspaceApp:
       )
       val history = Try(MessageHistory.open(directory.resolve("messages"))).getOrElse {
         worker.close()
+        diagnostics.close()
         System.err.println(
           "Desk message storage is unavailable or another desk owns it: " + directory.resolve(
             "messages"
@@ -192,10 +196,6 @@ object WorkspaceApp:
       )
       val routed: MarketFeed =
         onchain.fold[MarketFeed](feed)(o => new CompositeFeed(feed, o, () => state.get().coin))
-      val connectedNews = Option.when(args.analysis)(new News.Worker(now))
-      val connection =
-        Option.when(args.analysis)(CodexConnection.create(directory.resolve("analysis-workspace")))
-      val analysisRef = new AtomicReference(Option.empty[AnalysisWorker])
       val announcements = Main.announcements(args, NativeAnnouncementOutput.create())
       val controller = new DeskController(
         PanelView(
@@ -210,7 +210,7 @@ object WorkspaceApp:
         now,
         worker.preview,
         worker.submitReviewed,
-        question => analysisRef.get().exists(_.ask(question)),
+        _ => false,
         worker.switchMode,
         history.save,
         announcements.setMuted
@@ -218,31 +218,14 @@ object WorkspaceApp:
       controller.start()
       val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
       val alerts = new AlertPolicy
-      val analysis = new AnalysisWorker(
-        () => state.get(),
-        () =>
-          connectedNews.fold("Connected news disabled. Calendar availability is unknown")(
-            _.context
-          ),
-        (context, canceled, study) =>
-          connection.fold[Either[String, ModelReply]](Left("Connected analysis disabled"))(
-            _.reply(context, canceled, study)
-          ),
-        controller.addMessage,
-        now,
-        automaticEnabled = args.analysis
-      )
-      analysisRef.set(Some(analysis))
       if recovered.isFailure then
         controller.addMessage(
           "data",
           "Saved public candles could not be loaded. Available exchange history will be requested"
         )
       val saved = Try(Term.enterRaw()).getOrElse {
-        analysis.close()
         outlook.close()
         announcements.close()
-        connectedNews.foreach(_.close())
         recorder.foreach(_.close())
         controller.close()
         history.close()
@@ -256,19 +239,19 @@ object WorkspaceApp:
       def restore(): Unit =
         if restored.compareAndSet(false, true) then
           try
-            analysis.close()
             outlook.close()
             announcements.close()
-            connectedNews.foreach(_.close())
             recorder.foreach(_.close())
             worker.close()
             controller.close()
             history.close()
+            diagnostics.close()
           finally
             print(Screen.esc + "[?1006l" + Screen.esc + "[?1000l")
             Term.restore(saved)
       Runtime.getRuntime.addShutdownHook(new Thread(() => restore()))
-      Thread.setDefaultUncaughtExceptionHandler { (_, error) =>
+      Thread.setDefaultUncaughtExceptionHandler { (thread, error) =>
+        diagnostics.failure(Diagnostics.component(thread.getName), error)
         restore()
         System.err.println("Desk stopped: " + error.getClass.getSimpleName)
         sys.exit(1)
@@ -276,22 +259,28 @@ object WorkspaceApp:
       val actualSize = new AtomicReference(Term.size())
       val pendingPrompts = new AtomicInteger(0)
       val inputLock = new Object
+      val dimensions = new TerminalSize(
+        () => Term.size(),
+        measured =>
+          inputLock.synchronized {
+            if measured != actualSize.get() then controller.invalidate()
+            actualSize.set(measured)
+          }
+      )
       worker.start()
+      diagnostics.start()
       recorder.foreach(_.start())
-      connectedNews.foreach(_.start())
-      analysis.start()
       outlook.start()
       announcements.start()
       val alertThread = background("market-alerts") {
         while !state.get().quit do
           val time = now()
-          val found = alerts.market(state.get(), time) ++
-            connectedNews.toVector.flatMap(n => alerts.news(n.batches, time))
+          val found = alerts.market(state.get(), time)
           found.foreach(announce(_, controller, announcements))
           controller.alertStatus(
             announcements.status,
-            connectedNews.fold("News disabled")(_.summary),
-            connectedNews.fold("News disabled by --no-analysis")(_.context)
+            "News disabled",
+            "News disabled"
           )
           Thread.sleep(250L)
       }
@@ -312,28 +301,36 @@ object WorkspaceApp:
             controller.resetMarket()
             worker.select(coin)
           },
-        () => { val _ = pendingPrompts.decrementAndGet() }
+        () => { val _ = pendingPrompts.decrementAndGet() },
+        diagnostics.folded
       )
       val keys = background("keys") {
         var pending = Vector.empty[Int]
         var marketPrompt = false
         var escapeAt = 0L
         var quitting = false
-        def emit(command: Command): Unit = inputLock.synchronized {
-          val (handled, measured) = dispatchInput(
-            command,
-            controller,
-            () => (state.get(), worker.view),
-            actualSize.get(),
-            marketPrompt || pendingPrompts.get() > 0,
-            () => Term.size()
-          )
-          actualSize.set(measured)
-          if !handled then
-            marketPrompt = Main.nextPromptOpen(marketPrompt, command)
-            enqueueInput(command, measured, queue, pendingPrompts)
-          if command == Command.Quit then quitting = true
-        }
+        def emit(command: Command): Unit =
+          val began = System.nanoTime()
+          command match
+            case Command.PromptChar(_) | Command.PromptText(_) | Command.PromptBackspace |
+                Command.PointerPress(_, _, _) =>
+              ()
+            case _ => { val _ = dimensions.read() }
+          inputLock.synchronized {
+            val (handled, measured) = dispatchInput(
+              command,
+              controller,
+              () => (state.get(), worker.view),
+              actualSize.get(),
+              marketPrompt || pendingPrompts.get() > 0,
+              () => actualSize.get()
+            )
+            if !handled then
+              marketPrompt = Main.nextPromptOpen(marketPrompt, command)
+              enqueueInput(command, measured, queue, pendingPrompts)
+            if command == Command.Quit then quitting = true
+          }
+          diagnostics.slow(DiagnosticPart.Input, System.nanoTime() - began)
         while !quitting && !state.get().quit do
           val focused = marketPrompt || controller.panel.input.nonEmpty
           if System.in.available() > 0 then
@@ -366,17 +363,13 @@ object WorkspaceApp:
       }
       var sizeAt = 0L
       var statusAt = 0L
-      val orderUpdates = new OrderUpdates
       var captureStatus = "Public capture starting"
+      var historyFailureLogged = false
       try
         while !state.get().quit do
           val time = now()
           if time - sizeAt >= 500L then
-            val measured = Term.size()
-            inputLock.synchronized {
-              if measured != actualSize.get() then controller.invalidate()
-              actualSize.set(measured)
-            }
+            val _ = dimensions.read()
             sizeAt = time
           inputLock.synchronized {
             val measured = actualSize.get()
@@ -385,8 +378,12 @@ object WorkspaceApp:
               Main.sizeEvent((state.get().cols, state.get().rows), size).foreach(queue.put)
           }
           val market = state.get()
-          val view = worker.view.forMarket(market.coin)
-          orderUpdates.collect(view)(controller.addMessage("order", _))
+          val execution = worker.view
+          controller.orders(execution)
+          val view = execution.forMarket(market.coin)
+          if !historyFailureLogged && controller.panel.historyFailure.nonEmpty then
+            diagnostics.failure(DiagnosticPart.History, new java.io.IOException())
+            historyFailureLogged = true
           if time - statusAt >= 2000L then
             captureStatus = recorder.map(_.status).getOrElse {
               val at = Try(
@@ -397,22 +394,37 @@ object WorkspaceApp:
               else "Public capture unavailable or stale"
             }
             statusAt = time
-          val usage =
-            connection.flatMap(_.totalTokens).fold("")(n => " last request " + n + " tokens")
           controller.status(
-            "Prices: " + routed.status + ". " + captureStatus,
-            analysis.status + usage + connectedNews.fold("")(n => ". " + n.status),
+            "Prices: " + routed.status + ". " + captureStatus + ". " + diagnostics.status,
+            "",
             worker.accountLabel
           )
+          val building = System.nanoTime()
           val frame =
             drawFrame(market, view, controller.panel, size._1, size._2, time, zone, style, outlook)
+          diagnostics.slow(DiagnosticPart.Build, System.nanoTime() - building)
+          val waiting = System.nanoTime()
+          var lockWait = 0L
+          var terminalTime = 0L
+          var published = false
           inputLock.synchronized {
+            lockWait = System.nanoTime() - waiting
             controller.invalidate()
+            val writing = System.nanoTime()
             Term.write(frame.lines)
+            terminalTime = System.nanoTime() - writing
             if state.get().coin == frame.coin && actualSize.get() == (frame.cols, frame.rows) then
               controller.publish(frame)
+              published = true
           }
-          Thread.sleep(100L)
+          diagnostics.slow(DiagnosticPart.FrameLock, lockWait)
+          diagnostics.slow(DiagnosticPart.Terminal, terminalTime)
+          if published then diagnostics.presented(market, frame.cols, frame.rows)
+          Thread.sleep(25L)
+      catch
+        case error: Exception =>
+          diagnostics.failure(DiagnosticPart.Render, error)
+          throw error
       finally
         (publicThreads ++ foldThreads ++ Vector(keys, alertThread)).foreach(_.interrupt())
         restore()

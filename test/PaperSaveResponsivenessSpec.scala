@@ -136,23 +136,19 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
       while !worker.view.ready && System.nanoTime() < until do Thread.sleep(2)
       assert(worker.view.ready)
       controller.publish(draw())
-      controller.handle(
-        Command.PlaceOrder(Trading.action(0)),
-        snapshot,
-        router.view,
-        (120, 40),
-        false
-      )
-      val reviewFrame = draw()
-      assert(reviewFrame.completeReview)
-      controller.publish(reviewFrame)
       val reviewedView = router.view
       val submitter = new Thread(
         () => {
           mark("Send entered")
           try
             val _ =
-              controller.handle(Command.SubmitTarget, snapshot, reviewedView, (120, 40), false)
+              controller.handle(
+                Command.PlaceOrder(Trading.action(0)),
+                snapshot,
+                reviewedView,
+                (120, 40),
+                false
+              )
           catch
             case error: Throwable =>
               val _ = errors.add(error)
@@ -178,7 +174,7 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
       assert(shown.get().pending)
       assertEquals(shown.get().position, Some(BigDecimal(0)))
       assert(label.get().startsWith("Cash $10000"))
-      assert(drawn.get().lines.map(Chart.plain).mkString("\n").contains("PAPER saving 0s | XMR"))
+      assert(drawn.get().lines.map(Chart.plain).mkString("\n").contains("Saving 0s"))
       assertEquals(saved.get(), null)
       release.countDown()
       val completed = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)

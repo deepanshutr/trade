@@ -59,8 +59,8 @@ class HistoryProgressSpec extends munit.FunSuite:
         java.time.ZoneOffset.UTC,
         Style.mono
       )
-      assert(frame.lines.exists(_.contains("History saving 5s")))
-      assert(frame.lines.exists(_.contains("filled 5")))
+      assertEquals(panel.historySavingAt, Some(now))
+      assert(frame.lines.exists(_.contains("Bought")))
       release.countDown()
       c.close()
       assertEquals(saved.asScala.toVector.size, 2)
@@ -88,9 +88,9 @@ class HistoryProgressSpec extends munit.FunSuite:
         java.time.ZoneOffset.UTC,
         Style.mono
       )
-      assert(frame.lines.exists(_.contains("History save failed")))
-      assert(frame.lines.exists(_.contains("Position 5")))
-      assert(frame.lines.exists(_.contains("filled 5")))
+      assert(frame.lines.head.contains("!save"))
+      assert(c.panel.messages.exists(_.text.contains("filled 5")))
+      assert(frame.lines.exists(_.contains("Bought")))
       assert(!frame.lines.mkString.contains("retry"))
     finally c.close()
   }

@@ -3,43 +3,6 @@ package desk
 import java.time.ZoneOffset
 
 class CompactFollowupSpec extends munit.FunSuite:
-  test("a failed target review retains the selected price and a visible reason") {
-    val now = 1800000000000L
-    val market = Snapshot.initial("XMR", now)
-    val view = TradingView(
-      "XMR",
-      message = "Ready",
-      ready = true,
-      rules = Some(MarketRules(0, 2, 5)),
-      bid = Some(BigDecimal(99)),
-      ask = Some(BigDecimal(100))
-    )
-    val controller = new DeskController(
-      PanelView(mode = "PAPER"),
-      () => now,
-      _ => Left("No visible quantity fits this order"),
-      _ => fail("unexpected order"),
-      _ => false,
-      _ => Left("disabled")
-    )
-    def draw(): WorkspaceFrame =
-      val frame =
-        Workspace.draw(market, view, controller.panel, 100, 30, now, ZoneOffset.UTC, Style.mono)
-      controller.publish(frame)
-      frame
-    draw()
-    controller.handle(Command.SelectTarget(Side.Buy), market, view, (100, 30), false)
-    val selected = controller.panel.target
-    assert(selected.nonEmpty)
-    draw()
-    controller.handle(Command.SubmitTarget, market, view, (100, 30), false)
-    val failed = draw()
-    assertEquals(controller.panel.target, selected)
-    assert(failed.lines.mkString.contains("No visible quantity fits this order"))
-    assert(failed.buttons.exists(_.label == "Enter Review"))
-    assert(failed.buttons.exists(_.action == DeskAction.Cancel))
-  }
-
   test("the next drawn frame retains a touched target before the worker refreshes") {
     val step = 300000L
     val now = 1260 * step

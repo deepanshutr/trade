@@ -71,7 +71,7 @@ class TradeProgressSpec extends munit.FunSuite:
       c.handle(Command.PlaceOrder(Trading.action(0)), snapshot, f.worker.view, (100, 30), false)
       val first = draw(c, f.worker.view)
       capture("100x30-mono-repeated-first", first)
-      assert(first.lines.exists(_.contains("Paper limit")))
+      assert(first.lines.exists(_.contains("Insufficient funds")))
       c.handle(Command.PlaceOrder(Trading.action(0)), snapshot, f.worker.view, (100, 30), false)
       val second = draw(c, f.worker.view)
       capture("100x30-mono-repeated-second", second)
@@ -300,38 +300,12 @@ class TradeProgressSpec extends munit.FunSuite:
       assertEquals(c.panel.review, None)
     }
 
-  test("expired review can be renewed from Enter without sending") {
-    val clock = new AtomicLong(start)
-    var sends = 0
-    val c = new DeskController(
-      PanelView(mode = "PAPER"),
-      () => clock.get(),
-      plan,
-      _ => { sends += 1; true },
-      _ => false,
-      _ => Left("disabled")
-    )
-    draw(c)
-    c.handle(Command.PlaceOrder(Trading.action(0)), snapshot, ready, (100, 30), false)
-    val old = c.panel.review.get
-    clock.set(old.expiresAt)
-    val expired = draw(c, now = clock.get())
-    assert(!expired.completeReview)
-    c.handle(Command.SubmitTarget, snapshot, ready, (100, 30), false)
-    assertEquals(sends, 0)
-    assert(c.panel.review.exists(_.createdAt == clock.get()), "Enter did not refresh review")
-    val renewed = draw(c, now = clock.get())
-    assert(renewed.completeReview)
-    c.handle(Command.SubmitTarget, snapshot, ready, (100, 30), false)
-    assertEquals(sends, 1)
-  }
-
   test("progress remains readable beside a long position at all supported sizes") {
     val pending = ready.copy(
       position = Some(BigDecimal("1234567890" * 8)),
       ready = false,
       pending = true,
-      message = "Saving paper account 4s"
+      message = "PAPER saving 4s | XMR"
     )
     val c = new DeskController(
       PanelView(mode = "PAPER"),
@@ -343,107 +317,7 @@ class TradeProgressSpec extends munit.FunSuite:
     )
     for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
       val frame = draw(c, pending, cols = cols, rows = rows)
-      assert(frame.lines.exists(_.contains("Saving paper account 4s")), frame.lines.mkString("\n"))
-  }
-
-  test("a result details shortcut opens the order history") {
-    val c = new DeskController(
-      PanelView(mode = "PAPER"),
-      () => start,
-      plan,
-      _ => false,
-      _ => false,
-      _ => Left("disabled")
-    )
-    c.addMessage("order", "Paper rejected: " + "reason " * 30)
-    draw(c)
-    c.handle(Command.Details, snapshot, ready, (100, 30), false)
-    assert(c.panel.details)
-    assertEquals(c.panel.detailPage, DetailPage.Answers)
-  }
-
-  for mouse <- Vector(false, true) do
-    test(s"Target with missing prices explains why it is unavailable, mouse=$mouse") {
-      val c = new DeskController(
-        PanelView(mode = "PAPER", orderKind = OrderKind.Target),
-        () => start,
-        _ => fail("missing prices prepared a trade"),
-        _ => false,
-        _ => false,
-        _ => Left("disabled")
-      )
-      val missing = ready.copy(
-        ready = false,
-        rules = None,
-        bid = None,
-        ask = None,
-        message = "Paper waiting for selected-market depth",
-        block = Some("Paper waiting for selected-market depth")
-      )
-      val frame = draw(c, missing)
-      if mouse then
-        val b = frame.disabledButtons.find(_.action == DeskAction.Target(Side.Buy)).get
-        c.handle(Command.PointerPress(b.x, b.y, 0), snapshot, missing, (100, 30), false)
-        c.handle(Command.Pointer(b.x, b.y + 2, 0), snapshot, missing, (100, 30), false)
-      else c.handle(Command.SelectTarget(Side.Buy), snapshot, missing, (100, 30), false)
-      assert(c.panel.actionNotice.exists(_.contains("waiting")), "Target was silently ignored")
-      assertEquals(c.panel.target, None)
-    }
-
-    test(s"a refused Send remains visible during the exact review, mouse=$mouse") {
-      val intent = Trading.action(0)
-      val reviewed = OrderReview(
-        intent,
-        plan(intent).toOption.get,
-        start,
-        start + 30000,
-        leverage = Some(1),
-        marginMode = Some("cross")
-      )
-      val c = new DeskController(
-        PanelView(mode = "LIVE", review = Some(reviewed)),
-        () => start,
-        _ => fail("unexpected preview"),
-        _ => fail("stale account sent"),
-        _ => false,
-        _ => Left("disabled")
-      )
-      val stale = ready.copy(
-        ready = false,
-        message = "Ready",
-        block = Some("Account data stale. Waiting for refresh")
-      )
-      val frame = draw(c, stale)
-      if mouse then
-        val y = frame.lines.indexWhere(_.contains("Enter Send LIVE"))
-        val x = frame.lines(y).indexOf("Enter Send LIVE") + 1
-        c.handle(Command.PointerPress(x, y + 1, 0), snapshot, stale, (100, 30), false)
-        c.handle(Command.Pointer(x, y + 1, 0), snapshot, stale, (100, 30), false)
-      else c.handle(Command.SubmitTarget, snapshot, stale, (100, 30), false)
-      val refused = draw(c, stale)
-      assert(refused.lines.exists(_.contains("Account data stale")), refused.lines.mkString("\n"))
-      assert(
-        refused.lines.exists(_.contains("Quantity " + Trading.displayExact(reviewed.plan.quantity)))
-      )
-      assert(refused.lines.exists(_.contains("Limit " + Trading.displayExact(reviewed.plan.limit))))
-      assertEquals(c.panel.review, Some(reviewed))
-    }
-
-  test("missing account settings never recommend a wider screen") {
-    val intent = Trading.action(0)
-    val reviewed = OrderReview(intent, plan(intent).toOption.get, start, start + 30000)
-    val c = new DeskController(
-      PanelView(mode = "LIVE", review = Some(reviewed)),
-      () => start,
-      _ => Left("disabled"),
-      _ => false,
-      _ => false,
-      _ => Left("disabled")
-    )
-    val frame = draw(c)
-    assert(!frame.completeReview)
-    assert(!frame.lines.exists(_.contains("Widen")))
-    assert(frame.lines.exists(_.contains("Account settings")))
+      assert(frame.lines.exists(_.contains("Saving 4s")), frame.lines.mkString("\n"))
   }
 
   private def capture(label: String, frame: WorkspaceFrame): Unit =
@@ -462,7 +336,7 @@ class TradeProgressSpec extends munit.FunSuite:
     style <- Vector(Style.mono, Style.colour)
     scenario <- Vector("filled", "partial", "no-fill", "capacity")
   do
-    test(s"visible paper $scenario pipeline at ${cols}x$rows colour=${style.colour}") {
+    test(s"visible one-click paper $scenario pipeline at $cols x$rows colour=" + style.colour) {
       val f = new Paper(if scenario == "capacity" then BigDecimal(200) else BigDecimal(10000))
       val c = new DeskController(
         PanelView(mode = "PAPER", fee = BigDecimal(0)),
@@ -473,12 +347,12 @@ class TradeProgressSpec extends munit.FunSuite:
         _ => Left("disabled")
       )
       val updates = new OrderUpdates
-      val prefix = s"${cols}x$rows-${if style.colour then "colour" else "mono"}-$scenario"
+      val prefix = cols.toString + "x" + rows + "-" + (if style.colour then "colour"
+                                                       else "mono") + "-" + scenario
       def update(label: String): WorkspaceFrame =
         val began = System.nanoTime()
         val view = f.worker.view
         updates.collect(view)(c.addMessage("order", _))
-        c.status("Synthetic feed", "Disabled", f.worker.accountLabel)
         val frame = Workspace.draw(
           snapshot.copy(book = Some(f.book), feed = Health.Live(f.clock.get())),
           view,
@@ -490,8 +364,7 @@ class TradeProgressSpec extends munit.FunSuite:
           style
         )
         c.publish(frame)
-        val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began)
-        assert(elapsed <= 250L, s"frame update took ${elapsed}ms")
+        assert(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began) <= 250L)
         assert(frame.lines.forall(line => Chart.plain(line).length == cols))
         assertEquals(frame.lines.size, rows)
         capture(prefix + "-" + label, frame)
@@ -501,57 +374,38 @@ class TradeProgressSpec extends munit.FunSuite:
       try
         f.open()
         if scenario == "partial" || scenario == "capacity" then f.publish("1")
+        val before = f.worker.preview(Trading.action(0)).toOption.get
         val first = update("ready")
         val buy = first.buttons.find(_.action == DeskAction.Prepare(Trading.action(0))).get
-        if style.colour then
-          key(Command.PointerPress(buy.x, buy.y, 0))
-          key(Command.Pointer(buy.x, buy.y, 0))
-        else key(Command.PlaceOrder(Trading.action(0)))
-        val reviewed = c.panel.review.get
-        val review = update("review")
-        assert(review.completeReview)
-        assert(
-          review.lines.exists(
-            _.contains("Quantity " + Trading.displayExact(reviewed.plan.quantity))
-          )
-        )
-        assert(
-          review.lines.exists(_.contains("Limit " + Trading.displayExact(reviewed.plan.limit)))
-        )
-        if scenario == "capacity" then f.publish("50")
-        if scenario == "no-fill" then
-          f.worker.observe(
-            Event.BboUpdate(
-              "XMR",
-              Level("100.99", "1", 1),
-              Level("101", "1", 1),
-              f.clock.incrementAndGet()
-            )
-          )
         f.worker.synchronized {
           if style.colour then
-            val send = review.buttons.find(_.action == DeskAction.Submit).get
-            key(Command.PointerPress(send.x, send.y, 0))
-            key(Command.Pointer(send.x, send.y, 0))
-          else key(Command.SubmitTarget)
+            key(Command.PointerPress(buy.x, buy.y, 0))
+            key(Command.Pointer(buy.x, buy.y, 0))
+          else key(Command.PlaceOrder(Trading.action(0)))
           assert(f.worker.view.pending)
           val pending = update("queued")
-          assert(pending.lines.exists(_.contains("PAPER queued 0s | XMR")))
-          assert(pending.lines.exists(_.contains("Position 0")))
+          assert(pending.lines.exists(_.contains("Queued 0s")))
+          assertEquals(f.worker.view.position, Some(BigDecimal(0)))
           assert(!pending.buttons.exists(_.action.isInstanceOf[DeskAction.Prepare]))
+          if scenario == "capacity" then f.publish("50")
+          if scenario == "no-fill" then
+            f.worker.observe(
+              Event.BboUpdate(
+                "XMR",
+                Level("100.99", "1", 1),
+                Level("101", "1", 1),
+                f.clock.incrementAndGet()
+              )
+            )
         }
         await("paper completion missing")(!f.worker.view.pending)
         val completed = update("result")
         val expected = scenario match
-          case "no-fill"  => "no fill"
-          case "capacity" => "Paper limit"
-          case other      => other
+          case "no-fill"  => "No fill"
+          case "capacity" => "Insufficient funds"
+          case "partial"  => "Part filled"
+          case _          => "Bought"
         assert(completed.lines.exists(_.contains(expected)), completed.lines.mkString("\n"))
-        if scenario == "no-fill" then
-          assert(
-            completed.lines.exists(_.contains("reviewed limit")),
-            "no-fill text split across words"
-          )
         val expectedPosition = if scenario == "filled" then BigDecimal(5)
         else if scenario == "partial" then BigDecimal(1)
         else BigDecimal(0)
@@ -559,12 +413,9 @@ class TradeProgressSpec extends munit.FunSuite:
         assertEquals(c.panel.messages.count(_.kind == "order"), 1)
         assertEquals(
           f.worker.view.lastPlan.map(p => (p.quantity, p.limit)),
-          Some((reviewed.plan.quantity, reviewed.plan.limit))
+          Some((before.quantity, before.limit))
         )
-        key(Command.Details)
-        val details = update("details")
-        assertEquals(c.panel.detailPage, DetailPage.Answers)
-        assert(details.lines.exists(_.contains(expected)))
+        assertEquals(f.ledger.account.count, if expectedPosition == 0 then 0L else 1L)
       finally
         c.close()
         f.close()

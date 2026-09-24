@@ -44,9 +44,9 @@ class IndependentCompactTapeSpec extends munit.FunSuite:
       assert(plain.forall(_.length == 100))
       val tape = plain.filter(_.startsWith("TAPE"))
       assertEquals(tape.size, 6)
-      assert(tape.forall(_.take(27).endsWith("n200000")), tape.mkString("\n"))
-      assert(tape.forall(_.take(27).contains("F+1.00")))
+      assert(tape.forall(_.take(26).endsWith("n200000")), tape.mkString("\n"))
+      assert(tape.forall(_.take(26).contains("F+1.00")))
       val book = plain.filter(_.startsWith("BOOK"))
       assertEquals(book.size, 6)
-      assert(book.forall(_.take(27).contains("D-0.50 Q-0.50")), book.mkString("\n"))
+      assert(book.forall(_.take(26).contains("D-0.50 Q-0.50")), book.mkString("\n"))
   }
