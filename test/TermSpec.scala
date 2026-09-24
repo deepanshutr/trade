@@ -23,7 +23,10 @@ class TermSpec extends munit.FunSuite:
 
   test("the alternate screen enables bracketed paste and restoration disables it") {
     assertEquals(Term.enterCodes, esc + "[?1049h" + esc + "[?25l" + esc + "[?2004h")
-    assertEquals(Term.leaveCodes, esc + "[?2004l" + esc + "[?25h" + esc + "[?1049l")
+    assertEquals(
+      Term.leaveCodes,
+      esc + "[?2026l" + esc + "[?2004l" + esc + "[?25h" + esc + "[?1049l"
+    )
     assertEquals(Main.escapeWaitNanos, 40_000_000L)
   }
 

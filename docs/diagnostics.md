@@ -20,6 +20,11 @@ Input, frame construction, frame-lock waits and terminal writes of at least 50 m
 are recorded separately. A two-second frame stall and a ten-second unresolved
 selection are separate events.
 
+Execution records show fixed readiness categories and elapsed waits on a change
+or every 30 seconds. They distinguish missing market details, prices, account
+data, leverage, storage, a pending order and readiness. Unrecognized blocking
+reasons remain a fixed `blocked` category. No worker message or account value is saved.
+
 The writer has a bounded 1,024-record queue. Input and rendering do not write to
 disk. Lost records are counted, and a stopped writer is reported as unavailable.
 Shutdown drains for at most 500 ms. An incomplete drain marks logging unavailable.

@@ -12,12 +12,15 @@ button. A changed market, mode, size or terminal geometry invalidates old contro
 Switching between simulated and real trading still needs an explicit confirmation.
 
 In simulated trading, the right side shows the token's current dollar value,
-spendable stables and net profit after fees. Buy spends stables plus the fee.
+spendable stables, open profit and total net profit. Open profit covers the tokens
+still held at their current price, excluding past sales and fees. Buy spends stables plus the fee.
 Sell returns stables minus the fee and sells at most the tokens held. Net profit
 equals stables plus the current token value minus the starting balance.
 For real trading, the token value is signed position exposure and the stable
 figure depends on the venue's account mode. Unknown or stale values show `--`.
-Real lifetime net profit is currently unavailable.
+Real open profit comes from the venue. Real lifetime net profit is currently unavailable.
+The live controls show Buy/Long and Sell/Short, the observed leverage, and the
+current position direction. XMR orders require observed leverage of five times.
 Entry and liquidation prices use the graph's existing price scale. Off-screen
 prices have an arrow. Simulated trading has no liquidation price.
 

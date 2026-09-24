@@ -28,6 +28,33 @@ def wallet_case():
 
 
 class IndependentOracleReview(unittest.TestCase):
+    def test_pending_refusal_before_earlier_fill_retains_input_side_order(self):
+        saved, _, book = wallet_case()
+        filled = []
+        for click in range(1, 601):
+            if click == 2:
+                continue
+            side = 'buy' if click % 2 else 'sell'
+            filled.append(f'PAPER XMR {side} filled 1 at 500\nFee $0.25 | #{len(filled) + 1} offline')
+        completion = ['Order pending', filled[0]] + filled[1:]
+        results = [{'kind': 'order', 'text': text} for text in completion]
+        saved.update(cash='9350.25', fees='149.75', count=599,
+                     positions={'XMR': {'quantity': '1', 'entry': '500'}}, orders=filled)
+        accepted, refused = validate_wallet(saved, results, book)
+        self.assertEqual((len(accepted), len(refused)), (599, 1))
+        results[1]['text'] = results[1]['text'].replace(' buy ', ' sell ')
+        with self.assertRaises(AssertionError):
+            validate_wallet(saved, results, book)
+
+    def test_pending_refusal_needs_its_outstanding_completion(self):
+        saved, results, book = wallet_case()
+        for replacement in ('Order pending', 'Not sent: controls changed'):
+            candidate = [dict(result) for result in results]
+            candidate[-2]['text'] = 'Order pending'
+            candidate[-1]['text'] = replacement
+            with self.assertRaises(AssertionError):
+                validate_wallet(saved, candidate, book)
+
     def test_hard_timing_bounds_include_the_stated_boundary(self):
         for duration in (59800, 599000 / 9.5):
             sample = speed()

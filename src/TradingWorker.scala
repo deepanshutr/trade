@@ -22,7 +22,8 @@ final case class TradingView(
     outcomeId: Long = 0L,
     portfolio: PortfolioView = PortfolioView()
 ):
-  def reference(side: Side): Option[BigDecimal] = if side == Side.Buy then ask else bid
+  def reference(side: Side): Option[BigDecimal] =
+    if side == Side.Buy then ask else bid
   def forMarket(current: String): TradingView =
     if coin == current then this
     else TradingView(current, message = "changing market", pending = true)
@@ -46,9 +47,15 @@ object TradingWorker:
       () => System.currentTimeMillis(),
       () => TimeUnit.NANOSECONDS.toMillis(System.nanoTime()),
       orderPermission = run =>
-        AccountGate.withOrder(AccountGate.directory, config.network, config.owner.get)(run()),
+        AccountGate.withOrder(
+          AccountGate.directory,
+          config.network,
+          config.owner.get
+        )(run()),
       accountPaused = () =>
-        config.owner.exists(AccountGate.paused(AccountGate.directory, config.network, _))
+        config.owner.exists(
+          AccountGate.paused(AccountGate.directory, config.network, _)
+        )
     )
 
 final class TradingWorker private[desk] (
@@ -67,7 +74,12 @@ final class TradingWorker private[desk] (
     accountPaused: () => Boolean = () => false
 ) extends AutoCloseable:
   private final case class Seen(book: Book, at: Long)
-  private final case class Touch(bid: BigDecimal, ask: BigDecimal, time: Long, at: Long)
+  private final case class Touch(
+      bid: BigDecimal,
+      ask: BigDecimal,
+      time: Long,
+      at: Long
+  )
   private final case class Press(
       plan: OrderPlan,
       generation: Long,
@@ -82,6 +94,9 @@ final class TradingWorker private[desk] (
   private val busy = new AtomicBoolean(false)
   private val started = new AtomicBoolean(false)
   private val closed = new AtomicBoolean(false)
+  private val disabled = new AtomicBoolean(false)
+  private val retired = new AtomicBoolean(false)
+  private val refreshWake = new ArrayBlockingQueue[Boolean](1)
   private val executing = new AtomicBoolean(false)
   private val requests = new ArrayBlockingQueue[Press](1)
   private var workers = Vector.empty[Thread]
@@ -115,6 +130,9 @@ final class TradingWorker private[desk] (
   private var accountVersion = 0L
   private var metadata = Option.empty[ujson.Value]
   private var metadataAt = Long.MinValue
+  private[desk] def acceptedMetadata: Option[(ujson.Value, Long)] = synchronized {
+    metadata.filter(_ => fresh(metadataAt, 60000L)).map(_ -> metadataAt)
+  }
   private var saved = Option.empty[SavedOrder]
   private var journal = Option.empty[OrderJournal]
   private var secret = Option.empty[Array[Byte]]
@@ -130,8 +148,13 @@ final class TradingWorker private[desk] (
         touch.exists(t => (BigInt(t.time) - BigInt(e.book.time)).abs <= config.quoteAgeMs)
       )
 
+  private def requiredLeverage: Boolean = coin != "XMR" || activeLeverage == 5
+
+  private def wakeAccount(): Unit =
+    val _ = refreshWake.offer(true)
+
   private def accountReady: Boolean =
-    position.nonEmpty && leverageReady &&
+    position.nonEmpty && leverageReady && requiredLeverage &&
       rules.exists(m => activeLeverage >= 1 && activeLeverage <= m.maxLeverage) &&
       fresh(accountAt, config.positionAgeMs) &&
       fresh(activeAt, config.positionAgeMs) && (!enabled ||
@@ -140,7 +163,8 @@ final class TradingWorker private[desk] (
   def view: TradingView = synchronized {
     val paused = enabled && accountPaused()
     val block =
-      if !enabled then Some("View only")
+      if disabled.get() then Some("Trading stopped")
+      else if !enabled then Some("View only")
       else if paused then Some("Wallet change paused this account")
       else if fatal || !config.configured then Some(message)
       else if !connected then Some("connection disconnected")
@@ -149,13 +173,14 @@ final class TradingWorker private[desk] (
       else if !touch.exists(t => t.bid > 0 && t.ask > t.bid) then Some("invalid selected quote")
       else if !marketReady then Some("selected depth stale")
       else if secret.isEmpty then Some(message)
+      else if leverageReady && !requiredLeverage then Some("Set XMR leverage to 5x")
       else if !accountReady || waitingRefresh then Some("account data stale")
       else None
     TradingView(
       coin,
       position,
       message,
-      enabled && !paused && !fatal && !busy
+      enabled && !disabled.get() && !paused && !fatal && !busy
         .get() && !waitingRefresh && secret.nonEmpty && marketReady && accountReady,
       busy.get() || saved.nonEmpty,
       rules,
@@ -192,13 +217,22 @@ final class TradingWorker private[desk] (
       activeAt = Long.MinValue
       roleGeneration = None
       lastPlan = None
+      metadata = metadata.filter(Exchange.validMetadata(_, coin))
+      wakeAccount()
   }
 
   def observe(event: Event): Unit = synchronized {
     val now = monotonic()
     def quote(b: Book): Unit =
       if touch.forall(_.time <= b.time) then
-        Try(Touch(BigDecimal(b.bids.head.px), BigDecimal(b.asks.head.px), b.time, now)).toOption
+        Try(
+          Touch(
+            BigDecimal(b.bids.head.px),
+            BigDecimal(b.asks.head.px),
+            b.time,
+            now
+          )
+        ).toOption
           .foreach(t => touch = Some(t))
     event match
       case Event.SocketUp =>
@@ -243,28 +277,39 @@ final class TradingWorker private[desk] (
         config.sizes
       )
 
-  def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized(estimate(intent))
+  def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized(
+    estimate(intent)
+  )
 
   private def reviewCurrent(review: OrderReview): Boolean =
     val now = wall()
     now >= review.createdAt && now < review.expiresAt &&
-    BigInt(review.expiresAt) - BigInt(review.createdAt) <= TradingWorker.maximumReviewLifetimeMs &&
-    review.leverage.contains(activeLeverage) && review.marginMode.contains(activeMode)
+    BigInt(review.expiresAt) - BigInt(
+      review.createdAt
+    ) <= TradingWorker.maximumReviewLifetimeMs &&
+    review.leverage.contains(activeLeverage) && review.marginMode.contains(
+      activeMode
+    )
 
   def submitReviewed(review: OrderReview): Boolean = synchronized {
     submitPlan(review.intent, review.plan.coin, Some(review))
   }
 
-  def submit(intent: OrderIntent, expectedCoin: String): Boolean = synchronized {
-    submitPlan(intent, expectedCoin, None)
-  }
+  def submit(intent: OrderIntent, expectedCoin: String): Boolean =
+    synchronized {
+      submitPlan(intent, expectedCoin, None)
+    }
 
   private def submitPlan(
       intent: OrderIntent,
       expectedCoin: String,
       review: Option[OrderReview]
   ): Boolean =
-    if closed.get() || expectedCoin != coin || !view.ready || !busy.compareAndSet(false, true)
+    if disabled.get() || closed
+        .get() || expectedCoin != coin || !view.ready || !busy.compareAndSet(
+        false,
+        true
+      )
     then false
     else
       outcome = None
@@ -302,11 +347,20 @@ final class TradingWorker private[desk] (
               busy.set(false)
               false
 
-  private def signed(action: ujson.Value, nonce: Long, expiry: Option[Long]): ujson.Value =
+  private def signed(
+      action: ujson.Value,
+      nonce: Long,
+      expiry: Option[Long]
+  ): ujson.Value =
     val key = synchronized(secret.get)
-    val signature = OrderSigning.sign(key, action, nonce, config.network == "mainnet", expiry)
+    val signature =
+      OrderSigning.sign(key, action, nonce, config.network == "mainnet", expiry)
     val request =
-      ujson.Obj("action" -> action, "nonce" -> ujson.Num(nonce.toDouble), "signature" -> signature)
+      ujson.Obj(
+        "action" -> action,
+        "nonce" -> ujson.Num(nonce.toDouble),
+        "signature" -> signature
+      )
     expiry.foreach(t => request("expiresAfter") = ujson.Num(t.toDouble))
     request
 
@@ -329,6 +383,7 @@ final class TradingWorker private[desk] (
         accountAt = Long.MinValue
         balance = None
       }
+      wakeAccount()
     catch case _: Exception => storageFailure()
 
   private def execute(press: Press): Unit =
@@ -340,7 +395,9 @@ final class TradingWorker private[desk] (
           busy.set(saved.nonEmpty)
           message = "Wallet change paused this account or account state is unavailable"
         }
-    finally executing.set(false)
+    finally
+      executing.set(false)
+      if synchronized(waitingRefresh) then wakeAccount()
 
   private def executeOrder(press: Press): Unit =
     val p = try
@@ -357,13 +414,18 @@ final class TradingWorker private[desk] (
       signed(Exchange.action(p), p.nonce, Some(p.expiresAfter))
     }
     val canSend = synchronized {
-      !closed.get() && !fatal && press.generation == generation && press.plan.coin == coin &&
+      !disabled.get() && !closed
+        .get() && !fatal && press.generation == generation && press.plan.coin == coin &&
       marketReady && accountReady && fresh(press.quoteAt, config.quoteAgeMs) &&
-      fresh(press.bookAt, config.quoteAgeMs) && fresh(press.accountAt, config.positionAgeMs) &&
+      fresh(press.bookAt, config.quoteAgeMs) && fresh(
+        press.accountAt,
+        config.positionAgeMs
+      ) &&
       fresh(press.activeAt, config.positionAgeMs) &&
       press.leverage == activeLeverage && press.marginMode == activeMode &&
       press.review.forall(r => reviewCurrent(r) && estimate(r.intent).contains(r.plan)) &&
-      press.plan.quantity <= maximums(if press.plan.side == Side.Buy then 0 else 1) &&
+      press.plan.quantity <= maximums(if press.plan.side == Side.Buy then 0
+      else 1) &&
       wall() < p.expiresAfter
     }
     if !canSend || request.isFailure then complete(p, p.coin + " canceled before sending")
@@ -371,7 +433,8 @@ final class TradingWorker private[desk] (
       val response = Try(exchange.post(request.get)).toOption.flatten
       Exchange.outcome(response, p) match
         case Some(text) => complete(p, text)
-        case None       => synchronized { message = p.coin + " waiting for order result" }
+        case None       =>
+          synchronized { message = p.coin + " waiting for order result" }
 
   private def initializeSigning(): Unit =
     if journal.isEmpty then
@@ -385,7 +448,10 @@ final class TradingWorker private[desk] (
             message = saved.get.coin + " waiting for order result"
         }
       catch case _: Exception => storageFailure()
-    if !accountPaused() && !synchronized(fatal || saved.nonEmpty || secret.nonEmpty) then
+    if !accountPaused() && !synchronized(
+        fatal || saved.nonEmpty || secret.nonEmpty
+      )
+    then
       var loaded = Array.emptyByteArray
       try
         loaded = loadKey()
@@ -400,11 +466,18 @@ final class TradingWorker private[desk] (
             message = "Protected signing key is unavailable or differs"
           }
 
-  private def receiveActive(g: Long, current: String, value: Option[ujson.Value]): Unit =
+  private def receiveActive(
+      g: Long,
+      current: String,
+      value: Option[ujson.Value],
+      at: Long
+  ): Unit =
     val parsed = value.flatMap(active =>
       Try {
         require(
-          active("user").str.toLowerCase(java.util.Locale.ROOT) == config.owner.get && active(
+          active("user").str.toLowerCase(
+            java.util.Locale.ROOT
+          ) == config.owner.get && active(
             "coin"
           ).str == current
         )
@@ -412,7 +485,8 @@ final class TradingWorker private[desk] (
         require(mode == "cross" || mode == "isolated")
         val leverage = Exchange.integer(active("leverage")("value"))
         val limits = active("maxTradeSzs").arr.toVector.map { v =>
-          if v.isInstanceOf[ujson.Str] then BigDecimal(v.str) else BigDecimal(v.num.toString)
+          if v.isInstanceOf[ujson.Str] then BigDecimal(v.str)
+          else BigDecimal(v.num.toString)
         }
         require(limits.size == 2 && limits.forall(_ >= 0))
         (mode, leverage, limits)
@@ -426,31 +500,47 @@ final class TradingWorker private[desk] (
             activeLeverage = leverage
             leverageReady = rules.exists(m => leverage >= 1 && leverage <= m.maxLeverage)
             maximums = limits
-            activeAt = monotonic()
+            activeAt = at
           case None =>
             leverageReady = false
             activeAt = Long.MinValue
-            roleGeneration = None
     }
 
   private def refresh(): Unit =
     val (current, g, version) = synchronized((coin, generation, accountVersion))
     val startedAt = monotonic()
     try
-      if metadata.isEmpty || !fresh(metadataAt, 60000L) then
-        metadata = Some(exchange.info(ujson.Obj("type" -> "meta")).get)
-        metadataAt = monotonic()
-      val matched = Try(Exchange.market(metadata.get, current)).toOption
+      val cached = synchronized {
+        metadata.filter(_ => fresh(metadataAt, 60000L)).filter(Exchange.validMetadata(_, current))
+      }
+      val accepted = cached.getOrElse {
+        val value = exchange
+          .info(ujson.Obj("type" -> "meta"))
+          .filter(Exchange.validMetadata(_, current))
+          .get
+        synchronized {
+          if generation == g then
+            metadata = Some(value)
+            metadataAt = monotonic()
+        }
+        value
+      }
+      val matched = Try(Exchange.market(accepted, current)).toOption
       synchronized { if generation == g then rules = matched }
       require(matched.nonEmpty)
       if config.owner.nonEmpty then
         if enabled then
           require(config.configured, "owner")
-          if synchronized(!roleGeneration.contains(g) || !fresh(roleAt, 60000L)) then
+          if synchronized(!roleGeneration.contains(g) || !fresh(roleAt, 60000L))
+          then
             if fresh(failedRoleAt, 10000L) then return
             try
               val role =
-                exchange.info(ujson.Obj("type" -> "userRole", "user" -> config.agent.get)).get
+                exchange
+                  .info(
+                    ujson.Obj("type" -> "userRole", "user" -> config.agent.get)
+                  )
+                  .get
               require(
                 role("role").str == "agent" && role("data")("user").str
                   .toLowerCase(java.util.Locale.ROOT) == config.owner.get,
@@ -466,31 +556,52 @@ final class TradingWorker private[desk] (
                 roleAt = startedAt
             }
           initializeSigning()
-        exchange.watch(current, config.owner.get, g, data => receiveActive(g, current, data))
+        exchange.watchTimed(
+          current,
+          config.owner.get,
+          g,
+          monotonic,
+          (data, at) => receiveActive(g, current, data, at)
+        )
+        val accountStartedAt = monotonic()
         val account =
-          exchange.info(ujson.Obj("type" -> "clearinghouseState", "user" -> config.owner.get)).get
+          exchange
+            .info(
+              ujson
+                .Obj("type" -> "clearinghouseState", "user" -> config.owner.get)
+            )
+            .get
         val positions = account("assetPositions").arr.toVector
           .map(_("position"))
           .filter(_("coin").str == current)
         require(positions.size <= 1)
         val quantity =
-          positions.headOption.map(p => BigDecimal(p("szi").str)).getOrElse(BigDecimal(0))
+          positions.headOption
+            .map(p => BigDecimal(p("szi").str))
+            .getOrElse(BigDecimal(0))
         synchronized {
           if generation == g && version == accountVersion then
             position = Some(quantity)
             portfolio = PortfolioView.live(account, current, None)
             marginCash = PortfolioView.marginCash(account)
-            accountAt = startedAt
-            if waitingRefresh && !fatal && saved.isEmpty && !executing.get() then
+            accountAt = accountStartedAt
+            if waitingRefresh && !fatal && saved.isEmpty && !executing.get()
+            then
               waitingRefresh = false
               busy.set(false)
-            if message == "Preparing trading" && leverageReady && secret.nonEmpty then
-              message = "Ready"
+            if message == "Preparing trading" && leverageReady && secret.nonEmpty
+            then message = "Ready"
         }
-        val unresolved = synchronized(if !fatal && !executing.get() then saved else None)
+        val unresolved = synchronized(
+          if !fatal && !executing.get() then saved else None
+        )
         unresolved.foreach { p =>
           val reply = exchange.info(
-            ujson.Obj("type" -> "orderStatus", "user" -> config.owner.get, "oid" -> p.id)
+            ujson.Obj(
+              "type" -> "orderStatus",
+              "user" -> config.owner.get,
+              "oid" -> p.id
+            )
           )
           Exchange.recovered(reply, p).foreach(text => complete(p, text))
         }
@@ -501,9 +612,10 @@ final class TradingWorker private[desk] (
           accountAt = Long.MinValue
           leverageReady = false
           if !fatal && saved.isEmpty && !busy.get() then
-            message = if Option(error.getMessage).exists(_.endsWith(": owner")) then
-              "Signer does not match the configured owner"
-            else "Waiting for market or account data"
+            message =
+              if Option(error.getMessage).exists(_.endsWith(": owner")) then
+                "Signer does not match the configured owner"
+              else "Waiting for market or account data"
         }
 
   // Optional display reads run separately. Their failure or delay cannot hold
@@ -512,16 +624,27 @@ final class TradingWorker private[desk] (
     val at = monotonic()
     val version = synchronized(accountVersion)
     val value = Try {
-      if !abstraction.exists(m => fresh(m._2, 60000L)) && !fresh(abstractionAttemptAt, 10000L) then
+      if !abstraction.exists(m => fresh(m._2, 60000L)) && !fresh(
+          abstractionAttemptAt,
+          10000L
+        )
+      then
         abstractionAttemptAt = at
         abstraction = exchange
-          .info(ujson.Obj("type" -> "userAbstraction", "user" -> config.owner.get))
+          .info(
+            ujson.Obj("type" -> "userAbstraction", "user" -> config.owner.get)
+          )
           .flatMap(_.strOpt)
           .map(_ -> at)
       val mode = abstraction.filter(m => fresh(m._2, 60000L)).get._1
       val cash = if mode == "unifiedAccount" || mode == "portfolioMargin" then
         exchange
-          .info(ujson.Obj("type" -> "spotClearinghouseState", "user" -> config.owner.get))
+          .info(
+            ujson.Obj(
+              "type" -> "spotClearinghouseState",
+              "user" -> config.owner.get
+            )
+          )
           .flatMap(PortfolioView.usdcCash)
       else None
       (mode, cash, at)
@@ -560,7 +683,7 @@ final class TradingWorker private[desk] (
           if prepared then
             while !closed.get() do
               refresh()
-              Thread.sleep(1000)
+              val _ = refreshWake.poll(1000L, TimeUnit.MILLISECONDS)
         }
       ) ++ config.owner.toVector.map { _ =>
         daemon("balance-display") {
@@ -571,11 +694,27 @@ final class TradingWorker private[desk] (
       }
       workers.foreach(_.start())
 
+  private[desk] def disable(): Unit = disabled.set(true)
+
+  private[desk] def isRetired: Boolean = retired.get()
+
+  private def finishRetirement(): Unit = synchronized {
+    if !retired.get() && workers.forall(!_.isAlive) then
+      secret.foreach(key => java.util.Arrays.fill(key, 0.toByte))
+      secret = None
+      journal.foreach(_.close())
+      retired.set(true)
+  }
+
+  private[desk] def awaitRetirement(): Unit =
+    require(closed.get())
+    workers.foreach(_.join())
+    finishRetirement()
+
   def close(): Unit =
+    disable()
     if closed.compareAndSet(false, true) then
       workers.foreach(_.interrupt())
       exchange.close()
       workers.foreach(_.join(4000))
-      if workers.forall(!_.isAlive) then
-        synchronized { secret.foreach(key => java.util.Arrays.fill(key, 0.toByte)); secret = None }
-        journal.foreach(_.close())
+      finishRetirement()

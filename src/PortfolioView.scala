@@ -7,7 +7,8 @@ final case class PortfolioView(
     stables: Option[BigDecimal] = None,
     net: Option[BigDecimal] = None,
     entry: Option[BigDecimal] = None,
-    liquidation: Option[BigDecimal] = None
+    liquidation: Option[BigDecimal] = None,
+    openProfit: Option[BigDecimal] = None
 ):
   def markerRows(axis: Option[Axis], mode: ChartMode, width: Int, style: Style): Map[Int, String] =
     axis.fold(Map.empty[Int, String]) { a =>
@@ -51,12 +52,18 @@ object PortfolioView:
           account.cash.bigDecimal.add(value.bigDecimal).subtract(account.deposit.bigDecimal)
         )
       )
+    val open = held.fold(Option(BigDecimal(0)))(p =>
+      price.map(px =>
+        BigDecimal(px.bigDecimal.subtract(p.entry.bigDecimal).multiply(p.quantity.bigDecimal))
+      )
+    )
     PortfolioView(
       exposure,
       Some(account.cash),
       net,
       held.map(_.entry),
-      None
+      None,
+      open
     )
 
   private def decimal(value: ujson.Value): Option[BigDecimal] =
@@ -66,6 +73,9 @@ object PortfolioView:
 
   def live(account: ujson.Value, coin: String, cash: Option[BigDecimal]): PortfolioView =
     val positions = Try(account("assetPositions").arr.toVector.map(_("position"))).toOption
+      .filter(
+        _.forall(p => p.objOpt.flatMap(_.get("coin")).flatMap(_.strOpt).exists(_.trim.nonEmpty))
+      )
     val selected =
       positions.map(_.filter(p => p.objOpt.flatMap(_.get("coin")).contains(ujson.Str(coin))))
     val held = selected.filter(_.size == 1).flatMap(_.headOption)
@@ -82,7 +92,9 @@ object PortfolioView:
       cash,
       None,
       if flat then None else held.flatMap(field(_, "entryPx")).filter(_ > 0),
-      if flat then None else held.flatMap(field(_, "liquidationPx")).filter(_ > 0)
+      if flat then None else held.flatMap(field(_, "liquidationPx")).filter(_ > 0),
+      if flat then Some(BigDecimal(0))
+      else quantity.flatMap(_ => held.flatMap(field(_, "unrealizedPnl")))
     )
 
   def marginCash(account: ujson.Value): Option[BigDecimal] =

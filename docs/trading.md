@@ -106,10 +106,17 @@ Test network access uses `"network": "testnet"`. Public feeds and the live worke
 use the same network. An account, delegation, funding and any real order remain
 separate user actions.
 
-Observed leverage must be a positive integer within the market's limit. Its
+XMR orders require observed leverage of five times. Select that setting at the venue.
+Desk preserves the observed margin mode and never signs a leverage change.
+Other markets require positive integer leverage within their market's limit. The
 margin mode and leverage are captured with each order and rechecked before sending.
 Changing them at the venue invalidates a captured order. Missing or stale position
 data remains unavailable and is never interpreted as a flat account.
+
+The worker dates account freshness from the start of each account read and requests
+another read immediately after an order completes. Quiet active-account data is
+refreshed through one outstanding read on the existing account connection. Late,
+wrong-market or replaced-connection replies cannot renew the selected account.
 
 The workspace uses immediate orders with the selected value and a price limit
 no more than 0.1 percent from the captured best quote. Available depth can produce

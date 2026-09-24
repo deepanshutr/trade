@@ -113,8 +113,34 @@ final class Feed(
   private var historySuccess = Map.empty[(String, String), Long]
   private var historyInFlight = Set.empty[(String, String)]
   @volatile private var marketGeneration = 0L
+  private var selectionGeneration = 0L
   private val historyWakeup = new ArrayBlockingQueue[java.lang.Boolean](1)
   private val sendLock = new Object
+
+  private final class StartupLookup(val selection: (String, Long)):
+    val done = new CountDownLatch(1)
+    @volatile var result = Option.empty[Either[String, Unit]]
+    val thread = new Thread(
+      () =>
+        try
+          val found = checkMarket(selection._1)
+          Feed.this.synchronized {
+            result = Some(found)
+            if relevant && found == Left(Feed.unknownMarket) then
+              current.foreach(c => end(c, Feed.unknownMarket))
+              connectionStatus = Feed.unknownMarket
+              push(Event.MarketUnavailable(selection._1, Feed.unknownMarket))
+          }
+        catch case _: InterruptedException => ()
+        finally done.countDown(),
+      "market-check"
+    )
+    thread.setDaemon(true)
+    def relevant: Boolean = selection == ((coin, selectionGeneration))
+    def permitsConnection: Boolean = !relevant || !result.contains(Left(Feed.unknownMarket))
+    def close(): Unit =
+      thread.interrupt()
+      thread.join(5000L)
 
   private val references = referenceCoins.distinct
   require(references.size <= 3, "choose at most three reference markets")
@@ -138,14 +164,18 @@ final class Feed(
     val socket = synchronized { if current.contains(c) then c.socket else None }
     socket.foreach(s => Try(s.send(text)).failed.foreach(e => end(c, Feed.failure(e))))
 
-  def connectOnce(): Boolean =
+  def connectOnce(permitted: () => Boolean = () => true): Boolean =
     val c = new Connection
-    synchronized {
-      current.foreach(c => end(c))
-      current = Some(c)
-      lastHealthy = false
-      connectionStatus = "Connecting"
+    val begin = synchronized {
+      if !permitted() then false
+      else
+        current.foreach(c => end(c))
+        current = Some(c)
+        lastHealthy = false
+        connectionStatus = "Connecting"
+        true
     }
+    if !begin then return false
     def receive(text: String): Unit = synchronized {
       if current.contains(c) && c.socket.nonEmpty then
         Events.parse(text).foreach { event =>
@@ -185,30 +215,31 @@ final class Feed(
 
   def runForever(sleep: Long => Unit): Unit =
     var attempt = 0
-    var verified = Option.empty[String]
-    while true do
-      val selected = coin
-      val unknown = if verified.contains(selected) then false
-      else
-        checkMarket(selected) match
-          case Right(_) =>
-            verified = Some(selected)
-            false
-          case Left(reason) if reason == Feed.unknownMarket =>
-            synchronized {
-              if coin == selected then
-                connectionStatus = reason
-                push(Event.MarketUnavailable(selected, reason))
-            }
-            true
-          // A public lookup outage must not disable the independent socket path.
-          case _ => false
-      if !unknown then
-        val _ = connectOnce()
-      attempt = if synchronized(lastHealthy) then 1 else (attempt + 1).min(4)
-      val delay = Feed.backoffMs(attempt)
-      synchronized { connectionStatus = s"$connectionStatus. Retrying in ${delay / 1000}s" }
-      sleep(delay)
+    var verified = Option.empty[(String, Long)]
+    var lookup = Option.empty[StartupLookup]
+    try
+      while true do
+        val selected = synchronized((coin, selectionGeneration))
+        if !verified.contains(selected) then
+          val replace = lookup.forall(l =>
+            !l.thread.isAlive && (l.selection != selected || l.result.exists(_.isLeft))
+          )
+          if replace then
+            val next = new StartupLookup(selected)
+            lookup = Some(next)
+            next.thread.start()
+          lookup.filter(_.selection == selected).foreach { check =>
+            val _ = check.done.await(1000L, TimeUnit.MILLISECONDS)
+            if check.result.contains(Right(())) then verified = Some(selected)
+          }
+        // A slow public lookup must not hold the independent socket path.
+        // Its eventual rejection still closes only the matching selection.
+        val _ = connectOnce(() => lookup.forall(_.permitsConnection))
+        attempt = if synchronized(lastHealthy) then 1 else (attempt + 1).min(4)
+        val delay = Feed.backoffMs(attempt)
+        synchronized { connectionStatus = s"$connectionStatus. Retrying in ${delay / 1000}s" }
+        sleep(delay)
+    finally lookup.foreach(_.close())
 
   def heartbeat(): Unit = sendLock.synchronized {
     val send = synchronized {
@@ -327,6 +358,7 @@ final class Feed(
         val old = coin
         synchronized {
           coin = newCoin
+          selectionGeneration += 1L
           marketGeneration += 1L
           historyAt = historyAt.filterNot(_._1._1 == newCoin)
           historySuccess = historySuccess.filterNot(_._1._1 == newCoin)

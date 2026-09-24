@@ -6,6 +6,16 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReferenc
 import scala.util.Try
 
 object WorkspaceApp:
+  private[desk] def collectExecution(
+      inputLock: Object,
+      controller: DeskController,
+      context: () => (Snapshot, TradingView)
+  ): (Snapshot, TradingView) = inputLock.synchronized {
+    val result = context()
+    controller.orders(result._2)
+    result
+  }
+
   private[desk] def drawFrame(
       market: Snapshot,
       view: TradingView,
@@ -354,6 +364,7 @@ object WorkspaceApp:
               command.foreach(emit)
             Thread.sleep(10L)
       }
+      val terminal = new Term.Writer()
       val zone = java.time.ZoneId.systemDefault()
       val style = Main.style(args, sys.env)
       var size = inputLock.synchronized {
@@ -377,10 +388,10 @@ object WorkspaceApp:
               size = measured
               Main.sizeEvent((state.get().cols, state.get().rows), size).foreach(queue.put)
           }
-          val market = state.get()
-          val execution = worker.view
-          controller.orders(execution)
+          val (market, execution) =
+            collectExecution(inputLock, controller, () => (state.get(), worker.view))
           val view = execution.forMarket(market.coin)
+          diagnostics.execution(controller.panel.mode, view)
           if !historyFailureLogged && controller.panel.historyFailure.nonEmpty then
             diagnostics.failure(DiagnosticPart.History, new java.io.IOException())
             historyFailureLogged = true
@@ -411,7 +422,7 @@ object WorkspaceApp:
             lockWait = System.nanoTime() - waiting
             controller.invalidate()
             val writing = System.nanoTime()
-            Term.write(frame.lines)
+            terminal.write(frame.lines, (frame.cols, frame.rows))
             terminalTime = System.nanoTime() - writing
             if state.get().coin == frame.coin && actualSize.get() == (frame.cols, frame.rows) then
               controller.publish(frame)

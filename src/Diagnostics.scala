@@ -115,6 +115,7 @@ final class Diagnostics private[desk] (
   private var healthAt = 0L
   private var frameStalled = false
   private var switchStalled = false
+  private var executionSeen = Option.empty[((String, String), Long, Long)]
   private val writer = new Thread(() => run(), "desk-diagnostics")
   writer.setDaemon(true)
 
@@ -142,6 +143,46 @@ final class Diagnostics private[desk] (
   def failure(part: DiagnosticPart, error: Throwable): Unit =
     val name = error.getClass.getSimpleName.filter(c => c.isLetterOrDigit || c == '_').take(80)
     emit("exception", "part" -> part.toString, "class" -> name)
+
+  def execution(mode: String, view: TradingView): Unit = synchronized {
+    val kind = mode match
+      case "PAPER" => "simulated"
+      case "LIVE"  => "live"
+      case "VIEW"  => "view"
+      case _       => "unknown"
+    val state = if kind == "view" then "view"
+    else if view.pending then "pending"
+    else if view.ready then "ready"
+    else
+      view.block match
+        case Some("Paper waiting for market details" | "waiting for market data") => "market"
+        case Some("account data stale")                                           => "account"
+        case Some("Set XMR leverage to 5x")                                       => "leverage"
+        case Some("Paper storage unavailable. Restart to recover")                => "storage"
+        case Some(
+              "Reconnecting. Waiting for fresh prices" | "Paper waiting for selected-market depth" |
+              "Paper quote invalid. Waiting for prices" |
+              "Paper prices stale. Waiting for fresh depth" |
+              "Paper depth behind quote. Waiting for depth" | "connection disconnected" |
+              "waiting for selected depth" | "invalid selected quote" | "selected depth stale"
+            ) =>
+          "prices"
+        case _ => "blocked"
+    val key = (kind, state)
+    val elapsed = monotonic()
+    val changed = executionSeen.forall(_._1 != key)
+    val began = if changed then elapsed else executionSeen.get._2
+    if changed || executionSeen.exists(s => elapsed - s._3 >= 30000L) then
+      emit(
+        "execution",
+        "mode" -> kind,
+        "state" -> state,
+        "state_ms" -> (elapsed - began).max(0L),
+        "previous_ms" -> (if changed then executionSeen.fold(0L)(s => (elapsed - s._2).max(0L))
+                          else 0L)
+      )
+      executionSeen = Some((key, began, elapsed))
+  }
 
   def folded(before: Snapshot, event: Event, after: Snapshot): Unit = synchronized {
     if selected.isEmpty then selected = before.coin

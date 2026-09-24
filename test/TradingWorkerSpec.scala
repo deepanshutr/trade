@@ -25,7 +25,8 @@ class TradingWorkerSpec extends munit.FunSuite:
       autoStart: Boolean = true,
       orderPermission: (() => Unit) => Unit = run => run(),
       accountPaused: () => Boolean = () => false,
-      balanceMode: String = "disabled"
+      balanceMode: String = "disabled",
+      beforeAccountRead: Int => Unit = _ => ()
   ):
     private val key = Array.fill[Byte](32)(1)
     val agent = OrderSigning.address(key)
@@ -98,8 +99,16 @@ class TradingWorkerSpec extends munit.FunSuite:
               Some(
                 ujson.Obj(
                   "universe" -> ujson.Arr(
-                    ujson.Obj("name" -> "XMR", "szDecimals" -> 3, "maxLeverage" -> marketMaximum),
-                    ujson.Obj("name" -> "BTC", "szDecimals" -> 5, "maxLeverage" -> 40)
+                    ujson.Obj(
+                      "name" -> "XMR",
+                      "szDecimals" -> 3,
+                      "maxLeverage" -> marketMaximum
+                    ),
+                    ujson.Obj(
+                      "name" -> "BTC",
+                      "szDecimals" -> 5,
+                      "maxLeverage" -> 40
+                    )
                   )
                 )
               )
@@ -108,11 +117,13 @@ class TradingWorkerSpec extends munit.FunSuite:
               Some(
                 ujson.Obj(
                   "role" -> "agent",
-                  "data" -> ujson.Obj("user" -> (if roleMatches then owner else agent))
+                  "data" -> ujson.Obj("user" -> (if roleMatches then owner
+                                                 else agent))
                 )
               )
             case "clearinghouseState" =>
-              coreReads.incrementAndGet()
+              val read = coreReads.incrementAndGet()
+              beforeAccountRead(read)
               val captured = position
               if holdAccount then
                 holdAccount = false
@@ -126,7 +137,9 @@ class TradingWorkerSpec extends munit.FunSuite:
                       "position" -> ujson.Obj(
                         "coin" -> "XMR",
                         "szi" -> captured,
-                        "positionValue" -> (BigDecimal(captured).abs * 100).toString,
+                        "positionValue" -> (BigDecimal(
+                          captured
+                        ).abs * 100).toString,
                         "entryPx" -> "100",
                         "liquidationPx" -> "50",
                         "unrealizedPnl" -> "0"
@@ -153,7 +166,11 @@ class TradingWorkerSpec extends munit.FunSuite:
                 Some(
                   ujson.Obj(
                     "balances" -> ujson.Arr(
-                      ujson.Obj("coin" -> "USDC", "token" -> 0, "total" -> captured)
+                      ujson.Obj(
+                        "coin" -> "USDC",
+                        "token" -> 0,
+                        "total" -> captured
+                      )
                     )
                   )
                 )
@@ -192,7 +209,12 @@ class TradingWorkerSpec extends munit.FunSuite:
           else
             leverage = 5
             sendActive()
-            Some(ujson.Obj("status" -> "ok", "response" -> ujson.Obj("type" -> "default")))
+            Some(
+              ujson.Obj(
+                "status" -> "ok",
+                "response" -> ujson.Obj("type" -> "default")
+              )
+            )
         else if lose then None
         else
           Some(
@@ -204,19 +226,31 @@ class TradingWorkerSpec extends munit.FunSuite:
                   "statuses" -> ujson.Arr(
                     ujson.Obj(
                       "filled" ->
-                        ujson.Obj("totalSz" -> "1", "avgPx" -> "100", "oid" -> 9)
+                        ujson.Obj(
+                          "totalSz" -> "1",
+                          "avgPx" -> "100",
+                          "oid" -> 9
+                        )
                     )
                   )
                 )
               )
             )
           )
-    def fresh(worker: TradingWorker, coin: String = "XMR", time: Long = 1000L): Unit =
+    def fresh(
+        worker: TradingWorker,
+        coin: String = "XMR",
+        time: Long = 1000L
+    ): Unit =
       worker.observe(Event.SocketUp)
       worker.observe(
         Event.BookUpdate(
           coin,
-          Book(Vector(Level("99.99", "20", 1)), Vector(Level("100", "20", 1)), time),
+          Book(
+            Vector(Level("99.99", "20", 1)),
+            Vector(Level("100", "20", 1)),
+            time
+          ),
           true
         )
       )
@@ -231,7 +265,8 @@ class TradingWorkerSpec extends munit.FunSuite:
       ,
       () =>
         journalOpens.incrementAndGet()
-        OrderJournal.open(directory, config.identity, beforeReplace, afterReplace)
+        OrderJournal
+          .open(directory, config.identity, beforeReplace, afterReplace)
       ,
       () => clock.get(),
       () => clock.get(),
@@ -288,7 +323,10 @@ class TradingWorkerSpec extends munit.FunSuite:
       )
       assertEquals(f.worker.view.portfolio.stables, None)
       f.spotRelease.countDown()
-      assert(f.secondSpotEntered.await(3, TimeUnit.SECONDS), "replacement read did not start")
+      assert(
+        f.secondSpotEntered.await(3, TimeUnit.SECONDS),
+        "replacement read did not start"
+      )
       assertEquals(
         f.worker.view.portfolio.stables,
         None,
@@ -304,11 +342,15 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("expensive account-mode reads are cached while cheap balances and core accounts refresh") {
+  test(
+    "expensive account-mode reads are cached while cheap balances and core accounts refresh"
+  ) {
     val f = new Fixture(balanceMode = "unifiedAccount")
     try
       f.ready()
-      waitFor("optional balance did not refresh three times")(f.spotReads.get() >= 3)
+      waitFor("optional balance did not refresh three times")(
+        f.spotReads.get() >= 3
+      )
       assertEquals(f.modeReads.get(), 1)
       assert(f.coreReads.get() >= 2)
       f.clock.addAndGet(60001L)
@@ -316,7 +358,9 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("undocumented or failed balance modes remain unknown without blocking core readiness") {
+  test(
+    "undocumented or failed balance modes remain unknown without blocking core readiness"
+  ) {
     val f = new Fixture(balanceMode = "default")
     try
       f.ready()
@@ -325,12 +369,18 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.balanceFailure = true
       f.clock.addAndGet(60001L)
       f.fresh(f.worker, time = 2000L)
-      waitFor("failed optional request did not complete")(f.modeReads.get() == 2)
+      waitFor("failed optional request did not complete")(
+        f.modeReads.get() == 2
+      )
       f.ready()
       assertEquals(f.worker.view.portfolio.stables, None)
       f.clock.addAndGet(10000L)
       Thread.sleep(1200L)
-      assertEquals(f.modeReads.get(), 2, "failed mode lookup retried inside its ten-second delay")
+      assertEquals(
+        f.modeReads.get(),
+        2,
+        "failed mode lookup retried inside its ten-second delay"
+      )
       f.clock.incrementAndGet()
       waitFor("failed mode lookup was never retried")(f.modeReads.get() == 3)
     finally f.close()
@@ -358,7 +408,12 @@ class TradingWorkerSpec extends munit.FunSuite:
       val current = f.worker.view
       assert(!current.ready)
       assert(current.block.exists(_.contains("Wallet change")))
-      assert(TradingScreen.rows(current, None, f.worker.preview).mkString.contains("Wallet change"))
+      assert(
+        TradingScreen
+          .rows(current, None, f.worker.preview)
+          .mkString
+          .contains("Wallet change")
+      )
       assert(!f.worker.submit(buy, "XMR"))
       assertEquals(f.posts.get(), 0)
       assertEquals(f.loads.get(), 1)
@@ -367,7 +422,9 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("a durable pause which wins before the gate prevents reservation and posting") {
+  test(
+    "a durable pause which wins before the gate prevents reservation and posting"
+  ) {
     val root = Files.createTempDirectory("desk-worker-account-")
     val owner = "0x" + "2" * 40
     val entered = new CountDownLatch(1)
@@ -386,9 +443,14 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.ready()
       assert(f.worker.submit(buy, "XMR"))
       assert(entered.await(3, TimeUnit.SECONDS))
-      Files.writeString(root.resolve("mainnet-" + owner.drop(2) + ".paused"), "paused")
+      Files.writeString(
+        root.resolve("mainnet-" + owner.drop(2) + ".paused"),
+        "paused"
+      )
       release.countDown()
-      waitFor("pause was not shown")(f.worker.view.message.contains("Wallet change"))
+      waitFor("pause was not shown")(
+        f.worker.view.message.contains("Wallet change")
+      )
       assertEquals(writes.get(), 0)
       assertEquals(f.posts.get(), 0)
       assert(!f.worker.view.pending)
@@ -396,7 +458,10 @@ class TradingWorkerSpec extends munit.FunSuite:
       release.countDown()
       f.close()
       val paths = Files.walk(root)
-      try paths.sorted(java.util.Comparator.reverseOrder()).forEach(Files.deleteIfExists(_))
+      try
+        paths
+          .sorted(java.util.Comparator.reverseOrder())
+          .forEach(Files.deleteIfExists(_))
       finally paths.close()
   }
 
@@ -429,7 +494,10 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally
       f.close()
       val paths = Files.walk(root)
-      try paths.sorted(java.util.Comparator.reverseOrder()).forEach(Files.deleteIfExists(_))
+      try
+        paths
+          .sorted(java.util.Comparator.reverseOrder())
+          .forEach(Files.deleteIfExists(_))
       finally paths.close()
   }
 
@@ -443,7 +511,9 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.ready()
       assert(f.worker.submit(buy, "XMR"))
       waitFor("account lock was not checked")(attempts.get() == 1)
-      waitFor("pause was not shown")(f.worker.view.message.contains("Wallet change"))
+      waitFor("pause was not shown")(
+        f.worker.view.message.contains("Wallet change")
+      )
       assertEquals(f.posts.get(), 0)
       assert(!f.worker.view.pending)
     finally f.close()
@@ -465,7 +535,9 @@ class TradingWorkerSpec extends munit.FunSuite:
   test("a different owner never reaches the protected key") {
     val f = new Fixture(roleMatches = false)
     try
-      waitFor("role failure was not shown")(f.worker.view.message.contains("owner"))
+      waitFor("role failure was not shown")(
+        f.worker.view.message.contains("owner")
+      )
       assert(!f.worker.view.ready)
       assertEquals(f.loads.get(), 0)
       Thread.sleep(1200)
@@ -473,14 +545,25 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("other market events, pongs and top quotes do not refresh old exact depth") {
+  test(
+    "other market events, pongs and top quotes do not refresh old exact depth"
+  ) {
     val f = new Fixture()
     try
       f.ready()
       f.clock.addAndGet(1001)
       f.worker.observe(Event.Pong)
-      f.worker.observe(Event.BboUpdate("BTC", Level("1", "1", 1), Level("2", "1", 1), 2001))
-      f.worker.observe(Event.BboUpdate("XMR", Level("99.99", "20", 1), Level("100", "20", 1), 2001))
+      f.worker.observe(
+        Event.BboUpdate("BTC", Level("1", "1", 1), Level("2", "1", 1), 2001)
+      )
+      f.worker.observe(
+        Event.BboUpdate(
+          "XMR",
+          Level("99.99", "20", 1),
+          Level("100", "20", 1),
+          2001
+        )
+      )
       assert(!f.worker.view.ready)
       assertEquals(f.worker.view.block, Some("selected depth stale"))
       assert(!f.worker.submit(buy, "XMR"))
@@ -495,7 +578,11 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.worker.observe(
         Event.BookUpdate(
           "XMR",
-          Book(Vector(Level("99.99", "20", 1)), Vector(Level("100", "1", 1)), 2000),
+          Book(
+            Vector(Level("99.99", "20", 1)),
+            Vector(Level("100", "1", 1)),
+            2000
+          ),
           true
         )
       )
@@ -510,17 +597,23 @@ class TradingWorkerSpec extends munit.FunSuite:
           false
         )
       )
-      assertEquals(f.worker.preview(buy).toOption.get.estimatedQuantity, BigDecimal("5"))
+      assertEquals(
+        f.worker.preview(buy).toOption.get.estimatedQuantity,
+        BigDecimal("5")
+      )
     finally f.close()
   }
 
-  test("held posts do not block observations, market selection or the production fold") {
+  test(
+    "held posts do not block observations, market selection or the production fold"
+  ) {
     val f = new Fixture()
     val queue = new LinkedBlockingQueue[Event]()
     val state = new AtomicReference(Snapshot.initial("XMR", 10000))
     val feed = new Feed(
       new Connector {
-        def connect(t: String => Unit, c: () => Unit): Socket = throw new IllegalStateException()
+        def connect(t: String => Unit, c: () => Unit): Socket =
+          throw new IllegalStateException()
       },
       new Rest { def post(body: String): Option[String] = Some("[]") },
       queue,
@@ -548,14 +641,18 @@ class TradingWorkerSpec extends munit.FunSuite:
       threads.foreach(_.join(3000))
   }
 
-  test("a lost reply persists across restart and unknown recovery never resubmits") {
+  test(
+    "a lost reply persists across restart and unknown recovery never resubmits"
+  ) {
     val f = new Fixture()
     var restarted = Option.empty[TradingWorker]
     try
       f.ready()
       f.lose = true
       assert(f.worker.submit(buy, "XMR"))
-      waitFor("lost reply did not become unresolved")(f.worker.view.message.contains("waiting"))
+      waitFor("lost reply did not become unresolved")(
+        f.worker.view.message.contains("waiting")
+      )
       assert(!f.worker.submit(buy, "XMR"))
       f.worker.close()
       val again = f.create()
@@ -571,13 +668,17 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.close()
   }
 
-  test("partial response size is shown but position comes from a later account read") {
+  test(
+    "partial response size is shown but position comes from a later account read"
+  ) {
     val f = new Fixture()
     try
       f.ready()
       f.position = "7"
       assert(f.worker.submit(buy, "XMR"))
-      waitFor("partial response not shown")(f.worker.view.message.contains("filled 1 at 100"))
+      waitFor("partial response not shown")(
+        f.worker.view.message.contains("filled 1 at 100")
+      )
       waitFor("account position was not refreshed")(f.worker.view.ready)
       assertEquals(f.worker.view.position, Some(BigDecimal("7")))
       assertEquals(f.posts.get(), 1)
@@ -600,14 +701,18 @@ class TradingWorkerSpec extends munit.FunSuite:
       assert(entered.await(3, TimeUnit.SECONDS))
       f.worker.select("BTC")
       release.countDown()
-      waitFor("press was not canceled")(f.worker.view.message.contains("canceled before sending"))
+      waitFor("press was not canceled")(
+        f.worker.view.message.contains("canceled before sending")
+      )
       assertEquals(f.posts.get(), 0)
     finally
       release.countDown()
       f.close()
   }
 
-  test("reservation failure stays blocked even without an in-memory pending record") {
+  test(
+    "reservation failure stays blocked even without an in-memory pending record"
+  ) {
     val f = new Fixture(beforeReplace = () => throw new java.io.IOException())
     try
       f.ready()
@@ -638,7 +743,9 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("completion storage failure cannot be unlocked by a later account poll") {
+  test(
+    "completion storage failure cannot be unlocked by a later account poll"
+  ) {
     val writes = new AtomicInteger()
     val f = new Fixture(beforeReplace =
       () => if writes.incrementAndGet() == 2 then throw new java.io.IOException()
@@ -656,21 +763,39 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("an account read started before completion cannot unlock the next press") {
-    val f = new Fixture()
+  test(
+    "an account read started before completion cannot unlock the next press"
+  ) {
+    val freshEntered = new CountDownLatch(1)
+    val freshRelease = new CountDownLatch(1)
+    val f = new Fixture(beforeAccountRead =
+      read =>
+        if read == 3 then
+          freshEntered.countDown()
+          freshRelease.await()
+    )
     try
       f.ready()
       f.holdAccount = true
       assert(f.accountEntered.await(3, TimeUnit.SECONDS))
       assert(f.worker.submit(buy, "XMR"))
-      waitFor("order response was not processed")(f.worker.view.message.contains("filled 1 at 100"))
+      waitFor("order response was not processed")(
+        f.worker.view.message.contains("filled 1 at 100")
+      )
       f.position = "7"
       f.accountRelease.countDown()
-      Thread.sleep(50)
+      assert(
+        freshEntered.await(300, TimeUnit.MILLISECONDS),
+        "post-order wake was lost during the older read"
+      )
       assert(!f.worker.view.ready)
+      assertEquals(f.worker.view.position, Some(BigDecimal(0)))
+      freshRelease.countDown()
       waitFor("new account read did not unlock input")(f.worker.view.ready)
       assertEquals(f.worker.view.position, Some(BigDecimal("7")))
-    finally f.close()
+    finally
+      freshRelease.countDown()
+      f.close()
   }
 
   test("changed leverage after capture cancels the order before sending") {
@@ -691,12 +816,32 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.sendActive()
       release.countDown()
       waitFor("changed leverage did not cancel the captured press")(
-        f.orderPosts.get() != 0 || f.worker.view.message.contains("canceled before sending")
+        f.orderPosts.get() != 0 || f.worker.view.message
+          .contains("canceled before sending")
       )
       assertEquals(f.orderPosts.get(), 0)
     finally
       release.countDown()
       f.close()
+  }
+
+  test(
+    "an active-data failure does not repeat a still-current signer role request"
+  ) {
+    val f = new Fixture()
+    try
+      f.ready()
+      assertEquals(f.roleReads.get(), 1)
+      f.publishActive = false
+      f.activeReceive(None)
+      assert(!f.worker.view.ready)
+      val before = f.coreReads.get()
+      waitFor("account did not refresh after active-data failure")(
+        f.coreReads.get() > before
+      )
+      assertEquals(f.roleReads.get(), 1)
+      assert(!f.worker.view.ready)
+    finally f.close()
   }
 
   test("quiet active data cannot be refreshed by a position read or quote") {
@@ -713,16 +858,37 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("role checks are cached and an account stream reconnect invalidates the cache") {
+  test(
+    "role checks are cached and a connection generation change invalidates the cache"
+  ) {
     val f = new Fixture()
     try
       f.ready()
       Thread.sleep(1200)
       assertEquals(f.roleReads.get(), 1)
-      f.activeReceive(None)
+      f.worker.observe(Event.SocketDown)
       assert(!f.worker.view.ready)
-      waitFor("stream restart did not verify the owner again")(f.roleReads.get() == 2)
+      f.fresh(f.worker, time = 2000L)
+      waitFor("connection generation did not verify the owner again")(
+        f.roleReads.get() == 2
+      )
       assertEquals(f.loads.get(), 1)
+    finally f.close()
+  }
+
+  test("active-only failures cannot extend the existing signer role lifetime") {
+    val f = new Fixture()
+    try
+      f.ready()
+      assertEquals(f.roleReads.get(), 1)
+      f.activeReceive(None)
+      f.clock.addAndGet(60001L)
+      f.fresh(f.worker, time = 61001L)
+      waitFor("expired role verification was not refreshed")(
+        f.roleReads.get() == 2
+      )
+      assertEquals(f.loads.get(), 1)
+      f.ready()
     finally f.close()
   }
 
@@ -745,9 +911,13 @@ class TradingWorkerSpec extends munit.FunSuite:
       )
       f.recoveryRelease.countDown()
       waitFor("the completed submission did not settle")(
-        f.worker.view.ready || f.worker.view.message.contains("Restart to recover")
+        f.worker.view.ready || f.worker.view.message
+          .contains("Restart to recover")
       )
-      assert(!f.worker.view.message.contains("Restart to recover"), f.worker.view.message)
+      assert(
+        !f.worker.view.message.contains("Restart to recover"),
+        f.worker.view.message
+      )
       assert(f.worker.view.ready)
       assertEquals(f.posts.get(), 1)
       assertEquals(f.recoveryReads.get(), 0)
@@ -757,7 +927,9 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.close()
   }
 
-  test("held signing preparation leaves startup and view responsive before readiness") {
+  test(
+    "held signing preparation leaves startup and view responsive before readiness"
+  ) {
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)
     val returned = new CountDownLatch(1)
@@ -779,7 +951,10 @@ class TradingWorkerSpec extends munit.FunSuite:
     try
       caller.start()
       assert(entered.await(3, TimeUnit.SECONDS))
-      assert(returned.await(3, TimeUnit.SECONDS), "start waited for signing preparation")
+      assert(
+        returned.await(3, TimeUnit.SECONDS),
+        "start waited for signing preparation"
+      )
       reader.start()
       val answer = answers.poll(3, TimeUnit.SECONDS)
       assert(answer != null, "view or submit waited for signing preparation")
@@ -821,7 +996,9 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("failed signing preparation blocks trading before protected or saved state access") {
+  test(
+    "failed signing preparation blocks trading before protected or saved state access"
+  ) {
     val accountThread = new AtomicReference[Thread]()
     val f = new Fixture(warmSigning = () =>
       accountThread.set(Thread.currentThread())
@@ -831,9 +1008,15 @@ class TradingWorkerSpec extends munit.FunSuite:
         f.worker.view.message == "Order signing could not be prepared. Restart to retry"
       )
       val stopped = accountThread.get()
-      assert(stopped != null, "failed preparation did not run on the account thread")
+      assert(
+        stopped != null,
+        "failed preparation did not run on the account thread"
+      )
       stopped.join(3000)
-      assert(!stopped.isAlive, "account thread continued after signing preparation failed")
+      assert(
+        !stopped.isAlive,
+        "account thread continued after signing preparation failed"
+      )
       assert(!f.worker.view.ready)
       assert(!f.worker.submit(buy, "XMR"))
       f.worker.start()
@@ -1065,7 +1248,9 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.close()
   }
 
-  test("a retained fill cannot hide current selected depth or account freshness failures") {
+  test(
+    "a retained fill cannot hide current selected depth or account freshness failures"
+  ) {
     val f = new Fixture()
     try
       f.ready()
@@ -1075,32 +1260,40 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.publishActive = false
       f.clock.addAndGet(2001)
       f.worker.observe(Event.Pong)
-      f.worker.observe(Event.BboUpdate("BTC", Level("1", "1", 1), Level("2", "1", 1), 3001))
-      val depth = TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
+      f.worker.observe(
+        Event.BboUpdate("BTC", Level("1", "1", 1), Level("2", "1", 1), 3001)
+      )
+      val depth =
+        TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
       assert(depth.contains("selected depth stale"), depth)
       assert(depth.contains("XMR filled 1 at 100"), depth)
       f.fresh(f.worker, time = 3001)
-      val account = TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
+      val account =
+        TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
       assert(account.contains("account data stale"), account)
       assert(account.contains("XMR filled 1 at 100"), account)
       f.readFailure = true
       waitFor("failed refresh not observed")(
         f.worker.view.message == "Waiting for market or account data"
       )
-      val failed = TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
+      val failed =
+        TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
       assert(failed.contains("account data stale"), failed)
       assert(failed.contains("XMR filled 1 at 100"), failed)
       assert(!f.worker.view.ready)
       assert(!f.worker.submit(buy, "XMR"))
       f.worker.observe(Event.SocketDown)
-      val down = TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
+      val down =
+        TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
       assert(down.contains("connection disconnected"), down)
       assert(down.contains("XMR filled 1 at 100"), down)
       assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }
 
-  test("a new failed attempt replaces an earlier fill while blocked input preserves it") {
+  test(
+    "a new failed attempt replaces an earlier fill while blocked input preserves it"
+  ) {
     val f = new Fixture()
     try
       f.ready()
@@ -1117,20 +1310,46 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.worker.observe(
         Event.BookUpdate(
           "XMR",
-          Book(Vector(Level("999999999", "20", 1)), Vector(Level("1000000000", "20", 1)), 2000),
+          Book(
+            Vector(Level("999999999", "20", 1)),
+            Vector(Level("1000000000", "20", 1)),
+            2000
+          ),
           true
         )
       )
       assert(f.worker.view.ready)
       assert(!f.worker.submit(buy, "XMR"))
-      val text = TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
+      val text =
+        TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
       assert(text.contains("No visible quantity fits this order"), text)
       assert(!text.contains("filled 1 at 100"), text)
       assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }
 
-  test("startup observes leverage and margin without an account mutation or nonce write") {
+  test("XMR at five permits either long or short from a flat live account") {
+    Vector(Side.Buy, Side.Sell).foreach { side =>
+      val f = new Fixture(marginMode = "isolated")
+      try
+        f.ready()
+        assertEquals(f.worker.view.position, Some(BigDecimal(0)))
+        assertEquals(f.worker.view.leverage, Some(5))
+        assertEquals(f.worker.view.marginMode, Some("isolated"))
+        assert(f.worker.submitReviewed(f.review(buy.copy(side = side))))
+        assert(f.entered.await(3, TimeUnit.SECONDS))
+        val action = f.lastPost.get()("action")
+        assertEquals(action("type").str, "order")
+        assertEquals(action("orders")(0)("b").bool, side == Side.Buy)
+        assertEquals(action("orders")(0)("r").bool, false)
+        assertEquals(f.posts.get(), 1)
+      finally f.close()
+    }
+  }
+
+  test(
+    "startup observes leverage and margin without an account mutation or nonce write"
+  ) {
     val writes = new AtomicInteger()
     val f = new Fixture(
       initialLeverage = 3,
@@ -1138,7 +1357,9 @@ class TradingWorkerSpec extends munit.FunSuite:
       beforeReplace = () => { writes.incrementAndGet(); () }
     )
     try
-      f.ready()
+      waitFor("account was not observed")(f.worker.view.position.nonEmpty)
+      assert(!f.worker.view.ready)
+      assertEquals(f.worker.view.block, Some("Set XMR leverage to 5x"))
       Thread.sleep(1200)
       assertEquals(f.posts.get(), 0)
       assertEquals(writes.get(), 0)
@@ -1148,17 +1369,21 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("positive observed leverage below five is valid within the market maximum") {
+  test("XMR below five stays disabled without an account mutation") {
     val f = new Fixture(initialLeverage = 1, marketMaximum = 2)
     try
-      f.ready()
+      waitFor("account was not observed")(f.worker.view.position.nonEmpty)
+      assert(!f.worker.view.ready)
+      assertEquals(f.worker.view.block, Some("Set XMR leverage to 5x"))
       assertEquals(f.worker.view.leverage, Some(1))
       assertEquals(f.posts.get(), 0)
       assert(f.worker.preview(buy).isRight)
     finally f.close()
   }
 
-  test("invalid leverage never becomes ready and never triggers a corrective post") {
+  test(
+    "invalid leverage never becomes ready and never triggers a corrective post"
+  ) {
     Vector(0, 6).foreach { leverage =>
       val f = new Fixture(initialLeverage = leverage, loseLeverage = true)
       try
@@ -1212,9 +1437,16 @@ class TradingWorkerSpec extends munit.FunSuite:
         p.copy(positionAfter = p.positionAfter + 1)
       )
       changes.foreach { changed =>
-        assert(!f.worker.submitReviewed(review.copy(plan = changed)), changed.toString)
+        assert(
+          !f.worker.submitReviewed(review.copy(plan = changed)),
+          changed.toString
+        )
       }
-      assert(!f.worker.submitReviewed(review.copy(intent = buy.copy(side = Side.Sell))))
+      assert(
+        !f.worker.submitReviewed(
+          review.copy(intent = buy.copy(side = Side.Sell))
+        )
+      )
       assertEquals(f.posts.get(), 0)
       assert(f.worker.submitReviewed(review))
     finally f.close()
@@ -1227,8 +1459,12 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.ready()
       val review = f.review()
       assert(!f.worker.submitReviewed(review.copy(expiresAt = f.clock.get())))
-      assert(!f.worker.submitReviewed(review.copy(createdAt = f.clock.get() + 1)))
-      assert(!f.worker.submitReviewed(review.copy(expiresAt = review.createdAt - 1)))
+      assert(
+        !f.worker.submitReviewed(review.copy(createdAt = f.clock.get() + 1))
+      )
+      assert(
+        !f.worker.submitReviewed(review.copy(expiresAt = review.createdAt - 1))
+      )
       assertEquals(writes.get(), 0)
       assertEquals(f.posts.get(), 0)
     finally f.close()
@@ -1240,7 +1476,12 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.ready()
       val review = f.review()
       f.worker.observe(
-        Event.BboUpdate("XMR", Level("100", "20", 1), Level("100.01", "20", 1), 1001)
+        Event.BboUpdate(
+          "XMR",
+          Level("100", "20", 1),
+          Level("100.01", "20", 1),
+          1001
+        )
       )
       assert(f.worker.view.ready)
       assert(!f.worker.submitReviewed(review))
@@ -1248,21 +1489,30 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("fresh position changes require a new review even when signed size and limit stay equal") {
+  test(
+    "fresh position changes require a new review even when signed size and limit stay equal"
+  ) {
     val f = new Fixture()
     try
       f.ready()
       val review = f.review()
       f.position = "7"
-      waitFor("new position was not observed")(f.worker.view.position.contains(BigDecimal(7)))
+      waitFor("new position was not observed")(
+        f.worker.view.position.contains(BigDecimal(7))
+      )
       assert(f.worker.view.ready)
-      assertEquals(f.worker.preview(buy).toOption.get.quantity, review.plan.quantity)
+      assertEquals(
+        f.worker.preview(buy).toOption.get.quantity,
+        review.plan.quantity
+      )
       assert(!f.worker.submitReviewed(review))
       assertEquals(f.posts.get(), 0)
     finally f.close()
   }
 
-  test("review captures observed leverage and margin mode including missing snapshots") {
+  test(
+    "review captures observed leverage and margin mode including missing snapshots"
+  ) {
     val f = new Fixture()
     try
       f.ready()
@@ -1271,7 +1521,8 @@ class TradingWorkerSpec extends munit.FunSuite:
       assert(!f.worker.submitReviewed(review.copy(marginMode = None)))
       f.leverage = 3
       f.sendActive()
-      assert(f.worker.view.ready)
+      assert(!f.worker.view.ready)
+      assertEquals(f.worker.view.block, Some("Set XMR leverage to 5x"))
       assert(!f.worker.submitReviewed(review))
       f.leverage = 5
       f.activeMode = "isolated"
@@ -1285,7 +1536,9 @@ class TradingWorkerSpec extends munit.FunSuite:
   private def heldReviewed(change: Fixture => Unit): Unit =
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)
-    val f = new Fixture(beforeOrderSign = () => { entered.countDown(); release.await() })
+    val f = new Fixture(beforeOrderSign = () => {
+      entered.countDown(); release.await()
+    })
     try
       f.ready()
       assert(f.worker.submitReviewed(f.review(lifetime = 500L)))
@@ -1294,14 +1547,17 @@ class TradingWorkerSpec extends munit.FunSuite:
       change(f)
       release.countDown()
       waitFor("reviewed order was not canceled")(
-        f.orderPosts.get() != 0 || f.worker.view.message.contains("canceled before sending")
+        f.orderPosts.get() != 0 || f.worker.view.message
+          .contains("canceled before sending")
       )
       assertEquals(f.posts.get(), 0)
     finally
       release.countDown()
       f.close()
 
-  test("review expiry is rechecked after durable reservation and signing delay") {
+  test(
+    "review expiry is rechecked after durable reservation and signing delay"
+  ) {
     heldReviewed(_.clock.addAndGet(500L))
   }
 
@@ -1309,7 +1565,9 @@ class TradingWorkerSpec extends munit.FunSuite:
     heldReviewed { f => f.activeMode = "isolated"; f.sendActive() }
   }
 
-  test("a supplied review cannot extend the controller's thirty second lifetime") {
+  test(
+    "a supplied review cannot extend the controller's thirty second lifetime"
+  ) {
     val writes = new AtomicInteger()
     val f = new Fixture(beforeReplace = () => { writes.incrementAndGet(); () })
     try
@@ -1320,11 +1578,14 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("extreme timestamp subtraction cannot turn an oversized review into a valid one") {
+  test(
+    "extreme timestamp subtraction cannot turn an oversized review into a valid one"
+  ) {
     val f = new Fixture()
     try
       f.ready()
-      val oversized = f.review().copy(createdAt = Long.MinValue, expiresAt = Long.MaxValue)
+      val oversized =
+        f.review().copy(createdAt = Long.MinValue, expiresAt = Long.MaxValue)
       assert(!f.worker.submitReviewed(oversized))
       assertEquals(f.posts.get(), 0)
     finally f.close()
@@ -1343,7 +1604,9 @@ class TradingWorkerSpec extends munit.FunSuite:
   private def heldReview(change: Fixture => Unit, cancel: Boolean): Unit =
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)
-    val f = new Fixture(beforeOrderSign = () => { entered.countDown(); release.await() })
+    val f = new Fixture(beforeOrderSign = () => {
+      entered.countDown(); release.await()
+    })
     try
       f.ready()
       val review = f.review(lifetime = 30000L)
@@ -1354,7 +1617,8 @@ class TradingWorkerSpec extends munit.FunSuite:
       change(f)
       release.countDown()
       waitFor("held order neither posted nor canceled") {
-        f.orderPosts.get() != 0 || f.worker.view.message.contains("canceled before sending")
+        f.orderPosts.get() != 0 || f.worker.view.message
+          .contains("canceled before sending")
       }
       assertEquals(f.orderPosts.get(), if cancel then 0 else 1)
       if !cancel then
@@ -1365,7 +1629,9 @@ class TradingWorkerSpec extends munit.FunSuite:
       release.countDown()
       f.close()
 
-  test("a fresh position change after acceptance cancels before exchange post") {
+  test(
+    "a fresh position change after acceptance cancels before exchange post"
+  ) {
     heldReview(
       f => {
         val before = f.worker.preview(buy).toOption.get
@@ -1386,7 +1652,12 @@ class TradingWorkerSpec extends munit.FunSuite:
     heldReview(
       f => {
         f.worker.observe(
-          Event.BboUpdate("XMR", Level("100", "20", 1), Level("100.01", "20", 1), 1001L)
+          Event.BboUpdate(
+            "XMR",
+            Level("100", "20", 1),
+            Level("100.01", "20", 1),
+            1001L
+          )
         )
       },
       cancel = true
@@ -1400,7 +1671,9 @@ class TradingWorkerSpec extends munit.FunSuite:
   test("legacy capture also cancels when margin mode changes during signing") {
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)
-    val f = new Fixture(beforeOrderSign = () => { entered.countDown(); release.await() })
+    val f = new Fixture(beforeOrderSign = () => {
+      entered.countDown(); release.await()
+    })
     try
       f.ready()
       assert(f.worker.submit(buy, "XMR"))
@@ -1409,7 +1682,8 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.sendActive()
       release.countDown()
       waitFor("held legacy order neither posted nor canceled") {
-        f.orderPosts.get() != 0 || f.worker.view.message.contains("canceled before sending")
+        f.orderPosts.get() != 0 || f.worker.view.message
+          .contains("canceled before sending")
       }
       assertEquals(f.orderPosts.get(), 0)
     finally

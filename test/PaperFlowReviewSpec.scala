@@ -61,10 +61,17 @@ class PaperFlowReviewSpec extends munit.FunSuite:
         if kind == "meta" then Some(ujson.read(meta))
         else if kind == "clearinghouseState" then Some(ujson.Obj("assetPositions" -> ujson.Arr()))
         else if kind == "userRole" && allowLive then
-          Some(ujson.Obj("role" -> "agent", "data" -> ujson.Obj("user" -> config.owner.get)))
+          Some(
+            ujson.Obj(
+              "role" -> "agent",
+              "data" -> ujson.Obj("user" -> config.owner.get)
+            )
+          )
         else if kind == "userAbstraction" then Some(ujson.Str("disabled"))
         else fail("unexpected account request: " + kind)
-      def post(body: ujson.Value): Option[ujson.Value] = fail("paper reached a live order endpoint")
+      def post(body: ujson.Value): Option[ujson.Value] = fail(
+        "paper reached a live order endpoint"
+      )
       def watch(
           coin: String,
           owner: String,
@@ -78,7 +85,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
               ujson.Obj(
                 "user" -> owner,
                 "coin" -> coin,
-                "leverage" -> ujson.Obj("type" -> "cross", "value" -> 1),
+                "leverage" -> ujson.Obj("type" -> "cross", "value" -> 5),
                 "maxTradeSzs" -> ujson.Arr("100", "100")
               )
             )
@@ -113,7 +120,9 @@ class PaperFlowReviewSpec extends munit.FunSuite:
           coin,
           exchange,
           () => { keysRead.incrementAndGet(); syntheticKey.clone() },
-          () => OrderJournal.open(directory.resolve("live-journal"), config.identity),
+          () =>
+            OrderJournal
+              .open(directory.resolve("live-journal"), config.identity),
           () => clock.get(),
           () => clock.get(),
           warmSigning = () => ()
@@ -133,7 +142,11 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       route.switchMode
     )
     var snapshot = Snapshot.initial("XMR", start).copy(workspace = true)
-    var latest = Book(Vector(Level("99.99", "50", 1)), Vector(Level("100", "50", 1)), start)
+    var latest = Book(
+      Vector(Level("99.99", "50", 1)),
+      Vector(Level("100", "50", 1)),
+      start
+    )
     def publish(book: Book = latest): Unit =
       latest = book.copy(time = clock.get())
       route.observe(Event.BookUpdate(snapshot.coin, latest, true))
@@ -154,19 +167,33 @@ class PaperFlowReviewSpec extends munit.FunSuite:
     def key(command: Command, cols: Int = 120, rows: Int = 40): Unit =
       controller.handle(command, snapshot, route.view, (cols, rows), false)
     private var selected = Trading.action(0)
-    def prepare(intent: OrderIntent, cols: Int = 120, rows: Int = 40): OrderReview =
+    def prepare(
+        intent: OrderIntent,
+        cols: Int = 120,
+        rows: Int = 40
+    ): OrderReview =
       assertEquals(intent.kind, OrderKind.Hard)
       selected = intent
       if controller.panel.bigOrder != intent.big then
-        val size = draw(cols, rows).buttons.find(_.action == DeskAction.OrderSize(intent.big)).get
+        val size = draw(cols, rows).buttons
+          .find(_.action == DeskAction.OrderSize(intent.big))
+          .get
         key(Command.PointerPress(size.x, size.y, 0), cols, rows)
         key(Command.Pointer(size.x, size.y, 0), cols, rows)
-      assert(draw(cols, rows).buttons.exists(_.action == DeskAction.Prepare(intent)))
-      OrderReview(intent, route.preview(intent).toOption.get, clock.get(), clock.get() + 30000L)
+      assert(
+        draw(cols, rows).buttons.exists(_.action == DeskAction.Prepare(intent))
+      )
+      OrderReview(
+        intent,
+        route.preview(intent).toOption.get,
+        clock.get(),
+        clock.get() + 30000L
+      )
     def send(cols: Int = 120, rows: Int = 40, mouse: Boolean = false): Unit =
       val frame = draw(cols, rows)
       if mouse then
-        val button = frame.buttons.find(_.action == DeskAction.Prepare(selected)).get
+        val button =
+          frame.buttons.find(_.action == DeskAction.Prepare(selected)).get
         key(Command.PointerPress(button.x, button.y, 0), cols, rows)
         draw(cols, rows)
         key(Command.Pointer(button.x, button.y, 0), cols, rows)
@@ -177,7 +204,9 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       publish()
       if initialMode == "PAPER" then waitFor("paper did not become ready")(route.view.ready)
     def saved: ujson.Value =
-      ujson.read(Files.readString(directory.resolve("paper/wallet-mainnet.json")))
+      ujson.read(
+        Files.readString(directory.resolve("paper/wallet-mainnet.json"))
+      )
     def close(): Unit = route.close()
 
   for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
@@ -185,13 +214,17 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       test(
         s"paper order ${index + 1} reaches persisted fill through visible controls at ${cols}x${rows}"
       ) {
-        val f = new Fixture(held = if index >= 2 then BigDecimal(20) else BigDecimal(0))
+        val f = new Fixture(held = if index >= 2 then BigDecimal(20)
+        else BigDecimal(0))
         try
           f.open()
           val review = f.prepare(Trading.action(index), cols, rows)
           f.send(cols, rows, mouse = index % 2 == 1)
           waitFor("paper did not finish")(f.route.view.outcome.nonEmpty)
-          assert(f.route.view.outcome.exists(_.contains("filled")), f.route.view.outcome.toString)
+          assert(
+            f.route.view.outcome.exists(_.contains("filled")),
+            f.route.view.outcome.toString
+          )
           assertEquals(f.saved("count").num.toLong, 1L)
           assertEquals(f.route.view.position, Some(review.plan.positionAfter))
           assertEquals(
@@ -231,7 +264,9 @@ class PaperFlowReviewSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("paper fill, fee and position survive reopening under the same state directory") {
+  test(
+    "paper fill, fee and position survive reopening under the same state directory"
+  ) {
     val f = new Fixture()
     var expected = Option.empty[OrderPlan]
     try
@@ -243,7 +278,12 @@ class PaperFlowReviewSpec extends munit.FunSuite:
     finally f.close()
     val plan = expected.get
     val ledger =
-      PaperLedger.open(f.directory.resolve("paper"), "mainnet", BigDecimal(20), f.config.paperFee)
+      PaperLedger.open(
+        f.directory.resolve("paper"),
+        "mainnet",
+        BigDecimal(20),
+        f.config.paperFee
+      )
     try
       assertEquals(ledger.account.count, 1L)
       assertEquals(ledger.account.positions("XMR").quantity, plan.positionAfter)
@@ -255,7 +295,9 @@ class PaperFlowReviewSpec extends munit.FunSuite:
     finally ledger.close()
   }
 
-  test("storage failure is surfaced and does not report a fill or silently reset saved cash") {
+  test(
+    "storage failure is surfaced and does not report a fill or silently reset saved cash"
+  ) {
     val f = new Fixture()
     try
       f.open()
@@ -264,7 +306,10 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       Files.createDirectory(saved)
       f.send()
       waitFor("storage failure not surfaced")(f.route.view.outcome.nonEmpty)
-      assertEquals(f.route.view.outcome, Some("Paper storage failed. Restart to recover"))
+      assertEquals(
+        f.route.view.outcome,
+        Some("Paper storage failed. Restart to recover")
+      )
       assertEquals(f.route.view.position, Some(BigDecimal(0)))
       assert(!f.route.view.ready)
       assert(Files.isDirectory(saved))
@@ -313,12 +358,16 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       assert(f.route.view.ready)
       f.send()
       assertEquals(f.controller.panel.actionNotice, Some("Sending"))
-      waitFor("changed estimate was not filled")(f.route.view.outcome.exists(_.contains("filled")))
+      waitFor("changed estimate was not filled")(
+        f.route.view.outcome.exists(_.contains("filled"))
+      )
       assertEquals(f.saved("count").num.toLong, 1L)
     finally f.close()
   }
 
-  test("paper startup with live addresses configured does not request account state") {
+  test(
+    "paper startup with live addresses configured does not request account state"
+  ) {
     val f = new Fixture(configured = true)
     try
       f.open()
@@ -333,14 +382,15 @@ class PaperFlowReviewSpec extends munit.FunSuite:
   test(
     "switching VIEW to PAPER closes account polling and returning LIVE creates a fresh enabled worker"
   ) {
-    val f = new Fixture(initialMode = "VIEW", configured = true, allowLive = true)
+    val f =
+      new Fixture(initialMode = "VIEW", configured = true, allowLive = true)
     try
       f.open()
       waitFor("view did not start configured account polling")(
         f.infoTypes.asScala.contains("clearinghouseState")
       )
       assert(f.route.switchMode("PAPER").isRight)
-      assertEquals(f.closed.get(), 1)
+      waitFor("previous live worker did not retire")(f.closed.get() == 1)
       val readsAtPaper = f.infoTypes.size()
       val watchesAtPaper = f.watched.get()
       Thread.sleep(1100)
@@ -348,16 +398,18 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       assertEquals(f.watched.get(), watchesAtPaper)
       assertEquals(f.keysRead.get(), 0)
       assert(f.route.switchMode("LIVE").isRight)
-      assertEquals(f.recreated.get(), 1)
+      waitFor("new live worker was not created")(f.recreated.get() == 1)
       f.clock.incrementAndGet()
       f.publish()
-      waitFor("new live worker did not become ready with fake account data")(f.route.view.ready)
+      waitFor("new live worker did not become ready with fake account data")(
+        f.route.view.ready
+      )
       assertEquals(f.keysRead.get(), 1)
       assert(f.infoTypes.asScala.contains("userRole"))
       assert(f.route.switchMode("PAPER").isRight)
-      assertEquals(f.closed.get(), 2)
+      waitFor("second live worker did not retire")(f.closed.get() == 2)
       assert(f.route.switchMode("LIVE").isRight)
-      assertEquals(f.recreated.get(), 2)
+      waitFor("second live worker was not created")(f.recreated.get() == 2)
       f.clock.incrementAndGet()
       f.publish()
       waitFor("second live worker did not become ready")(f.route.view.ready)
@@ -379,7 +431,12 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       assertEquals(f.route.mode, "VIEW")
       assertEquals(f.closed.get(), 0)
       val readsBefore = f.infoTypes.size()
-      waitFor("existing worker stopped on failed paper selection")(f.infoTypes.size() > readsBefore)
-      assertEquals(Files.readString(paper.resolve("wallet-mainnet.json")), "broken")
+      waitFor("existing worker stopped on failed paper selection")(
+        f.infoTypes.size() > readsBefore
+      )
+      assertEquals(
+        Files.readString(paper.resolve("wallet-mainnet.json")),
+        "broken"
+      )
     finally f.close()
   }

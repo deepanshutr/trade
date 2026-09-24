@@ -35,10 +35,18 @@ class PaperAccountingSpec extends munit.FunSuite:
   private def workerFor(ledger: PaperLedger, bid: String = "99", ask: String = "100"): PaperWorker =
     val rest = new Rest:
       def post(body: String): Option[String] = None
-    val worker = new PaperWorker(TradingConfig(), "XMR", ledger, rest, () => now, () => now)
-    val rules = classOf[PaperWorker].getDeclaredFields.find(_.getName == "rules").get
-    rules.setAccessible(true)
-    rules.set(worker, Some(MarketRules(0, 2, 5)))
+    val metadata = ujson.read(
+      """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}"""
+    )
+    val worker = new PaperWorker(
+      TradingConfig(),
+      "XMR",
+      ledger,
+      rest,
+      () => now,
+      () => now,
+      initialMetadata = Some(metadata -> now)
+    )
     worker.observe(Event.SocketUp)
     worker.observe(
       Event.BookUpdate(

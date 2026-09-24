@@ -293,8 +293,16 @@ object Workspace:
         .rows(outlook, Layout.outlookWidth, marketFrame.axis, marketFrame.priceRows, s.chartMode)
         .zipWithIndex
         .foreach((text, i) => line(i, text))
-      line(tradeTop, panel.mode + " " + s.coin)
-      line(tradeTop + 1, s.coin.take(half - 2).padTo(half, ' ') + "Stables")
+      val live = panel.mode == "LIVE"
+      val leverage = if live then view.leverage.fold("")(n => s" ${n}x") else ""
+      val heading = panel.mode + " " + s.coin + leverage
+      val direction = if live then
+        view.portfolio.tokenValue.fold("")(value =>
+          if value > 0 then " LONG" else if value < 0 then " SHORT" else " FLAT"
+        )
+      else ""
+      line(tradeTop, heading)
+      line(tradeTop + 1, (s.coin + direction).take(half - 2).padTo(half, ' ') + "Stables")
       line(
         tradeTop + 2,
         amount(view.portfolio.tokenValue, half - 1).padTo(half, ' ') + amount(
@@ -302,7 +310,11 @@ object Workspace:
           rightWidth - half
         )
       )
-      line(tradeTop + 3, "Net P&L " + amount(view.portfolio.net, rightWidth - 8))
+      line(
+        tradeTop + 3,
+        ("Open P&L " + amount(view.portfolio.openProfit, half - 10)).padTo(half, ' ') +
+          "Net P&L " + amount(view.portfolio.net, rightWidth - half - 8)
+      )
       line(tradeTop + 4, orderStatus(view, panel))
       val choosing =
         !view.pending && s.prompt.isEmpty && s.marketPending.isEmpty && panel.modeReview.isEmpty
@@ -311,15 +323,17 @@ object Workspace:
       button(tradeTop + 5, 0, small, DeskAction.OrderSize(false), choosing)
       button(tradeTop + 5, small.length + 3, big, DeskAction.OrderSize(true), choosing)
       val canTrade = choosing && view.ready && view.coin == s.coin && panel.mode != "VIEW" &&
-        panel.mode.length + s.coin.length + 1 <= rightWidth
+        heading.length <= rightWidth
       Vector(Side.Buy, Side.Sell).zipWithIndex.foreach { (side, i) =>
         val intent = OrderIntent(side, OrderKind.Hard, big = panel.bigOrder)
         val key = (if side == Side.Buy then 1 else 3) + (if panel.bigOrder then 1 else 0)
         val size = if panel.bigOrder then panel.sizes.big else panel.sizes.small
+        val label = if live then (if side == Side.Buy then "BUY/LONG" else "SELL/SHORT")
+        else side.toString.toUpperCase
         tile(
           i * half,
           if i == 0 then half - 1 else rightWidth - half,
-          s"$key ${side.toString.toUpperCase} $$${Trading.format(size)}",
+          s"$key $label $$${Trading.format(size)}",
           DeskAction.Prepare(intent),
           canTrade
         )
@@ -349,12 +363,10 @@ object Workspace:
               .replace("↓", style.wrap(style.ask, "↓"))
           else if i == tradeTop + 2 then content = style.wrap(Screen.bold, content)
           else if i == tradeTop + 3 then
-            content = style.wrap(
-              Screen.bold + view.portfolio.net.fold("")(p =>
-                if p >= 0 then style.bid else style.ask
-              ),
-              content
-            )
+            def profitStyle(value: Option[BigDecimal]): String =
+              Screen.bold + value.fold("")(p => if p >= 0 then style.bid else style.ask)
+            content = style.wrap(profitStyle(view.portfolio.openProfit), content.take(half)) +
+              style.wrap(profitStyle(view.portfolio.net), content.drop(half))
           else if i >= tradeTop + 7 && i <= tradeTop + 11 then
             (active ++ inactive).filter(_.height > 1).sortBy(-_.x).foreach { b =>
               val colour = if inactive.contains(b) then Screen.dim

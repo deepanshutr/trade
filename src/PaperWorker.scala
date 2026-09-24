@@ -10,7 +10,8 @@ final class PaperWorker(
     ledger: PaperLedger,
     rest: Rest,
     wall: () => Long,
-    monotonic: () => Long
+    monotonic: () => Long,
+    initialMetadata: Option[(ujson.Value, Long)] = None
 ) extends AutoCloseable:
   private final case class Prepared(
       intent: OrderIntent,
@@ -43,8 +44,10 @@ final class PaperWorker(
   private var backup = false
   private var book = Option.empty[(Book, Long)]
   private var touch = Option.empty[Touch]
-  private var metadata = Option.empty[ujson.Value]
-  private var rules = Option.empty[MarketRules]
+  private def validMetadata(value: ujson.Value): Boolean = Exchange.validMetadata(value, coin)
+  private var metadata = initialMetadata.map(_._1).filter(validMetadata)
+  private var metadataAt = initialMetadata.map(_._2).getOrElse(Long.MinValue)
+  private var rules = metadata.flatMap(m => Try(Exchange.market(m, coin)).toOption)
   private var outcome = Option.empty[String]
   private var outcomeId = 0L
   private var pendingAt = 0L
@@ -58,11 +61,14 @@ final class PaperWorker(
   private val orders = new ArrayBlockingQueue[OrderReview](1)
   private var threads = Vector.empty[Thread]
   private def fresh(at: Long): Boolean = monotonic() >= at && monotonic() - at <= config.quoteAgeMs
+  private def metadataFresh(age: Long): Boolean =
+    val elapsed = BigInt(monotonic()) - metadataAt
+    metadata.nonEmpty && elapsed >= 0 && elapsed <= age
   private def block: Option[String] =
     if closed.get() then Some("Paper closed. Restart Desk")
     else if !ledger.available then Some("Paper storage unavailable. Restart to recover")
     else if !connected && !backup then Some("Reconnecting. Waiting for fresh prices")
-    else if rules.isEmpty then Some("Paper waiting for market details")
+    else if rules.isEmpty || !metadataFresh(60000L) then Some("Paper waiting for market details")
     else if book.isEmpty || touch.isEmpty then Some("Paper waiting for selected-market depth")
     else if !touch.exists(t =>
         t.bidPrice > 0 && t.askPrice > t.bidPrice && t.bidSize > 0 && t.askSize > 0
@@ -124,6 +130,7 @@ final class PaperWorker(
       book = None
       touch = None
       backup = false
+      metadata = metadata.filter(validMetadata)
       rules = metadata.flatMap(m => Try(Exchange.market(m, next)).toOption)
       lastPlan = None
       prepared = None
@@ -240,12 +247,18 @@ final class PaperWorker(
         thread.start()
       spawn("paper-metadata") {
         while !closed.get() do
-          val result = rest.post("""{"type":"meta"}""").flatMap(s => Try(ujson.read(s)).toOption)
-          synchronized {
-            metadata = result
-            rules = result.flatMap(m => Try(Exchange.market(m, coin)).toOption)
-          }
-          Thread.sleep(60000L)
+          if synchronized(!metadataFresh(30000L)) then
+            val result = Try(rest.post("""{"type":"meta"}""")).toOption.flatten.flatMap(s =>
+              Try(ujson.read(s)).toOption
+            )
+            synchronized {
+              result.filter(validMetadata).foreach { value =>
+                metadata = Some(value)
+                metadataAt = monotonic()
+                rules = Try(Exchange.market(value, coin)).toOption
+              }
+            }
+          Thread.sleep(1000L)
       }
       spawn("paper-orders") {
         while !closed.get() do

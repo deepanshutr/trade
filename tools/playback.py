@@ -25,30 +25,97 @@ ESC = bytes([27])
 START = ESC + b"[H"
 END = ESC + b"[J"
 CLEAR = ESC + b"[K"
+PAINT_BEGIN = ESC + b"[?2026h"
+PAINT_END = ESC + b"[?2026l"
 LEAVE = ESC + b"[?2004l" + ESC + b"[?25h" + ESC + b"[?1049l"
 RESTORED = b"OFFLINE_TERMINAL_RESTORED=yes"
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class Frames:
+    """Reconstruct the screen at completed legacy or synchronized paint boundaries."""
+
     def __init__(self):
         self.pending = b""
         self.complete = []
+        self.lines = None
 
     def feed(self, data, captured_ns):
         self.pending += data
-        while START in self.pending:
-            start = self.pending.index(START)
-            end = self.pending.find(END, start + len(START))
+        while True:
+            starts = [(self.pending.find(marker), marker) for marker in (PAINT_BEGIN, START)
+                      if marker in self.pending]
+            if not starts:
+                # Preserve a split start marker while discarding unrelated terminal output.
+                self.pending = self.pending[-(len(PAINT_BEGIN) - 1):]
+                return
+            start, marker = min(starts)
+            finish = PAINT_END if marker == PAINT_BEGIN else END
+            end = self.pending.find(finish, start + len(marker))
             if end < 0:
-                break
-            raw = self.pending[start : end + len(END)]
-            self.pending = self.pending[end + len(END) :]
-            rows = raw[len(START) : -len(END)].split(b"\r\n")
-            if not all(row.endswith(CLEAR) for row in rows):
-                raise AssertionError("a completed frame lacks row clearing")
-            lines = [SGR.sub("", row[: -len(CLEAR)].decode("utf-8")) for row in rows]
-            self.complete.append({"captured_ns": captured_ns, "lines": lines})
+                self.pending = self.pending[start:]
+                return
+            body_start = start + len(marker) if marker == PAINT_BEGIN else start
+            body_end = end if marker == PAINT_BEGIN else end + len(END)
+            lines = self._apply(self.pending[body_start:body_end])
+            self.pending = self.pending[end + len(finish):]
+            self.lines = lines
+            self.complete.append({"captured_ns": captured_ns, "lines": lines.copy()})
+
+    def _apply(self, raw):
+        text = raw.decode("utf-8")
+        full = raw.startswith(START)
+        assert full or self.lines is not None, "a changed-row update has no initial screen"
+        lines = [] if full else self.lines.copy()
+        row, col, offset = 0, 0, 0
+        dirty = set()
+        last = None
+        while offset < len(text):
+            char = text[offset]
+            if char == "\x1b":
+                command = re.match(r"\x1b\[([0-9;]*)([A-Za-z])", text[offset:])
+                assert command, "unrecognized terminal command"
+                params, action = command.groups()
+                values = [int(v) if v else 0 for v in params.split(";")] if params else []
+                if action == "H":
+                    assert len(values) <= 2 and all(v > 0 for v in values), "invalid cursor position"
+                    row = (values[0] if values else 1) - 1
+                    col = (values[1] if len(values) > 1 else 1) - 1
+                elif action == "K":
+                    assert not values or values == [0], "unsupported row erase"
+                    while len(lines) <= row:
+                        lines.append("")
+                    lines[row] = lines[row][:col]
+                    dirty.discard(row)
+                elif action == "J":
+                    assert not values or values == [0], "unsupported screen erase"
+                    lines = lines[:row] + ([lines[row][:col]] if row < len(lines) else [])
+                elif action != "m":
+                    raise AssertionError("unsupported terminal command " + action)
+                if action != "m":
+                    last = action
+                offset += command.end()
+            elif char == "\r":
+                col = 0
+                offset += 1
+            elif char == "\n":
+                row += 1
+                offset += 1
+            else:
+                end = offset + 1
+                while end < len(text) and text[end] not in "\x1b\r\n":
+                    end += 1
+                value = text[offset:end]
+                while len(lines) <= row:
+                    lines.append("")
+                lines[row] = lines[row][:col].ljust(col) + value + lines[row][col + len(value):]
+                col += len(value)
+                dirty.add(row)
+                last = None
+                offset = end
+        assert not dirty, "a completed frame lacks row clearing"
+        assert last == ("J" if full else "K"), "a completed frame lacks its final erase"
+        return lines
 
 
 def market_matches(frame, contract, coin, midpoint):
@@ -145,9 +212,23 @@ def validate_speed(speed):
 
 def validate_wallet(saved, results, fixture_book):
     assert len(results) == 600 and all(r["kind"] == "order" for r in results)
+    # WorkspaceApp serializes view capture and outcome collection with key handling.
+    # A pending refusal therefore precedes the outstanding fill in this result log.
+    # Restore those later refused clicks behind that fill before checking sides.
+    ordered, pending = [], []
+    for result in results:
+        if result["text"] == "Order pending":
+            pending.append(result)
+        else:
+            if pending:
+                assert " filled " in result["text"], "pending refusals lack their outstanding fill"
+            ordered.append(result)
+            ordered.extend(pending)
+            pending.clear()
+    assert not pending, "pending refusals lack their outstanding fill"
     cash, held, fees = Decimal(10000), Decimal(0), Decimal(0)
     filled, refused = [], []
-    for index, result in enumerate(results):
+    for index, result in enumerate(ordered):
         expected_side = "buy" if index % 2 == 0 else "sell"
         receipt = result["text"]
         if " filled " not in receipt:

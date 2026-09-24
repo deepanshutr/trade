@@ -4,8 +4,10 @@ import scala.util.Try
 
 object Term:
   private val esc = Screen.esc
+  val beginPaint: String = esc + "[?2026h"
+  val endPaint: String = esc + "[?2026l"
   val enterCodes: String = esc + "[?1049h" + esc + "[?25l" + esc + "[?2004h"
-  val leaveCodes: String = esc + "[?2004l" + esc + "[?25h" + esc + "[?1049l"
+  val leaveCodes: String = endPaint + esc + "[?2004l" + esc + "[?25h" + esc + "[?1049l"
 
   private def stty(args: String): String =
     val process = new ProcessBuilder((Vector("/bin/stty") ++ args.split("\\s+"))*)
@@ -52,7 +54,31 @@ object Term:
   def bytes(lines: Vector[String]): Array[Byte] =
     frame(lines).getBytes(java.nio.charset.StandardCharsets.UTF_8)
 
-  def write(lines: Vector[String], output: java.io.PrintStream = System.out): Unit =
-    output.write(bytes(lines))
+  private def checkedWrite(payload: Array[Byte], output: java.io.PrintStream): Unit =
+    output.write(payload)
     output.flush()
     if output.checkError() then throw new java.io.IOException("terminal write failed")
+
+  def write(lines: Vector[String], output: java.io.PrintStream = System.out): Unit =
+    checkedWrite(bytes(lines), output)
+
+  final class Writer(output: java.io.PrintStream = System.out):
+    private var previous: Option[((Int, Int), Vector[String])] = None
+
+    def write(lines: Vector[String], size: (Int, Int)): Unit =
+      val full = previous.forall { case (oldSize, oldLines) =>
+        oldSize != size || oldLines.size != lines.size
+      }
+      val changed = if full then Vector.empty[Int]
+      else lines.indices.filter(i => previous.exists(_._2(i) != lines(i)))
+      if full || changed.nonEmpty then
+        def styled(line: String): String = Screen.reset + line + Screen.reset
+        val body =
+          if full then frame(lines.map(styled))
+          else changed.map(i => esc + s"[${i + 1};1H" + styled(lines(i)) + esc + "[K").mkString
+        previous = None
+        checkedWrite(
+          (beginPaint + body + endPaint).getBytes(java.nio.charset.StandardCharsets.UTF_8),
+          output
+        )
+        previous = Some((size, lines))
