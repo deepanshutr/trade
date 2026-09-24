@@ -217,10 +217,30 @@ class IndependentFreshnessSpec extends munit.FunSuite:
     assertEquals(errors.asScala.toVector, Vector.empty)
   }
 
-  private class PaperFixture:
+  private class PaperFixture(held: BigDecimal = BigDecimal(0)):
     val now = new AtomicLong(at)
     val config = TradingConfig()
     val root = Files.createTempDirectory("review-paper-")
+    if held > 0 then
+      LocalFiles.write(
+        root.resolve("wallet-mainnet.json"),
+        ujson.write(
+          ujson.Obj(
+            "cash" -> config.paperBalance.toString,
+            "deposit" -> (config.paperBalance + held * 100).toString,
+            "realized" -> "0",
+            "fees" -> "0",
+            "orders" -> ujson.Arr(),
+            "count" -> "0",
+            "positions" -> ujson.Obj(
+              "XMR" -> ujson.Obj(
+                "quantity" -> held.toString,
+                "entry" -> "100"
+              )
+            )
+          )
+        )
+      )
     val ledger = PaperLedger.open(root, "mainnet", config.paperBalance, config.paperFee)
     val rest = new Rest:
       def post(body: String): Option[String] =
@@ -255,7 +275,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
 
   for side <- Vector(Side.Buy, Side.Sell) do
     test(s"$side subscription-time five-level prices only fill visible liquidity") {
-      val f = new PaperFixture
+      val f = new PaperFixture(if side == Side.Buy then BigDecimal(0) else BigDecimal(10))
       val errors = new ConcurrentLinkedQueue[Throwable]()
       val delivered = new CountDownLatch(1)
       val close = new AtomicReference[() => Unit](() => ())
@@ -297,9 +317,12 @@ class IndependentFreshnessSpec extends munit.FunSuite:
         assertEquals(f.ledger.account.count, 1L)
         assertEquals(
           f.ledger.account.positions("XMR").quantity,
-          BigDecimal(if side == Side.Buy then 1 else -1)
+          BigDecimal(if side == Side.Buy then 1 else 9)
         )
-        assertEquals(f.ledger.account.positions("XMR").entry, value)
+        assertEquals(
+          f.ledger.account.positions("XMR").entry,
+          if side == Side.Buy then value else BigDecimal(100)
+        )
         assert(f.worker.view.outcome.exists(_.contains("partial")))
         val unknown = BigDecimal(if side == Side.Buy then "100.05" else "99.94")
         assert(f.worker.preview(OrderIntent(side, OrderKind.Target, target = Some(unknown))).isLeft)
@@ -341,7 +364,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
 
   for side <- Vector(Side.Buy, Side.Sell) do
     test(s"$side a fast five-level book reduces the actual fill after a deeper REST preview") {
-      val f = new PaperFixture
+      val f = new PaperFixture(if side == Side.Buy then BigDecimal(0) else BigDecimal(10))
       try
         f.start()
         f.worker.observe(Event.SocketUp)
@@ -367,11 +390,11 @@ class IndependentFreshnessSpec extends munit.FunSuite:
         assertEquals(f.ledger.account.count, 1L)
         assertEquals(
           f.ledger.account.positions("XMR").quantity,
-          BigDecimal(if side == Side.Buy then 1 else -1)
+          BigDecimal(if side == Side.Buy then 1 else 9)
         )
         assertEquals(
           f.ledger.account.positions("XMR").entry,
-          BigDecimal(if side == Side.Buy then "100.02" else "99.97")
+          BigDecimal(if side == Side.Buy then "100.02" else "100")
         )
         assert(f.worker.view.outcome.exists(_.contains("partial")))
       finally f.close()

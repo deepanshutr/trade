@@ -15,6 +15,30 @@ spec.loader.exec_module(playback)
 
 
 class PlaybackSpec(unittest.TestCase):
+    def test_settling_keeps_quotes_paced_even_when_output_is_always_ready(self):
+        run = object.__new__(playback.Playback)
+        clock = [0.0]
+        quotes = []
+        pumps = []
+
+        def command(name, **values):
+            self.assertEqual((name, values), ("quote", {"coin": "XMR"}))
+            quotes.append(clock[0])
+
+        def pump(timeout):
+            self.assertGreater(timeout, 0)
+            pumps.append(timeout)
+            clock[0] += min(timeout, 0.001)
+
+        run.command, run.pump = command, pump
+        with mock.patch.object(playback.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(playback.time, "monotonic_ns", side_effect=lambda: round(clock[0] * 1e9)):
+            run.settle()
+        self.assertAlmostEqual(clock[0], 1.0)
+        self.assertEqual(len(quotes), 10)
+        self.assertGreater(len(pumps), 900, "output must continue draining between quotes")
+        self.assertTrue(all(b - a >= 0.099 for a, b in zip(quotes, quotes[1:])))
+
     def test_workspace_target_and_cancel_are_exact_below_the_price_columns(self):
         for width, height in ((100, 30), (120, 40), (160, 45)):
             divider = min(width * 3 // 5, width - 47)

@@ -15,8 +15,15 @@ class PaperFreshTouchReviewSpec extends munit.FunSuite:
     val buy = side == Side.Buy
     val clock = new AtomicLong(start)
     val config = TradingConfig()
+    val directory = Files.createTempDirectory("touch-")
+    val held = if buy then BigDecimal(0) else BigDecimal(10)
+    if held > 0 then
+      LocalFiles.write(
+        directory.resolve("wallet-mainnet.json"),
+        s"""{"cash":"${config.paperBalance}","deposit":"${config.paperBalance + held * 100}","realized":"0","fees":"0","orders":[],"count":"0","positions":{"XMR":{"quantity":"$held","entry":"100"}}}"""
+      )
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("touch-"),
+      directory,
       "mainnet",
       config.paperBalance,
       config.paperFee
@@ -69,10 +76,16 @@ class PaperFreshTouchReviewSpec extends munit.FunSuite:
       waitFor("order remained pending")(!worker.view.pending && worker.view.outcome.nonEmpty)
     def filled(quantity: BigDecimal, value: BigDecimal): Unit =
       assertEquals(ledger.account.count, 1L)
-      assertEquals(ledger.account.positions("XMR").quantity, if buy then quantity else -quantity)
-      assertEquals(ledger.account.positions("XMR").entry, value / quantity)
+      assertEquals(
+        ledger.account.positions("XMR").quantity,
+        if buy then quantity else held - quantity
+      )
+      assertEquals(
+        ledger.account.positions("XMR").entry,
+        if buy then value / quantity else BigDecimal(100)
+      )
       assertEquals(ledger.account.fees, value * config.paperFee)
-      assertEquals(worker.view.position, Some(if buy then quantity else -quantity))
+      assertEquals(worker.view.position, Some(if buy then quantity else held - quantity))
     def close(): Unit = worker.close()
 
   for side <- Vector(Side.Buy, Side.Sell) do
@@ -95,7 +108,7 @@ class PaperFreshTouchReviewSpec extends munit.FunSuite:
           }
           f.settle()
           assertEquals(f.ledger.account.count, 0L)
-          assertEquals(f.worker.view.position, Some(BigDecimal(0)))
+          assertEquals(f.worker.view.position, Some(f.held))
           assertEquals(f.ledger.account.cash, f.config.paperBalance)
           assert(
             f.worker.view.outcome.exists(text =>

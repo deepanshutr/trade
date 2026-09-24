@@ -50,8 +50,9 @@ from the venue.
 
 Amounts and age limits are quoted numeric strings. Small and big are total order
 value before fees. Target has its own value ceiling.
-Paper balance applies when creating an account. Existing saved balances remain
-in place. Paper fee is the fraction charged on each simulated fill.
+`paperBalance` applies when creating a simulated wallet. Existing saved wallet
+balances remain in place. Old margin simulation files remain separate and unchanged.
+`paperFee` is the fraction charged on each simulated fill.
 
 Live setup requires the public `owner` address and its approved delegated `agent`
 address on the selected network. Both use the `0x` prefix followed by 40 hexadecimal
@@ -112,8 +113,9 @@ data remains unavailable and is never interpreted as a flat account.
 
 The workspace uses immediate orders with the selected value and a price limit
 no more than 0.1 percent from the captured best quote. Available depth can produce
-a partial fill or no fill. An opposite fill reduces the existing position before
-its remainder opens the other direction. The selected value excludes fees.
+a partial fill or no fill. In real trading, an opposite fill reduces the existing
+position before its remainder opens the other direction. In simulated trading,
+Buy spends stables and Sell is capped at held tokens. The selected value excludes fees.
 Calculations retain full precision. Compact dollar figures are rounded for display.
 Best and Target orders are no longer exposed in the normal workspace.
 

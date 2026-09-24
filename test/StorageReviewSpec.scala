@@ -19,7 +19,7 @@ class StorageReviewSpec extends munit.FunSuite:
 
   test("a refused persistent write leaves the previous account and disables fills") {
     val directory = Files.createTempDirectory("desk-paper-write-failure")
-    val path = directory.resolve("paper-mainnet.json")
+    val path = directory.resolve("wallet-mainnet.json")
     val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
       assert(ledger.fill(plan(Side.Buy, "1", "100"), now).isRight)
@@ -38,7 +38,7 @@ class StorageReviewSpec extends munit.FunSuite:
     finally reopened.close()
   }
 
-  test("unequal adds partial closes and both flip directions retain weighted basis") {
+  test("unequal adds, partial closes and a new holding retain the correct purchase basis") {
     val ledger = PaperLedger.open(
       Files.createTempDirectory("desk-paper-weighted"),
       "mainnet",
@@ -52,17 +52,19 @@ class StorageReviewSpec extends munit.FunSuite:
       assert(ledger.fill(plan(Side.Sell, "2", "110"), now + 2).isRight)
       assertEquals(ledger.account.positions("XMR").entry, BigDecimal(101))
       assertEquals(ledger.account.realized, BigDecimal(18))
-      assert(ledger.fill(plan(Side.Sell, "4", "90"), now + 3).isRight)
-      assertEquals(ledger.account.positions("XMR").entry, BigDecimal(90))
-      assertEquals(ledger.account.positions("XMR").quantity, BigDecimal(-2))
-      assertEquals(ledger.account.cash, BigDecimal("995.016"))
+      val before = ledger.account
+      assert(ledger.fill(plan(Side.Sell, "4", "90"), now + 3).isLeft)
+      assertEquals(ledger.account, before)
+      assert(ledger.fill(plan(Side.Sell, "2", "90"), now + 3).isRight)
+      assertEquals(ledger.account.positions, Map.empty[String, PaperPosition])
+      assertEquals(ledger.account.cash, BigDecimal("995.196"))
       assertEquals(ledger.account.realized, BigDecimal(-4))
-      assertEquals(ledger.account.fees, BigDecimal("0.984"))
+      assertEquals(ledger.account.fees, BigDecimal("0.804"))
       assert(ledger.fill(plan(Side.Buy, "3", "85"), now + 4).isRight)
       assertEquals(ledger.account.positions("XMR").entry, BigDecimal(85))
-      assertEquals(ledger.account.positions("XMR").quantity, BigDecimal(1))
-      assertEquals(ledger.account.realized, BigDecimal(6))
-      assertEquals(ledger.account.cash, BigDecimal("1004.761"))
+      assertEquals(ledger.account.positions("XMR").quantity, BigDecimal(3))
+      assertEquals(ledger.account.realized, BigDecimal(-4))
+      assertEquals(ledger.account.cash, BigDecimal("739.941"))
     finally ledger.close()
   }
 

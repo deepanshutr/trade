@@ -85,20 +85,27 @@ class PaperUxIndependentSpec extends munit.FunSuite:
     def close(): Unit = worker.close()
 
   for side <- Vector(Side.Buy, Side.Sell) do
-    test(side.toString + " cannot review a cash-sized order whose fee exceeds equity") {
-      val f = new Fixture(PaperAccount(BigDecimal(500)))
+    test(side.toString + " cannot review an order without the required wallet balance") {
+      val f = new Fixture(PaperAccount(BigDecimal(500), deposit = BigDecimal(500)))
       try
         if side == Side.Buy then f.open() else f.open("100", "100.01")
         val result = f.worker.preview(OrderIntent(side, OrderKind.Hard))
         assert(result.isLeft, result.toString)
-        assert(result.swap.toOption.get.toLowerCase.contains("limit"))
-        assertEquals(f.ledger.account, PaperAccount(BigDecimal(500)))
+        assert(result.swap.toOption.get.contains(if side == Side.Buy then "limit" else "No XMR"))
+        assertEquals(f.ledger.account, PaperAccount(BigDecimal(500), deposit = BigDecimal(500)))
         assertEquals(f.writes.get(), 0)
       finally f.close()
     }
 
     test(side.toString + " affordable partial uses actual fees and preserves requested quantity") {
-      val f = new Fixture(PaperAccount(BigDecimal(100)))
+      val initial = PaperAccount(
+        BigDecimal(100),
+        deposit = if side == Side.Buy then BigDecimal(100) else BigDecimal(600),
+        positions =
+          if side == Side.Buy then Map.empty
+          else Map("XMR" -> PaperPosition(BigDecimal(5), BigDecimal(100)))
+      )
+      val f = new Fixture(initial)
       try
         if side == Side.Buy then
           f.open()
@@ -112,13 +119,13 @@ class PaperUxIndependentSpec extends munit.FunSuite:
         assertEquals(f.writes.get(), 0)
         f.send(review)
         val account = f.ledger.account
-        assertEquals(account.cash, BigDecimal("99.901"))
+        assertEquals(account.cash, BigDecimal(if side == Side.Buy then "0.901" else "198.901"))
         assertEquals(account.fees, BigDecimal("0.099"))
         assertEquals(account.realized, BigDecimal(0))
         assertEquals(
           account.positions("XMR"),
           PaperPosition(
-            if side == Side.Buy then BigDecimal("0.99") else BigDecimal("-0.99"),
+            if side == Side.Buy then BigDecimal("0.99") else BigDecimal("4.01"),
             BigDecimal(100)
           )
         )
@@ -128,7 +135,14 @@ class PaperUxIndependentSpec extends munit.FunSuite:
     }
 
     test(side.toString + " fresh best quote excludes stale capacity and stale preview estimates") {
-      val f = new Fixture(PaperAccount(BigDecimal(200)))
+      val initial = PaperAccount(
+        BigDecimal(200),
+        deposit = if side == Side.Buy then BigDecimal(200) else BigDecimal(700),
+        positions =
+          if side == Side.Buy then Map.empty
+          else Map("XMR" -> PaperPosition(BigDecimal(5), BigDecimal(100)))
+      )
+      val f = new Fixture(initial)
       try
         f.open()
         val book = if side == Side.Buy then
@@ -156,103 +170,109 @@ class PaperUxIndependentSpec extends munit.FunSuite:
         f.send(review)
         assertEquals(
           f.ledger.account.positions("XMR"),
-          PaperPosition(if side == Side.Buy then BigDecimal(1) else BigDecimal(-1), expectedPrice)
+          PaperPosition(
+            if side == Side.Buy then BigDecimal(1) else BigDecimal(4),
+            if side == Side.Buy then expectedPrice else BigDecimal(100)
+          )
         )
         assertEquals(
           f.ledger.account.cash,
-          BigDecimal(if side == Side.Buy then "199.89995" else "199.90005")
+          BigDecimal(if side == Side.Buy then "99.84995" else "299.85005")
         )
         assert(f.worker.view.outcome.exists(_.contains("partial")))
       finally f.close()
     }
 
-  for long <- Vector(true, false) do
-    test((if long then "long"
-          else "short") + " can reduce while still overexposed, but cannot increase") {
-      val initial = PaperAccount(
-        BigDecimal(900),
-        positions = Map(
-          "XMR" -> PaperPosition(if long then BigDecimal(10) else BigDecimal(-10), BigDecimal(100))
-        )
+  test("a wallet with no stables can sell held tokens after a loss, but cannot spend absent cash") {
+    val initial = PaperAccount(
+      BigDecimal(0),
+      deposit = BigDecimal(1000),
+      positions = Map(
+        "XMR" -> PaperPosition(BigDecimal(10), BigDecimal(100))
       )
-      val f = new Fixture(initial, size = BigDecimal(if long then 80 else 120))
-      try
-        if long then f.open("80", "80.01") else f.open("119.99", "120")
-        assert(f.worker.view.ready, "capacity must not block reducing orders globally")
-        val reduction = if long then Side.Sell else Side.Buy
-        val review = f.review(reduction)
-        assertEquals(review.plan.quantity, BigDecimal(1))
-        f.send(review)
-        val account = f.ledger.account
-        assertEquals(
-          account.positions("XMR"),
-          PaperPosition(if long then BigDecimal(9) else BigDecimal(-9), BigDecimal(100))
-        )
-        assertEquals(account.cash, BigDecimal(if long then "879.92" else "879.88"))
-        assertEquals(account.realized, BigDecimal(-20))
-        assertEquals(account.fees, BigDecimal(if long then "0.08" else "0.12"))
-        val increase =
-          f.worker.preview(OrderIntent(if long then Side.Buy else Side.Sell, OrderKind.Hard))
-        assert(increase.isLeft, increase.toString)
-        assertEquals(f.ledger.account, account)
-        assertEquals(f.writes.get(), 1)
-      finally f.close()
-    }
+    )
+    val f = new Fixture(initial, size = BigDecimal(80))
+    try
+      f.open("80", "80.01")
+      assert(f.worker.view.ready, "absent cash must not block selling held tokens")
+      assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard)).isLeft)
+      assertEquals(f.writes.get(), 0)
+      val review = f.review(Side.Sell)
+      assertEquals(review.plan.quantity, BigDecimal(1))
+      f.send(review)
+      val account = f.ledger.account
+      assertEquals(
+        account.positions("XMR"),
+        PaperPosition(BigDecimal(9), BigDecimal(100))
+      )
+      assertEquals(account.cash, BigDecimal("79.92"))
+      assertEquals(account.realized, BigDecimal(-20))
+      assertEquals(account.fees, BigDecimal("0.08"))
+      val increase =
+        f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard))
+      assert(increase.isRight, "sale proceeds can fund a later buy: " + increase.toString)
+      assertEquals(f.ledger.account, account)
+      assertEquals(f.writes.get(), 1)
+    finally f.close()
+  }
 
-    test((if long then "long" else "short") + " smaller opposite position is not a reducing fill") {
-      val initial = PaperAccount(
-        BigDecimal(100),
-        positions = Map(
-          "XMR" -> PaperPosition(if long then BigDecimal(10) else BigDecimal(-10), BigDecimal(100))
-        )
+  test("an oversized selected sell is capped at the held tokens") {
+    val initial = PaperAccount(
+      BigDecimal(100),
+      deposit = BigDecimal(1100),
+      positions = Map(
+        "XMR" -> PaperPosition(BigDecimal(10), BigDecimal(100))
       )
-      val f = new Fixture(initial, size = BigDecimal(1900))
-      try
-        if long then f.open("100", "100.01") else f.open()
-        val result =
-          f.worker.preview(OrderIntent(if long then Side.Sell else Side.Buy, OrderKind.Hard))
-        assert(result.isLeft, "an overexposed sign reversal passed as a reduction")
-        assertEquals(f.ledger.account, initial)
-        assertEquals(f.writes.get(), 0)
-      finally f.close()
-    }
+    )
+    val f = new Fixture(initial, size = BigDecimal(1900))
+    try
+      f.open("100", "100.01")
+      val review = f.review(Side.Sell)
+      assertEquals(review.plan.quantity, BigDecimal(10))
+      f.send(review)
+      assertEquals(f.ledger.account.positions, Map.empty[String, PaperPosition])
+      assertEquals(f.ledger.account.cash, BigDecimal(1099))
+      assertEquals(f.writes.get(), 1)
+    finally f.close()
+  }
 
-    test((if long then "long"
-          else "short") + " exact closing projection permits negative remaining equity") {
-      val initial = PaperAccount(
-        BigDecimal(100),
-        positions = Map(
-          "XMR" -> PaperPosition(if long then BigDecimal(10) else BigDecimal(-10), BigDecimal(100))
-        )
+  test("closing a losing wallet holding returns its sale proceeds and removes its entry") {
+    val initial = PaperAccount(
+      BigDecimal(100),
+      deposit = BigDecimal(1100),
+      positions = Map(
+        "XMR" -> PaperPosition(BigDecimal(10), BigDecimal(100))
       )
-      val price = BigDecimal(if long then 80 else 120)
-      val ledger = openLedger(initial, BigDecimal("0.001"), _ => ())
-      val plan = OrderPlan(
-        "XMR",
-        0,
-        if long then Side.Sell else Side.Buy,
-        OrderKind.Hard,
-        BigDecimal(10),
-        price,
-        price,
-        BigDecimal(10),
-        price * 10,
-        Some(price),
-        BigDecimal(0)
-      )
-      try
-        assert(ledger.check(plan, initial).isRight)
-        assertEquals(ledger.account, initial)
-        assert(ledger.fill(plan, epoch, Some(0L)).isRight)
-        assertEquals(ledger.account.positions, Map.empty[String, PaperPosition])
-        assertEquals(ledger.account.cash, BigDecimal(if long then "-100.8" else "-101.2"))
-        assertEquals(ledger.account.realized, BigDecimal(-200))
-      finally ledger.close()
-    }
+    )
+    val price = BigDecimal(80)
+    val ledger = openLedger(initial, BigDecimal("0.001"), _ => ())
+    val plan = OrderPlan(
+      "XMR",
+      0,
+      Side.Sell,
+      OrderKind.Hard,
+      BigDecimal(10),
+      price,
+      price,
+      BigDecimal(10),
+      price * 10,
+      Some(price),
+      BigDecimal(0)
+    )
+    try
+      assert(ledger.check(plan, initial).isRight)
+      assertEquals(ledger.account, initial)
+      assert(ledger.fill(plan, epoch, Some(0L)).isRight)
+      assertEquals(ledger.account.positions, Map.empty[String, PaperPosition])
+      assertEquals(ledger.account.cash, BigDecimal("899.2"))
+      assertEquals(ledger.account.realized, BigDecimal(-200))
+    finally ledger.close()
+  }
 
   test("another held market is named before review and returning to it preserves the account") {
     val initial = PaperAccount(
       BigDecimal(1000),
+      deposit = BigDecimal(1200),
       positions = Map("XMR" -> PaperPosition(BigDecimal(2), BigDecimal(100)))
     )
     val f = new Fixture(initial)
@@ -272,7 +292,8 @@ class PaperUxIndependentSpec extends munit.FunSuite:
   }
 
   test("an intervening writer invalidates the captured account revision after fill calculation") {
-    val f = new Fixture(PaperAccount(BigDecimal(600)), fee = BigDecimal(0))
+    val f =
+      new Fixture(PaperAccount(BigDecimal(600), deposit = BigDecimal(600)), fee = BigDecimal(0))
     try
       f.open()
       val review = f.review(Side.Buy)
@@ -305,7 +326,8 @@ class PaperUxIndependentSpec extends munit.FunSuite:
     var messages = Vector.empty[String]
     var identities = Vector.empty[Long]
     for _ <- 1 to 3 do
-      val f = new Fixture(PaperAccount(BigDecimal(200)), fee = BigDecimal(0))
+      val f =
+        new Fixture(PaperAccount(BigDecimal(200), deposit = BigDecimal(200)), fee = BigDecimal(0))
       try
         f.open()
         f.depth("99.99", "100", askSize = "1")
@@ -331,7 +353,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
       val read = new CountDownLatch(1)
       val observed = new AtomicReference[TradingView]()
       val f = new Fixture(
-        PaperAccount(BigDecimal(1000)),
+        PaperAccount(BigDecimal(1000), deposit = BigDecimal(1000)),
         save = _ => {
           entered.countDown()
           if !release.await(5, TimeUnit.SECONDS) then
@@ -355,10 +377,10 @@ class PaperUxIndependentSpec extends munit.FunSuite:
         release.countDown()
         waitFor("save result missing")(!f.worker.view.pending)
         if fail then
-          assertEquals(f.ledger.account, PaperAccount(BigDecimal(1000)))
+          assertEquals(f.ledger.account, PaperAccount(BigDecimal(1000), deposit = BigDecimal(1000)))
           assert(f.worker.view.outcome.exists(_.contains("storage failed")))
         else
-          assertEquals(f.ledger.account.cash, BigDecimal("999.5"))
+          assertEquals(f.ledger.account.cash, BigDecimal("499.5"))
           assertEquals(f.worker.view.position, Some(BigDecimal(5)))
           assertEquals(f.ledger.account.count, 1L)
       finally

@@ -1,7 +1,6 @@
 package desk
 
 import java.nio.file.Path
-import upickle.default.{ReadWriter, macroRW, read, write}
 
 final case class PaperPosition(quantity: BigDecimal, entry: BigDecimal)
 final case class PaperAccount(
@@ -10,12 +9,31 @@ final case class PaperAccount(
     fees: BigDecimal = BigDecimal(0),
     positions: Map[String, PaperPosition] = Map.empty,
     orders: Vector[String] = Vector.empty,
-    count: Long = 0L
+    count: Long = 0L,
+    deposit: BigDecimal
 )
 
 object PaperLedger:
-  private given ReadWriter[PaperPosition] = macroRW
-  private given ReadWriter[PaperAccount] = macroRW
+  private def add(a: BigDecimal, b: BigDecimal): BigDecimal =
+    BigDecimal(a.bigDecimal.add(b.bigDecimal))
+  private def subtract(a: BigDecimal, b: BigDecimal): BigDecimal =
+    BigDecimal(a.bigDecimal.subtract(b.bigDecimal))
+  private def multiply(a: BigDecimal, b: BigDecimal): BigDecimal =
+    BigDecimal(a.bigDecimal.multiply(b.bigDecimal))
+
+  private object Json extends upickle.AttributeTagged:
+    override def serializeDefaults: Boolean = true
+    private given ReadWriter[PaperPosition] = macroRW
+    private given ReadWriter[PaperAccount] = macroRW
+    def decode(text: String): PaperAccount =
+      val data = ujson.read(text)
+      require(
+        Set("cash", "deposit", "realized", "fees", "positions", "orders", "count")
+          .subsetOf(data.obj.keySet.toSet),
+        "incomplete saved wallet"
+      )
+      read[PaperAccount](data)
+    def encode(account: PaperAccount): String = write(account)
 
   // The same immutable projection gates review and the authoritative save.
   private def project(
@@ -35,33 +53,26 @@ object PaperLedger:
       )
     else
       val price = value / q
-      val permitted = if plan.side == Side.Buy then price <= plan.limit else price >= plan.limit
+      val boundary = multiply(q, plan.limit)
+      val permitted = if plan.side == Side.Buy then value <= boundary else value >= boundary
       if !permitted then Left("Paper rejected: fill exceeds reviewed limit")
       else
         val old = saved.positions.getOrElse(plan.coin, PaperPosition(BigDecimal(0), price))
-        val signed = if plan.side == Side.Buy then q else -q
-        val closing =
-          if old.quantity.signum != signed.signum then old.quantity.abs.min(q) else BigDecimal(0)
-        val realized = closing * (price - old.entry) * old.quantity.signum
-        val quantity = old.quantity + signed
+        val buying = plan.side == Side.Buy
+        val realized = if buying then BigDecimal(0) else subtract(value, multiply(q, old.entry))
+        val quantity = if buying then add(old.quantity, q) else subtract(old.quantity, q)
         val entry =
           if quantity == 0 then price
-          else if old.quantity.signum == signed.signum then
-            (old.quantity.abs * old.entry + value) / quantity.abs
-          else if quantity.signum == old.quantity.signum then old.entry
-          else price
-        val cost = value * fee
-        val cash = saved.cash + realized - cost
-        val equity = cash + quantity * (price - entry)
-        val exposure = quantity.abs * price
-        val reducing =
-          quantity.abs < old.quantity.abs && (quantity == 0 || quantity.signum == old.quantity.signum)
-        if exposure > equity && !reducing then
+          else if buying then add(multiply(old.quantity, old.entry), value) / quantity
+          else old.entry
+        val cost = multiply(value, fee)
+        val cash =
+          subtract(if buying then subtract(saved.cash, value) else add(saved.cash, value), cost)
+        if !buying && q > old.quantity then
+          Left("Paper limit: not enough " + plan.coin + " to sell")
+        else if cash < 0 then
           Left(
-            "Paper limit: not enough funds including fees.\n" +
-              (if old.quantity != 0 then "Use a smaller size or reduce the position."
-               else if saved.cash > 0 then "Lower order sizes in settings, then restart."
-               else "New paper account: --state <new-directory>")
+            "Paper limit: not enough stables including fees. Lower order sizes in settings, then restart."
           )
         else
           val positions = if quantity == 0 then Map.empty[String, PaperPosition]
@@ -69,8 +80,8 @@ object PaperLedger:
           Right(
             saved.copy(
               cash = cash,
-              realized = saved.realized + realized,
-              fees = saved.fees + cost,
+              realized = add(saved.realized, realized),
+              fees = add(saved.fees, cost),
               positions = positions
             )
           )
@@ -80,18 +91,21 @@ object PaperLedger:
     require(
       balance > 0 && balance <= BigDecimal("1000000000") && fee >= 0 && fee <= BigDecimal("0.01")
     )
-    val path = directory.resolve(s"paper-$network.json")
-    val lease = LocalFiles.lock(directory.resolve(s"paper-$network.lock"))
+    val path = directory.resolve(s"wallet-$network.json")
+    val lease = LocalFiles.lock(directory.resolve(s"wallet-$network.lock"))
     try
       val account = LocalFiles
         .read(path, 2_000_000L)
-        .map(read[PaperAccount](_))
-        .getOrElse(PaperAccount(balance))
-      require(account.count >= 0 && account.orders.size <= 1000 && account.fees >= 0)
+        .map(Json.decode)
+        .getOrElse(PaperAccount(balance, deposit = balance))
+      require(account.deposit > 0 && account.deposit <= BigDecimal("1000000000"))
+      require(
+        account.cash >= 0 && account.count >= 0 && account.orders.size <= 1000 && account.fees >= 0
+      )
       require(account.positions.size <= 1 && account.positions.forall { (coin, p) =>
-        coin.matches("[A-Za-z0-9][A-Za-z0-9:._-]{0,39}") && p.entry > 0 && p.quantity != 0
+        coin.matches("[A-Za-z0-9][A-Za-z0-9:._-]{0,39}") && p.entry > 0 && p.quantity > 0
       })
-      new PaperLedger(account, fee, next => LocalFiles.write(path, write(next)), lease)
+      new PaperLedger(account, fee, next => LocalFiles.write(path, Json.encode(next)), lease)
     catch
       case error: Exception =>
         lease.close()
@@ -124,7 +138,7 @@ final class PaperLedger private (
       PaperLedger.project(saved, fee, plan).flatMap { projected =>
         val q = plan.estimatedQuantity
         val price = plan.estimatedValue / q
-        val cost = plan.estimatedValue * fee
+        val cost = PaperLedger.multiply(plan.estimatedValue, fee)
         val status = if q < plan.quantity then "partial" else "filled"
         val count = Math.addExact(saved.count, 1L)
         val result =

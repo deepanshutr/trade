@@ -18,7 +18,7 @@ class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
     constructor.setAccessible(true)
     val ledger = constructor
       .newInstance(
-        PaperAccount(BigDecimal(10000)),
+        PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
         BigDecimal(0),
         persist,
         new AutoCloseable { def close(): Unit = () }

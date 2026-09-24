@@ -19,7 +19,8 @@ class PaperFlowReviewSpec extends munit.FunSuite:
   private class Fixture(
       initialMode: String = "PAPER",
       configured: Boolean = false,
-      allowLive: Boolean = false
+      allowLive: Boolean = false,
+      held: BigDecimal = BigDecimal(0)
   ):
     val clock = new AtomicLong(start)
     val directory = Files.createTempDirectory("flow-")
@@ -28,6 +29,26 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       owner = Option.when(configured)("0x" + "1" * 40),
       agent = Option.when(configured)(OrderSigning.address(syntheticKey))
     )
+    if held > 0 then
+      LocalFiles.write(
+        directory.resolve("paper/wallet-mainnet.json"),
+        ujson.write(
+          ujson.Obj(
+            "cash" -> config.paperBalance.toString,
+            "deposit" -> (config.paperBalance + held * 100).toString,
+            "realized" -> "0",
+            "fees" -> "0",
+            "orders" -> ujson.Arr(),
+            "count" -> "0",
+            "positions" -> ujson.Obj(
+              "XMR" -> ujson.Obj(
+                "quantity" -> held.toString,
+                "entry" -> "100"
+              )
+            )
+          )
+        )
+      )
     val infoTypes = new java.util.concurrent.CopyOnWriteArrayList[String]()
     val watched = new java.util.concurrent.atomic.AtomicInteger()
     val closed = new java.util.concurrent.atomic.AtomicInteger()
@@ -156,7 +177,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       publish()
       if initialMode == "PAPER" then waitFor("paper did not become ready")(route.view.ready)
     def saved: ujson.Value =
-      ujson.read(Files.readString(directory.resolve("paper/paper-mainnet.json")))
+      ujson.read(Files.readString(directory.resolve("paper/wallet-mainnet.json")))
     def close(): Unit = route.close()
 
   for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
@@ -164,7 +185,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       test(
         s"paper order ${index + 1} reaches persisted fill through visible controls at ${cols}x${rows}"
       ) {
-        val f = new Fixture()
+        val f = new Fixture(held = if index >= 2 then BigDecimal(20) else BigDecimal(0))
         try
           f.open()
           val review = f.prepare(Trading.action(index), cols, rows)
@@ -228,7 +249,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       assertEquals(ledger.account.positions("XMR").quantity, plan.positionAfter)
       assertEquals(
         ledger.account.cash,
-        f.config.paperBalance - plan.estimatedValue * f.config.paperFee
+        f.config.paperBalance - plan.estimatedValue * (1 + f.config.paperFee)
       )
       assertEquals(ledger.account.orders.size, 1)
     finally ledger.close()
@@ -239,7 +260,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
     try
       f.open()
       f.prepare(Trading.action(0))
-      val saved = f.directory.resolve("paper/paper-mainnet.json")
+      val saved = f.directory.resolve("paper/wallet-mainnet.json")
       Files.createDirectory(saved)
       f.send()
       waitFor("storage failure not surfaced")(f.route.view.outcome.nonEmpty)
@@ -353,12 +374,12 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       )
       val paper = f.directory.resolve("paper")
       LocalFiles.directory(paper)
-      LocalFiles.write(paper.resolve("paper-mainnet.json"), "broken")
+      LocalFiles.write(paper.resolve("wallet-mainnet.json"), "broken")
       assert(f.route.switchMode("PAPER").isLeft)
       assertEquals(f.route.mode, "VIEW")
       assertEquals(f.closed.get(), 0)
       val readsBefore = f.infoTypes.size()
       waitFor("existing worker stopped on failed paper selection")(f.infoTypes.size() > readsBefore)
-      assertEquals(Files.readString(paper.resolve("paper-mainnet.json")), "broken")
+      assertEquals(Files.readString(paper.resolve("wallet-mainnet.json")), "broken")
     finally f.close()
   }

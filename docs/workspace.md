@@ -11,11 +11,13 @@ Mouse submission requires a press and release on the same currently visible
 button. A changed market, mode, size or terminal geometry invalidates old controls.
 Switching between simulated and real trading still needs an explicit confirmation.
 
-The right side shows the selected token's signed dollar value, stable collateral
-and net profit after fees. A negative token value means a short position. The
-simulated stable figure is margin collateral cash, not a spendable spot balance.
-For real trading, stable collateral depends on the venue's account mode. Unknown
-or stale values show `--`. Real lifetime net profit is currently unavailable.
+In simulated trading, the right side shows the token's current dollar value,
+spendable stables and net profit after fees. Buy spends stables plus the fee.
+Sell returns stables minus the fee and sells at most the tokens held. Net profit
+equals stables plus the current token value minus the starting balance.
+For real trading, the token value is signed position exposure and the stable
+figure depends on the venue's account mode. Unknown or stale values show `--`.
+Real lifetime net profit is currently unavailable.
 Entry and liquidation prices use the graph's existing price scale. Off-screen
 prices have an arrow. Simulated trading has no liquidation price.
 
@@ -47,15 +49,21 @@ history before observation began. See [market settings](trading.md).
 
 Simulated trading starts with $10,000 and a 0.05 percent fee per fill. It uses
 fresh received depth, permits partial fills, and saves the account before
-reporting success. Prices normally expire after one second. Fresh backup depth
+reporting success. A newer quote can reduce known quantity without extending
+the age of the full depth. Delayed older depth cannot restore that quantity.
+Prices normally expire after one second. Fresh backup depth
 can support orders during stream recovery. Delayed or wrong-market replies cannot
 restore readiness. A slow save shows Saving with elapsed seconds and blocks another
 order until the result is known. A failed save preserves the last confirmed account.
 
-The simulation supports one open market at a time and one-times exposure. Cash,
-fees, realized results and the position survive restarts. The latest 1,000 fills
-and lifetime count are retained. Funding and liquidation are excluded. An opposite
-order can reduce a position, pass through zero and open the other direction.
+The simulated wallet holds one market at a time. Cash, fees, realized results and
+held tokens survive restarts. The latest 1,000 fills and lifetime count are retained.
+Selling cannot borrow tokens or open a short position. Funding and liquidation
+are excluded. The new wallet starts at the configured simulated balance and saves
+to `paper/wallet-mainnet.json` or `paper/wallet-testnet.json`. Old margin simulation
+files remain untouched. Later settings changes do not reset an existing wallet.
+The wallet saves its starting deposit so net profit follows current wallet value.
+Incomplete saved wallets are refused and left untouched.
 Simulated and real accounts remain separate, and simulated mode does not poll the
 real account. No fill, partial fill, refusals and repeated results appear in one
 short status row, with a separate action number for each result.

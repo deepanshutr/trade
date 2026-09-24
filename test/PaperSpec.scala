@@ -13,17 +13,17 @@ class PaperSpec extends munit.FunSuite:
     val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
       assert(ledger.fill(plan(Side.Buy, "2", "100"), 1000L).isRight)
-      assertEquals(ledger.account.cash, BigDecimal("999.8"))
+      assertEquals(ledger.account.cash, BigDecimal("799.8"))
       assertEquals(ledger.account.positions("XMR").quantity, BigDecimal(2))
-      assert(ledger.fill(plan(Side.Sell, "3", "110"), 2000L).isRight)
-      assertEquals(ledger.account.cash, BigDecimal("1019.47"))
-      assertEquals(ledger.account.realized, BigDecimal(20))
-      assertEquals(ledger.account.positions("XMR").quantity, BigDecimal(-1))
-      assertEquals(ledger.account.positions("XMR").entry, BigDecimal(110))
+      assert(ledger.fill(plan(Side.Sell, "1", "110"), 2000L).isRight)
+      assertEquals(ledger.account.cash, BigDecimal("909.69"))
+      assertEquals(ledger.account.realized, BigDecimal(10))
+      assertEquals(ledger.account.positions("XMR").quantity, BigDecimal(1))
+      assertEquals(ledger.account.positions("XMR").entry, BigDecimal(100))
     finally ledger.close()
     val reopened = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
-      assertEquals(reopened.account.cash, BigDecimal("1019.47"))
+      assertEquals(reopened.account.cash, BigDecimal("909.69"))
       assertEquals(reopened.account.orders.size, 2)
     finally reopened.close()
   }
@@ -69,9 +69,9 @@ class PaperSpec extends munit.FunSuite:
       )
       assert(ledger.fill(plan(Side.Buy, "1", "100"), 1000L).isRight)
     finally ledger.close()
-    Files.writeString(directory.resolve("paper-mainnet.json"), "broken")
+    Files.writeString(directory.resolve("wallet-mainnet.json"), "broken")
     intercept[Exception](
       PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     )
-    assertEquals(Files.readString(directory.resolve("paper-mainnet.json")), "broken")
+    assertEquals(Files.readString(directory.resolve("wallet-mainnet.json")), "broken")
   }

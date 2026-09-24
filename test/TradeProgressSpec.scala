@@ -107,7 +107,7 @@ class TradeProgressSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("an exhausted flat paper account gets a separate-account recovery route") {
+  test("wallet refusals and a losing sale preserve the remaining spendable cash") {
     val f = new Paper(BigDecimal(200))
     def one(side: Side, price: BigDecimal): OrderPlan =
       OrderPlan(
@@ -125,14 +125,23 @@ class TradeProgressSpec extends munit.FunSuite:
       )
     try
       f.open()
-      assert(f.ledger.fill(one(Side.Sell, BigDecimal(100)), start).isRight)
-      assert(f.ledger.fill(one(Side.Buy, BigDecimal(400)), start + 1).isRight)
-      val exhausted = f.ledger.account
-      assertEquals(exhausted.cash, BigDecimal(-100))
-      assert(exhausted.positions.isEmpty)
+      val initial = f.ledger.account
+      assert(f.ledger.fill(one(Side.Sell, BigDecimal(100)), start).isLeft)
+      assertEquals(f.ledger.account, initial)
+      assert(f.ledger.fill(one(Side.Buy, BigDecimal(200)), start + 1).isRight)
+      assertEquals(f.ledger.account.cash, BigDecimal(0))
+      val spent = f.ledger.account
+      assert(f.ledger.fill(one(Side.Buy, BigDecimal(1)), start + 2).isLeft)
+      assertEquals(f.ledger.account, spent)
+      assert(f.ledger.fill(one(Side.Sell, BigDecimal(50)), start + 3).isRight)
+      val remaining = f.ledger.account
+      assertEquals(remaining.cash, BigDecimal(50))
+      assertEquals(remaining.realized, BigDecimal(-150))
+      assert(remaining.positions.isEmpty)
       val reason = f.worker.preview(Trading.action(0)).swap.toOption.get
-      assert(reason.contains("--state"), reason)
-      assertEquals(f.ledger.account, exhausted)
+      assert(reason.contains("settings"), reason)
+      assertEquals(f.ledger.account, remaining)
+      assertEquals(f.ledger.account.count, 2L)
     finally f.close()
   }
 

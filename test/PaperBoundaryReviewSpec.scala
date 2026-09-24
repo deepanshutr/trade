@@ -11,10 +11,15 @@ class PaperBoundaryReviewSpec extends munit.FunSuite:
     while !condition && System.nanoTime() < end do Thread.sleep(2)
     assert(condition, label)
 
-  private class Fixture:
+  private class Fixture(val held: BigDecimal = BigDecimal(0)):
     val clock = new AtomicLong(start)
     val directory = Files.createTempDirectory("boundary-")
     val config = TradingConfig()
+    if held > 0 then
+      LocalFiles.write(
+        directory.resolve("wallet-mainnet.json"),
+        s"""{"cash":"${config.paperBalance}","deposit":"${config.paperBalance + held * 100}","realized":"0","fees":"0","orders":[],"count":"0","positions":{"XMR":{"quantity":"$held","entry":"100"}}}"""
+      )
     val ledger = PaperLedger.open(directory, "mainnet", config.paperBalance, config.paperFee)
     val rest = new Rest:
       def post(body: String): Option[String] =
@@ -92,7 +97,7 @@ class PaperBoundaryReviewSpec extends munit.FunSuite:
       f.open()
       val first = f.review()
       f.clock.incrementAndGet()
-      val second = f.review(Trading.action(3))
+      val second = f.review(Trading.action(1))
       assert(!f.worker.submitReviewed(first))
       assert(f.worker.submitReviewed(second))
       f.settle()
@@ -243,7 +248,7 @@ class PaperBoundaryReviewSpec extends munit.FunSuite:
   for side <- Vector(Side.Buy, Side.Sell) do
     for scenario <- Vector("improved", "adverse within limit", "partial", "outside limit") do
       test(s"$side uses fresh $scenario depth at the captured quantity and limit") {
-        val f = new Fixture
+        val f = new Fixture(if side == Side.Sell then BigDecimal(10) else BigDecimal(0))
         try
           f.open()
           val review = f.review(OrderIntent(side, OrderKind.Hard))
@@ -281,7 +286,7 @@ class PaperBoundaryReviewSpec extends munit.FunSuite:
           if scenario == "outside limit" then
             assertEquals(f.ledger.account.count, 0L)
             assertEquals(f.ledger.account.cash, f.config.paperBalance)
-            assertEquals(f.worker.view.position, Some(BigDecimal(0)))
+            assertEquals(f.worker.view.position, Some(f.held))
             assert(
               f.worker.view.outcome.exists(text =>
                 text.contains("no valid fill") || text.contains("no fill")
@@ -292,11 +297,14 @@ class PaperBoundaryReviewSpec extends munit.FunSuite:
             assertEquals(f.ledger.account.count, 1L)
             assertEquals(
               f.ledger.account.positions("XMR").quantity,
-              if buy then filled else -filled
+              if buy then filled else f.held - filled
             )
-            assertEquals(f.ledger.account.positions("XMR").entry, fillPrice)
+            assertEquals(
+              f.ledger.account.positions("XMR").entry,
+              if buy then fillPrice else BigDecimal(100)
+            )
             assertEquals(f.ledger.account.fees, filled * fillPrice * f.config.paperFee)
-            assertEquals(f.worker.view.position, Some(if buy then filled else -filled))
+            assertEquals(f.worker.view.position, Some(if buy then filled else f.held - filled))
             assert(f.worker.view.outcome.exists(_.contains(if scenario == "partial" then "partial"
             else "filled")))
           assert(!f.worker.submitReviewed(review), "consumed review was replayed")

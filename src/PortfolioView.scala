@@ -41,14 +41,20 @@ object PortfolioView:
   def paper(account: PaperAccount, coin: String, mark: Option[BigDecimal]): PortfolioView =
     val held = account.positions.get(coin)
     val price = mark.filter(_ > 0)
-    val exposure = held.fold(Option(BigDecimal(0)))(p => price.map(_ * p.quantity))
-    val open = if account.positions.isEmpty then Some(BigDecimal(0))
-    else if account.positions.keySet != Set(coin) then None
-    else held.flatMap(p => price.map(px => p.quantity * (px - p.entry)))
+    val exposure = held.fold(Option(BigDecimal(0)))(p =>
+      price.map(px => BigDecimal(px.bigDecimal.multiply(p.quantity.bigDecimal)))
+    )
+    val net = if account.positions.nonEmpty && account.positions.keySet != Set(coin) then None
+    else
+      exposure.map(value =>
+        BigDecimal(
+          account.cash.bigDecimal.add(value.bigDecimal).subtract(account.deposit.bigDecimal)
+        )
+      )
     PortfolioView(
       exposure,
       Some(account.cash),
-      open.map(_ + account.realized - account.fees),
+      net,
       held.map(_.entry),
       None
     )
