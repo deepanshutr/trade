@@ -12,6 +12,11 @@ class MarketNamesSpec extends munit.FunSuite:
     assertEquals(Exchange.market(ujson.read(meta), "kPEPE"), MarketRules(0, 0, 10))
   }
 
+  test("market rules refuse a listed name the market prompt would refuse") {
+    val listed = ujson.read("""{"universe":[{"name":"../x","szDecimals":0,"maxLeverage":10}]}""")
+    intercept[IllegalArgumentException](Exchange.market(listed, "../x"))
+  }
+
   test("paper becomes ready for a listed mixed-case market with fresh prices") {
     val now = 1800000000000L
     val directory = Files.createTempDirectory("desk-market-names")
