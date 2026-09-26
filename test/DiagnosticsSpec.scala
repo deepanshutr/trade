@@ -208,3 +208,32 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
       release.countDown()
       assert(exited.await(2, TimeUnit.SECONDS))
   }
+
+  test("overflow stays visible until the drop record is written") {
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val inDrop = new CountDownLatch(1)
+    val releaseDrop = new CountDownLatch(1)
+    val sink = new Memory:
+      override def append(line: String): Unit =
+        entered.countDown()
+        release.await()
+        if line.contains("\"dropped\"") then
+          inDrop.countDown()
+          releaseDrop.await()
+        super.append(line)
+    val log = new Diagnostics(() => sink, () => 10000L, 2000L, capacity = 4)
+    log.start()
+    try
+      assert(entered.await(2, TimeUnit.SECONDS))
+      (1 to 5000).foreach(_ => log.slow(DiagnosticPart.Input, 100000000L))
+      release.countDown()
+      assert(inDrop.await(2, TimeUnit.SECONDS))
+      assert(log.unavailable)
+      releaseDrop.countDown()
+      await(log.status.isEmpty)
+    finally
+      release.countDown()
+      releaseDrop.countDown()
+      log.close()
+  }
