@@ -208,7 +208,12 @@ final class Feed(
             else { val _ = Try(s.close()) }
             accepted
           }
-          if synchronized(current.contains(c)) then wakeHistory()
+          synchronized {
+            if current.contains(c) then
+              val now = clock()
+              historyAt = historyAt.filter((_, at) => now - at < Feed.historyEveryMs)
+              wakeHistory()
+          }
           c.closed.await()
           opened
     finally end(c)
