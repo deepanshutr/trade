@@ -69,3 +69,19 @@ class ArchiveMarketsSpec extends munit.FunSuite:
       assert(!saved.markets.contains("NEW"))
     finally archive.close()
   }
+
+  test("an update to a saved market evicts nothing") {
+    val directory = Files.createTempDirectory("desk-archive-known")
+    val at = 1800000000000L
+    val archive = MarketArchive.open(directory)
+    try
+      for i <- 0 until 32 do
+        val candle = Candle(at - (i + 1) * 60000L, 100, 102, 98, 101, 12)
+        archive.record(Event.CandleUpdate(s"COIN$i", "1m", candle), at + i)
+      archive.record(Event.CandleUpdate("COIN0", "1m", Candle(at, 100, 102, 98, 101, 12)), at + 40)
+      archive.checkpoint()
+      val saved = read[CandleCheckpoint](Files.readString(directory.resolve("candles.json")))
+      assertEquals(saved.markets.size, 32)
+      assert(saved.markets.contains("COIN31"))
+    finally archive.close()
+  }

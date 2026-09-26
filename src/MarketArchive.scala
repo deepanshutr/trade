@@ -200,12 +200,14 @@ final class MarketArchive private (
       total += encoded.length
       event match
         case _: Event.CandleUpdate | _: Event.CandleHistory =>
-          if !states.contains(item.coin) && states.size == 32 then
-            states -= states
-              .minBy(_._2.candles.valuesIterator.flatten.map(_.t).maxOption.getOrElse(0L))
-              ._1
-          val before = states.getOrElse(item.coin, Snapshot.initial(item.coin, at, Vector.empty))
-          states = states.updated(item.coin, State.reduce(before, event, at))
+          val kept =
+            if states.contains(item.coin) || states.size < 32 then states
+            else
+              states - states
+                .minBy(_._2.candles.valuesIterator.flatten.map(_.t).maxOption.getOrElse(0L))
+                ._1
+          val before = kept.getOrElse(item.coin, Snapshot.initial(item.coin, at, Vector.empty))
+          states = kept.updated(item.coin, State.reduce(before, event, at))
         case _ => ()
       lastAt = at
     }
