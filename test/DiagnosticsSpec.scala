@@ -44,7 +44,7 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
     finally log.close()
   }
 
-  test("blocked storage never blocks producers and overflow remains visible") {
+  test("blocked storage never blocks producers and overflow clears after reporting") {
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)
     val sink = new Memory:
@@ -63,6 +63,7 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
       assert(log.unavailable)
       release.countDown()
       await(sink.lines.exists(_.contains("dropped")))
+      await(log.status.isEmpty)
     finally
       release.countDown()
       log.close()
