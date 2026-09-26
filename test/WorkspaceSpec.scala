@@ -5,6 +5,23 @@ class WorkspaceSpec extends munit.FunSuite:
   private val s = Snapshot.initial("XMR", now)
   private val view = TradingView("XMR", message = "View only")
 
+  test("paper limit precision errors retain their reason in the trade status") {
+    val notice = "Paper limit does not match market precision"
+    val frame = Workspace.draw(
+      s,
+      view.copy(ready = true),
+      PanelView(mode = "PAPER", actionNotice = Some(notice), actionNumber = 1),
+      160,
+      45,
+      now,
+      java.time.ZoneId.of("UTC"),
+      Style.mono
+    )
+    val status = frame.lines(45 - 15 + 4).drop(Layout.workspaceMarketWidth(160) + 1).trim
+    assert(!status.contains("Insufficient funds"), status)
+    assertEquals(status, s"$notice #1")
+  }
+
   test("book is above tape, references beside them, simple trading controls at right") {
     for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
       val frame = Workspace.draw(

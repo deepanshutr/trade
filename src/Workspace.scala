@@ -193,10 +193,7 @@ object Workspace:
         else if lower.contains(" sell ") then "Sold"
         else "Filled"
       else if lower.contains("no fill") then "No fill"
-      else if lower.contains("not enough") || lower.contains("funds") || lower.startsWith(
-          "paper limit"
-        )
-      then "Insufficient funds"
+      else if lower.contains("not enough") || lower.contains("funds") then "Insufficient funds"
       else if lower.contains("storage") || lower.contains("save failed") then "Save failed"
       else if lower.contains("unknown") || lower.contains("unresolved") then "Confirming result"
       else if lower.contains("disconnect") || lower.contains("reconnect") then "Reconnecting"
