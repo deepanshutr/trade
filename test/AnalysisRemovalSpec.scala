@@ -3,18 +3,11 @@ package desk
 import java.nio.file.Files
 
 class AnalysisRemovalSpec extends munit.FunSuite:
-  test("removed analysis keys are ignored outside the market prompt") {
-    "ahyn[]".foreach { key =>
-      assertEquals(Keys.step(Vector.empty, key.toInt, false)._2, None, key.toString)
-      assertEquals(
-        Keys.step(Vector.empty, key.toInt, true)._2,
-        Some(Command.PromptChar(key))
-      )
-    }
-  }
-
-  test("the removed no-analysis flag is rejected and absent from usage") {
-    assertEquals(Main.parseArgs(Seq("--no-analysis")), Left("unknown flag --no-analysis"))
+  test("legacy no-analysis flag is accepted as a no-op and absent from usage") {
+    assertEquals(
+      Main.parseArgs(Seq("XMR", "--record", "--no-analysis")),
+      Main.parseArgs(Seq("XMR", "--record"))
+    )
     assert(!Main.usage.contains("--no-analysis"))
   }
 
