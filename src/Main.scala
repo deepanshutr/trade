@@ -29,10 +29,11 @@ object Main:
           if Vector(chosen.trade, chosen.paper, chosen.record).count(identity) > 1 then
             Left("choose one of paper, live or public recording")
           else Right(chosen)
-        case "--mono" :: tail   => loop(tail, chosen.copy(mono = true), hasCoin)
-        case "--trade" :: tail  => loop(tail, chosen.copy(trade = true), hasCoin)
-        case "--paper" :: tail  => loop(tail, chosen.copy(paper = true), hasCoin)
-        case "--record" :: tail => loop(tail, chosen.copy(record = true), hasCoin)
+        case "--no-analysis" :: tail => loop(tail, chosen, hasCoin)
+        case "--mono" :: tail        => loop(tail, chosen.copy(mono = true), hasCoin)
+        case "--trade" :: tail       => loop(tail, chosen.copy(trade = true), hasCoin)
+        case "--paper" :: tail       => loop(tail, chosen.copy(paper = true), hasCoin)
+        case "--record" :: tail      => loop(tail, chosen.copy(record = true), hasCoin)
         case "--chime" :: tail if chosen.audio == "voice" =>
           loop(tail, chosen.copy(audio = "chime"), hasCoin)
         case "--mute" :: tail if chosen.audio == "voice" =>

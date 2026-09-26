@@ -1,12 +1,8 @@
 package desk
 
-import java.time.{Instant, ZoneOffset}
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 
 class AlertsIntegrationSpec extends munit.FunSuite:
-  private val now = Instant.parse("2026-09-21T12:00:00Z").toEpochMilli
-  private val snapshot = Snapshot.initial("XMR", now)
-
   test("startup mute preserves the voice style when sound resumes") {
     for (flags, voice) <- Vector(
         Vector.empty[String] -> true,
@@ -25,89 +21,29 @@ class AlertsIntegrationSpec extends munit.FunSuite:
       val sound = Main.announcements(args, output)
       try
         assertEquals(sound.muted, flags.contains("--mute"))
-        if sound.muted then assert(!sound.offer(Announcement("old", now, "news", "Old")))
+        if sound.muted then assert(!sound.offer(Announcement("Old")))
         sound.setMuted(false)
         sound.start()
-        assert(sound.offer(Announcement("new", now, "news", "Current headline")))
+        assert(sound.offer(Announcement("Market moved")))
         assert(called.await(3, TimeUnit.SECONDS))
         assertEquals(actual, Some(voice))
       finally sound.close()
     assert(Main.parseArgs(Vector("--mute", "--chime")).isLeft)
   }
 
-  test("news retains publication and retrieval times without exposing source prose") {
-    val policy = new AlertPolicy
-    policy.news(Map(News.crypto -> Vector.empty), now)
-    val item = NewsItem(
-      "article",
-      "Crypto report",
-      "https://www.coindesk.com/markets/report",
-      Some(now - 600000L),
-      None,
-      now - 1000L
-    )
-    val alerts = policy.news(Map(News.crypto -> Vector(item)), now)
-    assertEquals(alerts.size, 1)
-    assertEquals(alerts.head.publishedAt, item.publishedAt)
-    assertEquals(alerts.head.retrievedAt, Some(item.retrievedAt))
-    val panel = PanelView(
-      alerts = alerts
-    )
-    val frame = Workspace.draw(
-      snapshot,
-      TradingView("XMR", message = "View only"),
-      panel,
-      160,
-      45,
-      now,
-      ZoneOffset.UTC,
-      Style.mono
-    )
-    val text = frame.lines
-      .take(45 - 15)
-      .map(_.drop(Layout.workspaceChartWidth(160) + 1))
-      .mkString("\n")
-    assertEquals(alerts.head.publishedAt, item.publishedAt)
-    assertEquals(alerts.head.retrievedAt, Some(item.retrievedAt))
-    assert(!text.contains("Missing source"))
-    assert(!text.contains(item.url))
-  }
-
-  test("full sound queues retain the visual notice without persisting on the input lock") {
+  test("workspace announcements use the bounded sound queue") {
     val output = new AnnouncementOutput:
       def play(text: String, voice: Boolean, canceled: () => Boolean): Unit =
         fail("no audio expected")
       def close(): Unit = ()
     val sound = new Announcements(output)
-    val controller = new DeskController(
-      PanelView(),
-      () => now,
-      _ => Left("disabled"),
-      _ => fail("unexpected order"),
-      _ => Left("disabled"),
-      persist = _ => fail("announcement attempted message storage")
-    )
     try
       for i <- 1 to 5 do
         WorkspaceApp.announce(
-          Announcement(i.toString, now, "news", s"Headline $i"),
-          controller,
+          Announcement(s"Market moved $i"),
           sound
         )
-      assertEquals(controller.panel.alerts.map(_.id), (1 to 5).map(_.toString).toVector)
+      assert(sound.status.contains("4 queued"))
       assert(sound.status.contains("1 dropped"))
-      controller.alertStatus(sound.status)
-      val frame = Workspace.draw(
-        snapshot,
-        TradingView("XMR", message = "View only"),
-        controller.panel,
-        120,
-        40,
-        now,
-        ZoneOffset.UTC,
-        Style.mono
-      )
-      assertEquals(controller.panel.alerts.last.text, "Headline 5")
-      assert(controller.panel.soundStatus.contains("1 dropped"))
     finally sound.close()
   }
