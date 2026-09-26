@@ -68,12 +68,10 @@ final class PublicRequestBudget(directory: Path, wall: () => Long):
       require(now >= 0)
       val saved = directory.resolve("schedule.txt")
       val next = LocalFiles.read(saved, 32L).map(_.trim.toLong).getOrElse(now)
-      require(
-        next >= 0 && BigInt(next) <= BigInt(now) + 300000L,
-        "public request schedule is invalid or clock moved backwards"
-      )
+      require(next >= 0, "public request schedule is invalid")
+      val base = if BigInt(next) > BigInt(now) + 300000L then now else next
       val delay = (weight.toLong * 60000L + 699L) / 700L
-      val deadline = Math.addExact(now.max(next), delay)
+      val deadline = Math.addExact(now.max(base), delay)
       LocalFiles.write(saved, deadline.toString)
       deadline - now
     }

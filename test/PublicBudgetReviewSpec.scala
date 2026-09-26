@@ -47,10 +47,6 @@ class PublicBudgetReviewSpec extends munit.FunSuite:
     for weight <- Vector(-1, 0, 105, Int.MaxValue) do
       intercept[IllegalArgumentException](budget.reserve(weight))
     assertEquals(Files.readString(saved), before)
-    now.set(at - 300001L)
-    intercept[IllegalArgumentException](budget.reserve(20))
-    assertEquals(Files.readString(saved), before)
-    now.set(at)
     Files.setPosixFilePermissions(saved, PosixFilePermissions.fromString("rw-r--r--"))
     intercept[IllegalArgumentException](budget.reserve(20))
     assertEquals(Files.readString(saved), before)

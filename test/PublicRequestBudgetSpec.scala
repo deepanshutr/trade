@@ -19,6 +19,17 @@ class PublicRequestBudgetSpec extends munit.FunSuite:
     assertEquals(Files.readString(root.resolve("schedule.txt")), "damaged")
   }
 
+  test("a backwards wall-clock step resets the public request schedule") {
+    val root = Files.createTempDirectory("desk-clock-step-request-budget")
+    var now = 1800000000000L
+    val budget = new PublicRequestBudget(root, () => now)
+    assertEquals(budget.reserve(2), 172L)
+    now -= 600000L
+    assertEquals(budget.reserve(2), 172L)
+    assertEquals(Files.readString(root.resolve("schedule.txt")), (now + 172L).toString)
+    assertEquals(budget.reserve(2), 344L)
+  }
+
   test("two public clients share a paced full-history schedule") {
     val kind = Class.forName("desk.PublicRequestBudget")
     val root = Files.createTempDirectory("desk-request-budget")
@@ -32,4 +43,31 @@ class PublicRequestBudgetSpec extends munit.FunSuite:
     }
     assert(waits.sliding(2).forall(pair => pair(1) > pair(0)))
     assert(waits.last >= 18L * 104L * 60000L / 700L)
+  }
+
+  test("a negative saved schedule is refused and preserved") {
+    val root = Files.createTempDirectory("desk-negative-request-budget")
+    val budget = new PublicRequestBudget(root, () => 1800000000000L)
+    budget.reserve(2)
+    LocalFiles.write(root.resolve("schedule.txt"), "-1")
+    intercept[IllegalArgumentException](budget.reserve(2))
+    assertEquals(Files.readString(root.resolve("schedule.txt")), "-1")
+  }
+
+  test("a schedule exactly five minutes ahead is kept") {
+    val root = Files.createTempDirectory("desk-edge-request-budget")
+    val now = 1800000000000L
+    val budget = new PublicRequestBudget(root, () => now)
+    budget.reserve(2)
+    LocalFiles.write(root.resolve("schedule.txt"), (now + 300000L).toString)
+    assertEquals(budget.reserve(2), 300172L)
+  }
+
+  test("the reset comparison does not overflow near the largest clock value") {
+    val root = Files.createTempDirectory("desk-overflow-request-budget")
+    val now = Long.MaxValue - 1000L
+    val budget = new PublicRequestBudget(root, () => now)
+    budget.reserve(2)
+    LocalFiles.write(root.resolve("schedule.txt"), (now + 500L).toString)
+    assertEquals(budget.reserve(2), 672L)
   }
