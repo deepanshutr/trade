@@ -19,6 +19,17 @@ class PublicRequestBudgetSpec extends munit.FunSuite:
     assertEquals(Files.readString(root.resolve("schedule.txt")), "damaged")
   }
 
+  test("a backwards wall-clock step resets the public request schedule") {
+    val root = Files.createTempDirectory("desk-clock-step-request-budget")
+    var now = 1800000000000L
+    val budget = new PublicRequestBudget(root, () => now)
+    assertEquals(budget.reserve(2), 172L)
+    now -= 600000L
+    assertEquals(budget.reserve(2), 172L)
+    assertEquals(Files.readString(root.resolve("schedule.txt")), (now + 172L).toString)
+    assertEquals(budget.reserve(2), 344L)
+  }
+
   test("two public clients share a paced full-history schedule") {
     val kind = Class.forName("desk.PublicRequestBudget")
     val root = Files.createTempDirectory("desk-request-budget")
