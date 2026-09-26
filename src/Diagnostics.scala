@@ -102,6 +102,7 @@ final class Diagnostics private[desk] (
   private val closed = new AtomicBoolean(false)
   private val failed = new AtomicBoolean(false)
   private val dropped = new AtomicLong(0L)
+  private val reportedDrops = new AtomicLong(0L)
   private val writerAt = new AtomicLong(0L)
   private val frameAt = new AtomicLong(0L)
   private var selected = ""
@@ -126,7 +127,7 @@ final class Diagnostics private[desk] (
       if !queue.offer(record) then dropped.incrementAndGet()
 
   def droppedCount: Long = dropped.get()
-  def unavailable: Boolean = failed.get() || dropped.get() > 0 ||
+  def unavailable: Boolean = failed.get() || dropped.get() != reportedDrops.get() ||
     (started.get() && !closed.get() && monotonic() - writerAt.get() > 3000L)
   def status: String = if unavailable then "Logs unavailable" else ""
 
@@ -306,7 +307,6 @@ final class Diagnostics private[desk] (
       sink = Some(openSink())
       emit("started", "build" -> Diagnostics.build)
       var sampled = 0L
-      var reportedDrops = 0L
       while !closed.get() || !queue.isEmpty do
         writerAt.set(monotonic())
         if !closed.get() && monotonic() - sampled >= 1000L then
@@ -315,11 +315,11 @@ final class Diagnostics private[desk] (
         val record = queue.poll(100L, TimeUnit.MILLISECONDS)
         if record != null then sink.get.append(ujson.write(record))
         val lost = dropped.get()
-        if lost != reportedDrops then
+        if lost != reportedDrops.get() then
           sink.get.append(
             ujson.write(ujson.Obj("at" -> now(), "event" -> "dropped", "count" -> lost))
           )
-          reportedDrops = lost
+          reportedDrops.set(lost)
     catch
       case _: InterruptedException => ()
       case _: Exception            => failed.set(true)
