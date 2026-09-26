@@ -14,15 +14,6 @@ class AlertsSpec extends munit.FunSuite:
           Book(Vector(Level(price, "1", 1)), Vector(Level(price, "1", 1)), at)
         )
       )
-  private def item(
-      name: String,
-      at: Long = now,
-      title: String = "Gold rises",
-      source: String = News.gold
-  ): NewsItem =
-    val host = java.net.URI.create(source).getHost
-    val link = "https://" + host + "/news/" + name
-    NewsItem(link, title, link, Some(at), None, now)
   private def checkSoon(message: String)(condition: => Boolean): Unit =
     val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
     while !condition && System.nanoTime() < until do Thread.sleep(5)
@@ -202,157 +193,6 @@ class AlertsSpec extends munit.FunSuite:
   }
 
   test(
-    "every source has its own silent first successful batch and recovers without replay"
-  ) {
-    val policy = new AlertPolicy
-    val first = item("first")
-    assertEquals(
-      policy.news(Map(News.gold -> Vector(first)), now),
-      Vector.empty
-    )
-    assertEquals(policy.news(Map.empty, now + 1000), Vector.empty)
-    val later = item("later", now + 1000)
-    val newSource =
-      item("new-source", now + 1000, "Network release", News.monero)
-    val alerts = policy.news(
-      Map(News.gold -> Vector(first, later), News.monero -> Vector(newSource)),
-      now + 1000
-    )
-    assertEquals(alerts.map(_.url.get), Vector(later.url))
-    assertEquals(
-      policy.news(Map(News.gold -> Vector(first, later)), now + 2000),
-      Vector.empty
-    )
-  }
-
-  test("news rejects future, undated and older than one hour reports") {
-    val policy = new AlertPolicy
-    policy.news(Map(News.gold -> Vector.empty), now)
-    val samples = Vector(
-      item("future", now + 1),
-      item("old", now - 3600001L),
-      item("negative", Long.MinValue),
-      item("undated").copy(publishedAt = None),
-      item("boundary", now - 3600000L),
-      item("fresh", now)
-    )
-    val alerts = policy.news(Map(News.gold -> samples), now)
-    assertEquals(
-      alerts.flatMap(_.url).toSet,
-      Set(samples(4).url, samples(5).url)
-    )
-  }
-
-  test(
-    "news with stale or future retrieval and a backwards clock stays silent"
-  ) {
-    val policy = new AlertPolicy
-    policy.news(Map(News.gold -> Vector.empty), now)
-    assertEquals(
-      policy.news(
-        Map(
-          News.gold -> Vector(
-            item("stale").copy(retrievedAt = now - 1800001L),
-            item("future-retrieval").copy(retrievedAt = now + 1)
-          )
-        ),
-        now
-      ),
-      Vector.empty
-    )
-    assertEquals(
-      policy.news(
-        Map(
-          News.gold -> Vector(
-            item("clock").copy(
-              publishedAt = Some(now - 1),
-              retrievedAt = now - 1
-            )
-          )
-        ),
-        now - 1
-      ),
-      Vector.empty
-    )
-  }
-
-  test(
-    "tracking changes deduplicate without conflating meaningful query values"
-  ) {
-    val policy = new AlertPolicy
-    val first = item("story").copy(url = item("story").url + "?article=1&utm_source=one#top")
-    policy.news(Map(News.gold -> Vector(first)), now)
-    val duplicate =
-      first.copy(url = item("story").url + "?utm_source=two&article=1&at_campaign=rss")
-    val different =
-      first.copy(url = item("story").url + "?article=2&utm_source=one")
-    val alerts =
-      policy.news(Map(News.gold -> Vector(duplicate, different)), now)
-    assertEquals(alerts.flatMap(_.url), Vector(different.url))
-  }
-
-  test("meaningful repeated query parameters retain their original order") {
-    val policy = new AlertPolicy
-    val first =
-      item("ordered").copy(url = item("ordered").url + "?article=1&article=2")
-    val different =
-      first.copy(url = item("ordered").url + "?article=2&article=1")
-    policy.news(Map(News.gold -> Vector(first)), now)
-    assertEquals(
-      policy.news(Map(News.gold -> Vector(different)), now).flatMap(_.url),
-      Vector(different.url)
-    )
-  }
-
-  test(
-    "gold uses whole words, topic-specific feeds do not require the token in every title"
-  ) {
-    val policy = new AlertPolicy
-    val feeds =
-      Vector(News.gold, News.crypto, News.war, News.zcash, News.monero)
-    policy.news(feeds.map(_ -> Vector.empty[NewsItem]).toMap, now)
-    val gold = Vector(
-      "Goldman Sachs earnings",
-      "A golden opportunity",
-      "Gold rises",
-      "XAU/USD falls",
-      "gold-price update"
-    ).zipWithIndex.map((title, i) => item("gold-" + i, title = title))
-    val specific = feeds.tail.map(source =>
-      source -> Vector(
-        item("release", title = "Important update", source = source)
-      )
-    )
-    val alerts = policy.news(specific.toMap + (News.gold -> gold), now)
-    assertEquals(alerts.size, 7)
-    assert(!alerts.exists(_.text.contains("Goldman")))
-    assert(!alerts.exists(_.text.contains("golden")))
-  }
-
-  test("news rejects unsupported sources and secure-origin tricks") {
-    val policy = new AlertPolicy
-    policy.news(Map(News.gold -> Vector.empty), now)
-    val hostile = Vector(
-      "http://www.fxstreet.com/a",
-      "https://www.fxstreet.com.evil.test/a",
-      "https://user@www.fxstreet.com/a",
-      "https://www.fxstreet.com:444/a",
-      "https://www.coindesk.com/a"
-    )
-    assertEquals(
-      policy.news(
-        Map(News.gold -> hostile.map(u => item("bad").copy(url = u))),
-        now
-      ),
-      Vector.empty
-    )
-    assertEquals(
-      policy.news(Map("https://evil.test/feed" -> Vector(item("bad"))), now),
-      Vector.empty
-    )
-  }
-
-  test(
     "speech text strips terminal bytes and speech directives and has a fixed bound"
   ) {
     val text = NativeAnnouncementOutput.speechText(
@@ -377,7 +217,7 @@ class AlertsSpec extends munit.FunSuite:
     def close(): Unit = closed.set(true)
 
   private def announcement(id: Int): Announcement =
-    Announcement(id.toString, now, "market", "Market moved")
+    Announcement(s"Market moved $id")
 
   test(
     "offer never waits for sound, queue is bounded and repeated starts are harmless"

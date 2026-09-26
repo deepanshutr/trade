@@ -1,22 +1,12 @@
 package desk
 
-import java.net.URI
 import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 import java.util.concurrent.{ArrayBlockingQueue, TimeUnit}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong, AtomicReference}
 import scala.collection.mutable
 import scala.util.Try
 
-final case class Announcement(
-    id: String,
-    at: Long,
-    kind: String,
-    text: String,
-    url: Option[String] = None,
-    publishedAt: Option[Long] = None,
-    retrievedAt: Option[Long] = None
-)
+final case class Announcement(text: String)
 
 final class AlertPolicy:
   private final case class Point(at: Long, price: BigDecimal)
@@ -107,104 +97,10 @@ final class AlertPolicy:
             else s"${elapsed / 60}m ${elapsed % 60}s"
             val change = f"${(fraction * 100).toDouble}%.2f"
             Announcement(
-              s"move:${snapshot.coin}:$direction:${current.at}",
-              now,
-              "market",
               s"${Workspace.safeText(snapshot.coin).take(40)} $direction $change% in $period"
             )
           }
     }
-
-  private val newsSources = Map(
-    News.crypto -> ("Crypto", "www.coindesk.com"),
-    News.gold -> ("Gold", "www.fxstreet.com"),
-    News.war -> ("World", "news.un.org"),
-    News.zcash -> ("Zcash", "zfnd.org"),
-    News.monero -> ("Monero", "www.getmonero.org")
-  )
-  private val seeded = mutable.Set.empty[String]
-  private val seen = mutable.LinkedHashMap.empty[String, Long]
-  private var newsAt = Option.empty[Long]
-  private val goldWords = "(?i)\\b(?:gold|bullion|xau(?:usd)?)\\b".r
-
-  private def identity(item: NewsItem, host: String): Option[String] = Try {
-    require(item.url.length <= 2048)
-    val uri = URI.create(item.url)
-    require(
-      uri.getScheme == "https" && uri.getHost == host && uri.getUserInfo == null && Set(
-        -1,
-        443
-      ).contains(uri.getPort)
-    )
-    val query = Option(uri.getRawQuery).toVector
-      .flatMap(_.split('&'))
-      .filterNot { part =>
-        val key = part.takeWhile(_ != '=').toLowerCase(java.util.Locale.ROOT)
-        key.startsWith("utm_") || Set(
-          "at_medium",
-          "at_campaign",
-          "fbclid",
-          "gclid"
-        ).contains(key)
-      }
-      .mkString("&")
-    val canonical = "https://" + host + Option(uri.getRawPath)
-      .filter(_.nonEmpty)
-      .getOrElse("/") +
-      (if query.isEmpty then "" else "?" + query)
-    val digest = MessageDigest
-      .getInstance("SHA-256")
-      .digest(canonical.getBytes(StandardCharsets.UTF_8))
-    java.util.HexFormat.of().formatHex(digest)
-  }.toOption
-
-  def news(
-      batches: Map[String, Vector[NewsItem]],
-      now: Long
-  ): Vector[Announcement] = synchronized {
-    if newsAt.exists(_ > now) then
-      seeded.clear()
-      seen.clear()
-    newsAt = Some(now)
-    seen.filterInPlace((_, at) => at <= now && now - at <= 86400000L)
-    val result = Vector.newBuilder[Announcement]
-    newsSources.toVector.sortBy(_._1).foreach { (source, descriptor) =>
-      batches.get(source).foreach { items =>
-        val first = seeded.add(source)
-        items.take(100).foreach { item =>
-          identity(item, descriptor._2).foreach { id =>
-            val unseen = !seen.contains(id)
-            seen.update(id, now)
-            val recent = item.publishedAt
-              .exists(t => t >= 0 && t <= now && now - t <= hour)
-            val retrieved =
-              item.retrievedAt >= 0 && item.retrievedAt <= now && now - item.retrievedAt <= 1800000L
-            val relevant = source != News.gold || goldWords
-              .findFirstIn(item.title.take(500))
-              .nonEmpty
-            val title = Workspace
-              .safeText(item.title)
-              .replaceAll("\\s+", " ")
-              .trim
-              .take(180)
-            if !first && unseen && recent && retrieved && relevant && title.nonEmpty
-            then
-              result += Announcement(
-                "news:" + id,
-                now,
-                "news",
-                descriptor._1 + ": " + title,
-                Some(item.url),
-                item.publishedAt,
-                Some(item.retrievedAt)
-              )
-          }
-        }
-      }
-    }
-    while seen.size > 10000 do seen.remove(seen.head._1)
-    result.result()
-  }
 
 trait AnnouncementOutput extends AutoCloseable:
   def play(message: String, voice: Boolean, canceled: () => Boolean): Unit

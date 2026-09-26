@@ -32,10 +32,8 @@ object WorkspaceApp:
 
   private[desk] def announce(
       alert: Announcement,
-      controller: DeskController,
       sound: Announcements
   ): Unit =
-    controller.announcement(alert)
     val _ = sound.offer(alert)
 
   private[desk] def enqueueInput(
@@ -212,8 +210,7 @@ object WorkspaceApp:
           mode = mode,
           sizes = config.sizes,
           messages = history.messages,
-          muted = args.audio == "mute",
-          soundStatus = if args.audio == "mute" then "Muted" else "Sound on"
+          muted = args.audio == "mute"
         ),
         now,
         worker.preview,
@@ -283,8 +280,7 @@ object WorkspaceApp:
         while !state.get().quit do
           val time = now()
           val found = alerts.market(state.get(), time)
-          found.foreach(announce(_, controller, announcements))
-          controller.alertStatus(announcements.status)
+          found.foreach(announce(_, announcements))
           Thread.sleep(250L)
       }
       val publicThreads = publicLoops(feed) ++ onchain.toVector.map(o =>

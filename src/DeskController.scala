@@ -54,13 +54,6 @@ final class DeskController(
   def outlook(value: OutlookView): Unit = synchronized {
     current = current.copy(outlook = value)
   }
-  def announcement(value: Announcement): Unit = synchronized {
-    current = current.copy(alerts = (current.alerts :+ value).takeRight(30))
-  }
-  def alertStatus(sound: String): Unit =
-    synchronized {
-      current = current.copy(soundStatus = sound)
-    }
   private def saveMessages(): Unit =
     if !storageFailed && !stopping then
       messagesToSave = Some(current.messages)
@@ -247,8 +240,7 @@ final class DeskController(
             false
           case Command.ToggleMute =>
             val muted = !current.muted
-            current =
-              current.copy(muted = muted, soundStatus = if muted then "Muted" else "Sound on")
+            current = current.copy(muted = muted)
             mute(muted)
             true
           case Command.SelectTarget(_) | Command.Pointer(_, _, _) =>

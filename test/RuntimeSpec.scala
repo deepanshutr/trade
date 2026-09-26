@@ -63,23 +63,6 @@ class RuntimeSpec extends munit.FunSuite:
     assert(recorder.status.contains("saved"))
   }
 
-  test(
-    "calendar parser respects local release time and unavailable sources cannot mean no events"
-  ) {
-    val ics =
-      "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:jobs\r\nDTSTART;TZID=America/New_York:20260911T083000\r\nSUMMARY:Employment Situation\r\nURL:https://www.bls.gov/news.release/empsit.htm\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
-    val items = News.calendar(ics, "https://www.bls.gov/schedule/news_release/bls.ics", 123L)
-    assertEquals(items.size, 1)
-    assertEquals(
-      items.head.eventAt,
-      Some(java.time.Instant.parse("2026-09-11T12:30:00Z").toEpochMilli)
-    )
-    assertEquals(items.head.retrievedAt, 123L)
-    assert(
-      News.context(Vector.empty, Vector("US calendar unavailable"), 123L).contains("unavailable")
-    )
-  }
-
   test("saved messages preserve acceptance across restart without restoring an order") {
     val directory = Files.createTempDirectory("desk-message-history")
     val history = MessageHistory.open(directory)
@@ -89,4 +72,25 @@ class RuntimeSpec extends munit.FunSuite:
     try
       assertEquals(again.messages, Vector(DeskMessage(1, 123L, "analysis", "reading", Some(false))))
     finally again.close()
+  }
+
+  test("saved news messages survive loading and a new order") {
+    val directory = Files.createTempDirectory("desk-legacy-news")
+    val path = directory.resolve("messages.json")
+    try
+      LocalFiles.write(path, """[{"id":1,"at":123,"kind":"news","text":"old headline"}]""")
+      val old = Vector(DeskMessage(1, 123L, "news", "old headline"))
+      val next = old :+ DeskMessage(2, 124L, "order", "PAPER XMR buy filled 5")
+      val history = MessageHistory.open(directory)
+      try
+        assertEquals(history.messages, old)
+        history.save(next)
+      finally history.close()
+      val reopened = MessageHistory.open(directory)
+      try assertEquals(reopened.messages, next)
+      finally reopened.close()
+    finally
+      Files.deleteIfExists(path)
+      Files.deleteIfExists(directory.resolve("messages.lock"))
+      Files.deleteIfExists(directory)
   }
