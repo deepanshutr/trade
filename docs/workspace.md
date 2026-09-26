@@ -74,7 +74,7 @@ short status row, with a separate action number for each result.
 Local state defaults to `~/.local/state/desk`. Change it with `--state /absolute/path`.
 Account files, message history, public data and live recovery state use separate
 locks. Unreadable saved state is preserved. Public recording retains up to seven
-days or one GB. Gaps remain gaps. Run `desk XMR --record --no-analysis` for the
+days or one GB. Gaps remain gaps. Run `desk XMR --record` for the
 background public recorder. Inspect its Mac service with `python3 tools/recorder.py`.
 
 The interactive process writes private diagnostic records under `diagnostics/`

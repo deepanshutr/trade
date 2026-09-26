@@ -127,15 +127,9 @@ object Keys:
     else (pending, None)
 
   private def plain(byte: Int): Option[Command] = byte match
-    case 97                      => Some(Command.Ask)
-    case 104                     => Some(Command.Details)
     case 118                     => Some(Command.ToggleMute)
     case 112                     => Some(Command.Mode("PAPER"))
     case 108                     => Some(Command.Mode("LIVE"))
-    case 121                     => Some(Command.Feedback(true))
-    case 110                     => Some(Command.Feedback(false))
-    case 91                      => Some(Command.ScrollMessages(5))
-    case 93                      => Some(Command.ScrollMessages(-5))
     case 113 | 3                 => Some(Command.Quit)
     case 109                     => Some(Command.StartMarketPrompt)
     case 99                      => Some(Command.ToggleCandles)

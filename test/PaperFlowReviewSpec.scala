@@ -138,7 +138,6 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       () => clock.get(),
       route.preview,
       route.submitReviewed,
-      _ => false,
       route.switchMode
     )
     var snapshot = Snapshot.initial("XMR", start).copy(workspace = true)

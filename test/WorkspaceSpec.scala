@@ -47,24 +47,8 @@ class WorkspaceSpec extends munit.FunSuite:
       assertEquals(frame.hit(1, 1, cols, rows, "BTC"), None)
   }
 
-  test("a hidden or clipped review never exposes a send button") {
-    val plan = OrderPlan(
-      "XMR",
-      0,
-      Side.Buy,
-      OrderKind.Hard,
-      BigDecimal(1),
-      BigDecimal("1" + "234567890" * 11),
-      BigDecimal(100),
-      BigDecimal(1),
-      BigDecimal(100),
-      Some(BigDecimal(100)),
-      BigDecimal(1)
-    )
-    val panel = PanelView(
-      mode = "PAPER",
-      review = Some(OrderReview(OrderIntent(Side.Buy, OrderKind.Hard), plan, now, now + 30000))
-    )
+  test("one-click controls have no send button and a small screen has no controls") {
+    val panel = PanelView(mode = "PAPER")
     val frame = Workspace.draw(
       s,
       view.copy(ready = true),
@@ -84,22 +68,20 @@ class WorkspaceSpec extends munit.FunSuite:
   test("assistant and news text cannot emit terminal control bytes") {
     val text = "news " + 27.toChar + "[2J" + 7.toChar + " hostile"
     val panel = PanelView(
-      messages = Vector(DeskMessage(1, now, "analysis", text)),
-      details = true,
-      detailPage = DetailPage.Answers
+      messages = Vector(DeskMessage(1, now, "analysis", text))
     )
     val frame = Workspace.draw(s, view, panel, 120, 40, now, java.time.ZoneId.of("UTC"), Style.mono)
     assert(!frame.lines.mkString.contains(27.toChar))
     assert(!frame.lines.mkString.contains(7.toChar))
   }
 
-  test("no feedback control is offered when no analysis text is visible") {
+  test("saved analysis text stays hidden") {
     val messages = Vector(DeskMessage(1, now, "analysis", "hidden answer")) ++
       (2L to 30L).map(id => DeskMessage(id, now, "news", "news " + id))
     val frame = Workspace.draw(
       s,
       view,
-      PanelView(messages = messages, details = true, detailPage = DetailPage.Answers),
+      PanelView(messages = messages),
       120,
       40,
       now,
@@ -107,7 +89,6 @@ class WorkspaceSpec extends munit.FunSuite:
       Style.mono
     )
     assert(!frame.lines.exists(_.contains("hidden answer")))
-    assert(!frame.buttons.exists(_.action.isInstanceOf[DeskAction.Feedback]))
   }
 
   test("displayed mode shortcut letters decode to the indicated mode") {

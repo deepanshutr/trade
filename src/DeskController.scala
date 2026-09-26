@@ -5,7 +5,6 @@ final class DeskController(
     wall: () => Long,
     preview: OrderIntent => Either[String, OrderPlan],
     submit: OrderReview => Boolean,
-    ask: String => Boolean,
     switchMode: String => Either[String, String],
     persist: Vector[DeskMessage] => Unit = _ => (),
     mute: Boolean => Unit = _ => ()
@@ -42,8 +41,6 @@ final class DeskController(
   def invalidate(): Unit = synchronized { shown = None }
   def resetMarket(): Unit = synchronized {
     current = current.copy(
-      review = None,
-      target = None,
       modeReview = None,
       outlook = Outlook.empty(""),
       actionNotice = None
@@ -51,8 +48,8 @@ final class DeskController(
     shown = None
     pressed = None
   }
-  def status(data: String, analysis: String, account: String): Unit = synchronized {
-    current = current.copy(dataStatus = data, analysisStatus = analysis, account = account)
+  def status(data: String, account: String): Unit = synchronized {
+    current = current.copy(dataStatus = data, account = account)
   }
   def outlook(value: OutlookView): Unit = synchronized {
     current = current.copy(outlook = value)
@@ -60,9 +57,9 @@ final class DeskController(
   def announcement(value: Announcement): Unit = synchronized {
     current = current.copy(alerts = (current.alerts :+ value).takeRight(30))
   }
-  def alertStatus(sound: String, news: String, details: String = "News waiting"): Unit =
+  def alertStatus(sound: String): Unit =
     synchronized {
-      current = current.copy(soundStatus = sound, newsStatus = news, newsDetails = details)
+      current = current.copy(soundStatus = sound)
     }
   private def saveMessages(): Unit =
     if !storageFailed && !stopping then
@@ -123,7 +120,6 @@ final class DeskController(
     current = current.copy(
       messages = (current.messages :+ DeskMessage(serial, wall(), kind, Workspace.safeText(text)))
         .takeRight(300),
-      scroll = if current.detailPage == DetailPage.Answers then 0 else current.scroll,
       actionNotice = if kind == "order" || kind == "mode" then Some(Workspace.safeText(text))
       else current.actionNotice,
       actionNumber = if kind == "order" || kind == "mode" then current.actionNumber + 1
@@ -182,16 +178,15 @@ final class DeskController(
                     view.leverage,
                     view.marginMode
                   )
-                  current = current.copy(review = None, target = None)
                   if submit(order) then current = current.copy(actionNotice = Some("Sending"))
                   else refuse()
                 case Left(reason) => addMessage("order", reason)
                 case _            => refuse()
           case DeskAction.OrderSize(big) if !view.pending && current.modeReview.isEmpty =>
-            current = current.copy(bigOrder = big, orderKind = OrderKind.Hard, actionNotice = None)
+            current = current.copy(bigOrder = big, actionNotice = None)
             shown = None
           case DeskAction.Mode(name) if !view.pending && name != current.mode =>
-            current = current.copy(modeReview = Some(name), review = None, target = None)
+            current = current.copy(modeReview = Some(name))
             shown = None
           case DeskAction.ConfirmMode(name) if current.modeReview.contains(name) && !view.pending =>
             switchMode(name) match
@@ -200,8 +195,6 @@ final class DeskController(
                   mode = name,
                   account = account,
                   modeReview = None,
-                  review = None,
-                  target = None,
                   actionNotice = None
                 )
               case Left(reason) =>
@@ -209,13 +202,7 @@ final class DeskController(
                 addMessage("mode", reason)
             shown = None
           case DeskAction.Cancel =>
-            current = current.copy(
-              modeReview = None,
-              review = None,
-              target = None,
-              input = None,
-              details = false
-            )
+            current = current.copy(modeReview = None)
             shown = None
           case DeskAction.Prepare(_) => refuse()
           case _                     => ()
@@ -249,13 +236,7 @@ final class DeskController(
             current.modeReview.foreach(name => act(DeskAction.ConfirmMode(name)))
             true
           case Command.CancelTarget =>
-            current = current.copy(
-              modeReview = None,
-              review = None,
-              target = None,
-              input = None,
-              details = false
-            )
+            current = current.copy(modeReview = None)
             shown = None
             true
           case Command.Mode(name) =>
@@ -270,8 +251,7 @@ final class DeskController(
               current.copy(muted = muted, soundStatus = if muted then "Muted" else "Sound on")
             mute(muted)
             true
-          case Command.Ask | Command.Details | Command.Feedback(_) | Command.ScrollMessages(_) |
-              Command.SelectTarget(_) | Command.Pointer(_, _, _) =>
+          case Command.SelectTarget(_) | Command.Pointer(_, _, _) =>
             true
           case _ => false
   }

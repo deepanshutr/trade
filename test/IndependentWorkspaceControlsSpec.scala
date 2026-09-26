@@ -53,8 +53,7 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
     )
 
   private def tradeAction(action: DeskAction): Boolean = action match
-    case DeskAction.Prepare(_) | DeskAction.Target(_) | DeskAction.Submit | DeskAction.Mode(_) |
-        DeskAction.ConfirmMode(_) =>
+    case DeskAction.Prepare(_) | DeskAction.Mode(_) | DeskAction.ConfirmMode(_) =>
       true
     case _ => false
 
@@ -63,10 +62,9 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
       cols <- Vector(100, 101, 103, 117, 120, 160)
       rows <- Vector(30, 31, 40)
       panel <- panels
-      details <- Vector(false, true)
       pending <- Vector(false, true)
     do
-      val actual = draw(panel.copy(details = details), cols, rows, pending)
+      val actual = draw(panel, cols, rows, pending)
       assertEquals(actual.lines.size, rows)
       assert(actual.lines.forall(_.length == cols))
       for button <- actual.buttons do
@@ -77,14 +75,13 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
           .slice(button.x - 1, button.x - 1 + button.width)
         assert(
           text.contains(button.label),
-          s"$cols x $rows $panel details=$details pending=$pending: $text"
+          s"$cols x $rows $panel pending=$pending: $text"
         )
         if button.height == 1 then assertEquals(text, "[" + button.label + "]")
         for
           y <- button.y until button.y + button.height; x <- button.x until button.x + button.width
         do assertEquals(actual.hit(x, y, cols, rows, "XMR"), Some(button.action))
-      if pending || panel.input.nonEmpty then
-        assert(!actual.buttons.exists(b => tradeAction(b.action)))
+      if pending then assert(!actual.buttons.exists(b => tradeAction(b.action)))
   }
 
   test("trade buttons retain their coordinates across size and pending changes") {

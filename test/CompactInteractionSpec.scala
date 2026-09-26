@@ -15,7 +15,6 @@ class CompactInteractionSpec extends munit.FunSuite:
       () => now,
       _ => Left("Order price is unavailable"),
       _ => { sent += 1; true },
-      _ => true,
       _ => Left("Live account is not configured"),
       mute = value => muted :+= value
     )
@@ -53,14 +52,12 @@ class CompactInteractionSpec extends munit.FunSuite:
     f.key(Command.ToggleMute)
     assertEquals(f.muted, Vector(true, false))
     f.draw()
-    f.key(Command.Ask)
     var pending = Vector.empty[Int]
     "hv123".foreach { c =>
       val (next, command) = Keys.step(pending, c.toInt, true, mouseEnabled = true, textInput = true)
       pending = next
       command.foreach(f.key)
     }
-    assertEquals(f.controller.panel.input, None)
     assertEquals(f.muted, Vector(true, false))
     assertEquals(f.sent, 0)
   }
@@ -86,7 +83,4 @@ class CompactInteractionSpec extends munit.FunSuite:
       OutlookScreen.rows(outlook, 46, Some(Axis(89, 111, 9)), 9, ChartMode.Candles).mkString("\n")
     assert(!rows.contains("To hit"), rows)
     assert(rows.contains("Test 5%"), rows)
-    val details = OutlookScreen.details(outlook)
-    assert(details.contains("Reference close 100"), details)
-    assert(details.contains("Target 105"), details)
   }

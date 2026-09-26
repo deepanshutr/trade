@@ -230,7 +230,6 @@ class MarketSelectionSpec extends munit.FunSuite:
       () => 1000L,
       _ => { previews += 1; Left("must not preview") },
       _ => { sends += 1; true },
-      _ => false,
       _ => Left("disabled")
     )
     def frame(s: Snapshot) = Workspace.draw(
@@ -280,7 +279,6 @@ class MarketSelectionSpec extends munit.FunSuite:
       () => 1000L,
       _ => Left("disabled"),
       _ => false,
-      _ => false,
       _ => Left("disabled")
     )
     try
@@ -313,7 +311,7 @@ class MarketSelectionSpec extends munit.FunSuite:
     val frame = Workspace.draw(
       snapshot,
       view,
-      PanelView(mode = "PAPER", orderKind = OrderKind.Target),
+      PanelView(mode = "PAPER"),
       100,
       30,
       1000L,
@@ -321,10 +319,7 @@ class MarketSelectionSpec extends munit.FunSuite:
       Style.mono
     )
     assert(
-      !frame.buttons.exists(b =>
-        b.action.isInstanceOf[DeskAction.Mode] ||
-          b.action.isInstanceOf[DeskAction.Target]
-      )
+      !frame.buttons.exists(b => b.action.isInstanceOf[DeskAction.Mode])
     )
     assertEquals(frame.buttons, Vector.empty)
     assert(frame.controls.exists(_.action.isInstanceOf[DeskAction.Mode]))

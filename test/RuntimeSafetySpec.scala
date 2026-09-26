@@ -262,21 +262,3 @@ class RuntimeSafetySpec extends munit.FunSuite:
     assert(!context.contains("future report") && !context.contains("old report"))
     assert(context.contains("Calendar absence does not prove no upcoming events"))
   }
-
-  test("protocol accepts only a bounded final answer and rejects malformed or question items") {
-    def item(answer: String): ujson.Obj = ujson.Obj(
-      "type" -> "agentMessage",
-      "phase" -> "final_answer",
-      "text" -> ujson.write(ujson.Obj("answer" -> answer))
-    )
-    assertEquals(CodexProtocol.answer(item("result")), Some("result"))
-    assertEquals(CodexProtocol.answer(item("x" * 30001)), None)
-    val commentary = item("result")
-    commentary("phase") = "commentary"
-    assertEquals(CodexProtocol.answer(commentary), None)
-    assertEquals(
-      CodexProtocol.answer(ujson.Obj("type" -> "agentMessage", "text" -> "malformed")),
-      None
-    )
-    assert(!CodexProtocol.emptyServers(ujson.Obj("data" -> ujson.Arr(), "nextCursor" -> "more")))
-  }

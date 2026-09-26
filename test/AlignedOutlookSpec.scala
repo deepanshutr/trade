@@ -161,7 +161,6 @@ class AlignedOutlookSpec extends munit.FunSuite:
       val frame = draw(market.copy(referenceCoins = refs))
       assertEquals(frame.lines.size, 30)
       assert(frame.lines.forall(_.length == 100))
-      assert(frame.buttons.filter(_.action.isInstanceOf[DeskAction.Target]).forall(_.y == 24))
       assert(frame.lines(15).contains("VIEW XMR"))
       assert(cells(frame, 0).head.contains("SHORT"))
   }

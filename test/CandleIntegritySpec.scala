@@ -45,18 +45,16 @@ class CandleIntegritySpec extends munit.FunSuite:
     assert(Events.parseRestCandles(ujson.Arr(json(first), json(first)).render()).nonEmpty)
   }
 
-  test("legacy measurements preserve an invalid or conflicting bar as a gap") {
+  test("correlations preserve an invalid or conflicting bar as a gap") {
     val malformed = invalid.map(c => bars.updated(25, c)) :+
       (bars :+ bars(25).copy(c = 102)) :+
       bars.updated(25, bars(25).copy(v = -1))
     malformed.foreach { cs =>
-      val measured = Quant.measure(cs, "1m", 50 * step)
+      val measured = Quant.compare(cs, bars, "1m", 49, 50 * step)
       assertEquals(measured.status, "partial")
-      assertEquals(measured.slow, None)
-      assertEquals(measured.support, None)
-      assertEquals(measured.resistance, None)
+      assertEquals(measured.value, None)
     }
-    assertEquals(Quant.measure(bars :+ bars(25), "1m", 50 * step).status, "complete")
+    assertEquals(Quant.compare(bars :+ bars(25), bars, "1m", 49, 50 * step).count, 49)
   }
 
   test("restored history rejects impossible ranges and conflicting duplicates") {

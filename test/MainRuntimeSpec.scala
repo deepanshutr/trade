@@ -35,7 +35,6 @@ class MainRuntimeSpec extends munit.FunSuite:
       () => now,
       _ => Right(plan),
       order => { submitted = Some(order); true },
-      _ => true,
       _ => Left("unused")
     )
     def draw(): WorkspaceFrame = Workspace.draw(
@@ -55,14 +54,13 @@ class MainRuntimeSpec extends munit.FunSuite:
     assertEquals(review.marginMode, Some("isolated"))
     val frame = draw()
     assert(!frame.completeReview)
-    assert(!frame.buttons.exists(_.action == DeskAction.Submit))
   }
 
   test("paper and recorder modes have explicit independent startup choices") {
     assert(
-      Main.parseArgs(Seq("XMR", "--paper", "--state", "/tmp/desk-private", "--no-analysis")).isRight
+      Main.parseArgs(Seq("XMR", "--paper", "--state", "/tmp/desk-private")).isRight
     )
-    assert(Main.parseArgs(Seq("--record", "--no-analysis")).isRight)
+    assert(Main.parseArgs(Seq("--record")).isRight)
     assert(Main.parseArgs(Seq("--paper", "--trade")).isLeft)
     assert(Main.parseArgs(Seq("--record", "--trade")).isLeft)
     assert(Main.parseArgs(Seq("--record", "--paper")).isLeft)

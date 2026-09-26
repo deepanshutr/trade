@@ -10,7 +10,6 @@ class CompactWorkspaceSpec extends munit.FunSuite:
   test("normal trading view shows three horizons without the transcript or running logs") {
     val panel = PanelView(
       dataStatus = "capture log should stay hidden",
-      analysisStatus = "running model log should stay hidden",
       messages = Vector(DeskMessage(1, now, "analysis", "verbose answer should stay hidden"))
     )
     for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
@@ -18,7 +17,6 @@ class CompactWorkspaceSpec extends munit.FunSuite:
       val text = frame.lines.mkString("\n")
       assert(text.contains("LONG") && text.contains("MID") && text.contains("SHORT"), text)
       assert(!text.contains("should stay hidden"), text)
-      assert(!frame.buttons.exists(_.action.isInstanceOf[DeskAction.Feedback]))
       assertEquals(frame.lines.size, rows)
       assert(frame.lines.forall(_.length == cols))
   }

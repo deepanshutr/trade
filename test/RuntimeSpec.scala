@@ -63,36 +63,6 @@ class RuntimeSpec extends munit.FunSuite:
     assert(recorder.status.contains("saved"))
   }
 
-  test("analysis scheduling replaces queued automatic work and never bursts after a pause") {
-    val gate = new AnalysisSchedule
-    assert(gate.automatic(1000, "first"))
-    assert(!gate.automatic(2000, "changed"))
-    assert(!gate.automatic(301000, "first"))
-    assert(gate.automatic(301000, "changed"))
-    assert(!gate.automatic(3000000, "changed"))
-    assert(gate.automatic(3000000, "third"))
-    assert(!gate.automatic(3000000, "fourth"))
-  }
-
-  test("model protocol has empty environments and excludes asynchronous questions as answers") {
-    val start = CodexProtocol.threadStart("/tmp/public-only")
-    assertEquals(start("params")("environments").arr.size, 0)
-    assertEquals(start("params")("selectedCapabilityRoots").arr.size, 0)
-    assert(CodexProtocol.emptyServers(ujson.Obj("data" -> ujson.Arr(), "nextCursor" -> ujson.Null)))
-    assert(!CodexProtocol.emptyServers(ujson.Obj("data" -> ujson.Arr(ujson.Obj("name" -> "mail")))))
-    val item = ujson.Obj(
-      "type" -> "agentMessage",
-      "text" -> "{\"answer\":\"result\"}",
-      "phase" -> "final_answer"
-    )
-    assertEquals(CodexProtocol.answer(item), Some("result"))
-    item("delivery") = "async"
-    assertEquals(CodexProtocol.answer(item), None)
-    item.obj.remove("delivery")
-    item("questions") = ujson.Arr(ujson.Obj("title" -> "decision"))
-    assertEquals(CodexProtocol.answer(item), None)
-  }
-
   test(
     "calendar parser respects local release time and unavailable sources cannot mean no events"
   ) {

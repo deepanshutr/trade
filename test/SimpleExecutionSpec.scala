@@ -75,7 +75,6 @@ class SimpleExecutionSpec extends munit.FunSuite:
           TradeSizes()
         ),
       review => { sent :+= review; true },
-      _ => false,
       _ => Right("Synthetic account")
     )
     def draw(v: TradingView = view): WorkspaceFrame =
@@ -99,7 +98,6 @@ class SimpleExecutionSpec extends munit.FunSuite:
     assertEquals(selected.buttons.count(_.action.isInstanceOf[DeskAction.Prepare]), 2)
     f.click(selected, DeskAction.Prepare(intent))
     assertEquals(f.sent.map(_.intent), Vector(intent))
-    assertEquals(f.controller.panel.review, None)
   }
 
   test("only currently displayed numbered shortcuts may submit") {
@@ -126,7 +124,6 @@ class SimpleExecutionSpec extends munit.FunSuite:
     f.controller.publish(frame.copy(buttons = frame.buttons.filterNot(_ == buy)))
     f.controller.publish(frame)
     f.key(Command.Pointer(buy.x, buy.y + 2, 0))
-    assertEquals(f.controller.panel.review, None)
     assertEquals(f.sent.size, 0)
   }
 
@@ -136,12 +133,7 @@ class SimpleExecutionSpec extends munit.FunSuite:
     f.key(Command.PlaceOrder(OrderIntent(Side.Buy, OrderKind.Hard)))
     val panels = Vector(
       "ready" -> PanelView(mode = "PAPER"),
-      "best-large" -> PanelView(mode = "PAPER", orderKind = OrderKind.Best, bigOrder = true),
-      "target" -> PanelView(
-        mode = "PAPER",
-        orderKind = OrderKind.Target,
-        target = Some(Side.Buy -> BigDecimal("100.1"))
-      ),
+      "large" -> PanelView(mode = "PAPER", bigOrder = true),
       "review" -> f.controller.panel,
       "mode" -> PanelView(mode = "PAPER", modeReview = Some("LIVE"))
     )

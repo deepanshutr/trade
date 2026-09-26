@@ -302,7 +302,6 @@ class ExecutionRoutingReviewSpec extends munit.FunSuite:
           true,
           config = Some(config.toString),
           record = true,
-          analysis = false,
           stateDirectory = Some(directory.toString)
         ),
         publicSources,

@@ -32,7 +32,6 @@ class RefineTradingSpec extends munit.FunSuite:
           TradeSizes()
         ),
       review => { sent :+= review; true },
-      _ => fail("Ask is removed"),
       _ => Right("Synthetic account")
     )
     def draw(v: TradingView = view): WorkspaceFrame =
@@ -51,14 +50,11 @@ class RefineTradingSpec extends munit.FunSuite:
     val f = new Fixture
     f.controller.addMessage("analysis", "This prose must not appear")
     val frame = f.draw()
-    assert(!frame.controls.exists(_.action == DeskAction.Ask))
     assert(!frame.lines.mkString.contains("This prose"))
     assert(
       frame.lines.head.contains("LONG") && frame.lines.head.contains("MID") &&
         frame.lines.head.contains("SHORT")
     )
-    f.key(Command.Ask)
-    assertEquals(f.controller.panel.input, None)
   }
 
   test("one complete Buy click submits the displayed amount once without Send") {
@@ -67,7 +63,6 @@ class RefineTradingSpec extends munit.FunSuite:
     val action = DeskAction.Prepare(OrderIntent(Side.Buy, OrderKind.Hard))
     f.click(frame, action)
     assertEquals(f.sent.map(_.intent), Vector(OrderIntent(Side.Buy, OrderKind.Hard)))
-    assertEquals(f.controller.panel.review, None)
     val b = frame.buttons.find(_.action == action).get
     f.key(Command.Pointer(b.x, b.y, 0))
     assertEquals(f.sent.size, 1)

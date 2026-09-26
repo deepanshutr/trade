@@ -23,7 +23,6 @@ class ExecutionReceiptOrderFinderSpec extends munit.FunSuite:
       () => at,
       _ => throw new AssertionError("A pending input cannot request a new preview"),
       _ => throw new AssertionError("No submission is permitted in the receipt ordering check"),
-      _ => false,
       _ => Left("unused")
     )
     controller.publish(

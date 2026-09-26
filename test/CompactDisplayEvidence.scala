@@ -5,8 +5,6 @@ import java.time.ZoneOffset
 object CompactDisplayFixtures:
   val now = 1_800_000_000_000L
   val sizes = Vector((100, 30), (120, 40), (160, 45))
-  val sourceText =
-    "News partial. Missing source: calendar. Full source coverage remains available here."
   val sourceUrl = "https://example.invalid/markets/independent-reference-review/source-record"
 
   def mid(coin: String): Double = coin match
@@ -102,9 +100,7 @@ object CompactDisplayFixtures:
   def panel(coin: String = "XMR"): PanelView = PanelView(
     mode = "PAPER",
     outlook = outlook(coin),
-    newsStatus = "News partial. Missing calendar",
     soundStatus = "Sound on",
-    newsDetails = sourceText,
     alerts = Vector(
       Announcement(
         "fixture",

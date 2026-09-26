@@ -60,7 +60,6 @@ class UiBoundarySpec extends munit.FunSuite:
       () => now,
       _ => Right(plan),
       order => { sent :+= order; true },
-      _ => fail("removed Ask callback"),
       name => { modes :+= name; Right("selected account") }
     )
     def draw(cols: Int = 120, rows: Int = 40): WorkspaceFrame =

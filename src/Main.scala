@@ -12,12 +12,11 @@ object Main:
       config: Option[String] = None,
       paper: Boolean = false,
       record: Boolean = false,
-      analysis: Boolean = true,
       stateDirectory: Option[String] = None,
       audio: String = "voice"
   )
   val usage =
-    "usage: desk [COIN] [--mono] [--paper | --trade | --record] [--config PATH] [--state PATH] [--no-analysis] [--chime | --mute]"
+    "usage: desk [COIN] [--mono] [--paper | --trade | --record] [--config PATH] [--state PATH] [--chime | --mute]"
   val escapeWaitNanos = 40_000_000L
 
   private[desk] def announcements(args: Args, output: AnnouncementOutput): Announcements =
@@ -30,11 +29,11 @@ object Main:
           if Vector(chosen.trade, chosen.paper, chosen.record).count(identity) > 1 then
             Left("choose one of paper, live or public recording")
           else Right(chosen)
+        case "--no-analysis" :: tail => loop(tail, chosen, hasCoin)
         case "--mono" :: tail        => loop(tail, chosen.copy(mono = true), hasCoin)
         case "--trade" :: tail       => loop(tail, chosen.copy(trade = true), hasCoin)
         case "--paper" :: tail       => loop(tail, chosen.copy(paper = true), hasCoin)
         case "--record" :: tail      => loop(tail, chosen.copy(record = true), hasCoin)
-        case "--no-analysis" :: tail => loop(tail, chosen.copy(analysis = false), hasCoin)
         case "--chime" :: tail if chosen.audio == "voice" =>
           loop(tail, chosen.copy(audio = "chime"), hasCoin)
         case "--mute" :: tail if chosen.audio == "voice" =>

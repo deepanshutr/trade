@@ -11,7 +11,6 @@ class TextReadabilitySpec extends munit.FunSuite:
       () => 1L,
       _ => Left("unused"),
       _ => false,
-      _ => false,
       _ => Left("unused")
     )
     controller.addMessage("analysis", "Across nine samples, mean net return was −0.3242%.")
