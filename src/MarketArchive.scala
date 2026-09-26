@@ -133,6 +133,7 @@ final class MarketArchive private (
   private var output = Option.empty[(Path, FileChannel, Long)]
   private var lastAt = initial.at
   private var closed = false
+  private var total = bytes
 
   def bytes: Long = synchronized {
     val listed = Files.list(directory)
@@ -156,7 +157,6 @@ final class MarketArchive private (
     output = None
 
   private def prune(at: Long, reserve: Long): Unit =
-    var total = bytes
     chunks(directory).foreach { (path, created) =>
       if !output.exists(
           _._1 == path
@@ -173,7 +173,6 @@ final class MarketArchive private (
     capture(event, at).foreach { item =>
       event match
         case _: Event.CandleUpdate | _: Event.CandleHistory =>
-          require(states.contains(item.coin) || states.size < 32, "too many captured markets")
           checked(CandleCheckpoint(at, Map(item.coin -> Map(item.interval -> item.candles))))
         case _ => ()
       val encoded = (write(item) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)
@@ -182,7 +181,7 @@ final class MarketArchive private (
           channel.size() + encoded.length > chunkBytes || at - opened >= retentionMs.min(3600000L)
         }
       then closeChunk()
-      prune(at, encoded.length)
+      if output.isEmpty || total + encoded.length > maximumBytes then prune(at, encoded.length)
       if output.isEmpty then
         val name = f"events-$at%013d-" + java.util.UUID.randomUUID().toString.take(8) + ".jsonl"
         val path = directory.resolve(name)
@@ -198,10 +197,17 @@ final class MarketArchive private (
         output = Some((path, channel, at))
       val buffer = ByteBuffer.wrap(encoded)
       while buffer.hasRemaining do output.get._2.write(buffer)
+      total += encoded.length
       event match
         case _: Event.CandleUpdate | _: Event.CandleHistory =>
-          val before = states.getOrElse(item.coin, Snapshot.initial(item.coin, at, Vector.empty))
-          states = states.updated(item.coin, State.reduce(before, event, at))
+          val kept =
+            if states.contains(item.coin) || states.size < 32 then states
+            else
+              states - states
+                .minBy(_._2.candles.valuesIterator.flatten.map(_.t).maxOption.getOrElse(0L))
+                ._1
+          val before = kept.getOrElse(item.coin, Snapshot.initial(item.coin, at, Vector.empty))
+          states = kept.updated(item.coin, State.reduce(before, event, at))
         case _ => ()
       lastAt = at
     }
@@ -212,10 +218,12 @@ final class MarketArchive private (
     val text = write(CandleCheckpoint(lastAt, states.map((coin, s) => coin -> s.candles)))
     val size = text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length.toLong
     require(size <= maximumBytes / 2, "candle checkpoint exceeds disk budget")
-    if BigInt(bytes) + size > maximumBytes then closeChunk()
+    total = bytes
+    if BigInt(total) + size > maximumBytes then closeChunk()
     else output.foreach { (_, channel, _) => channel.force(true) }
     prune(lastAt, size)
     LocalFiles.write(directory.resolve(checkpointName), text)
+    total = bytes
   }
 
   def close(): Unit = synchronized {
