@@ -49,3 +49,23 @@ class ArchiveMarketsSpec extends munit.FunSuite:
       assertEquals(MarketArchive.lastWrite(directory), at + 34)
     finally reopened.close()
   }
+
+  test("a refused new market keeps every saved market") {
+    val directory = Files.createTempDirectory("desk-archive-refused")
+    val at = 1800000000000L
+    val archive = MarketArchive.open(directory, maximumBytes = 200000L, chunkBytes = 100000L)
+    try
+      for i <- 0 until 32 do
+        val candle = Candle(at - (i + 1) * 60000L, 100, 102, 98, 101, 12)
+        archive.record(Event.CandleUpdate(s"COIN$i", "1m", candle), at + i)
+      val history = Vector.tabulate(5000)(j => Candle(at - (j + 1) * 60000L, 100, 102, 98, 101, 12))
+      intercept[IllegalArgumentException](
+        archive.record(Event.CandleHistory("NEW", "1m", history.reverse), at + 40)
+      )
+      archive.checkpoint()
+      val saved = read[CandleCheckpoint](Files.readString(directory.resolve("candles.json")))
+      assertEquals(saved.markets.size, 32)
+      assert(saved.markets.contains("COIN31"))
+      assert(!saved.markets.contains("NEW"))
+    finally archive.close()
+  }

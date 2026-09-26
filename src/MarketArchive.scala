@@ -174,10 +174,6 @@ final class MarketArchive private (
       event match
         case _: Event.CandleUpdate | _: Event.CandleHistory =>
           checked(CandleCheckpoint(at, Map(item.coin -> Map(item.interval -> item.candles))))
-          if !states.contains(item.coin) && states.size == 32 then
-            states -= states
-              .minBy(_._2.candles.valuesIterator.flatten.map(_.t).maxOption.getOrElse(0L))
-              ._1
         case _ => ()
       val encoded = (write(item) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)
       require(encoded.length <= maximumBytes / 2, "public event exceeds disk budget")
@@ -204,6 +200,10 @@ final class MarketArchive private (
       total += encoded.length
       event match
         case _: Event.CandleUpdate | _: Event.CandleHistory =>
+          if !states.contains(item.coin) && states.size == 32 then
+            states -= states
+              .minBy(_._2.candles.valuesIterator.flatten.map(_.t).maxOption.getOrElse(0L))
+              ._1
           val before = states.getOrElse(item.coin, Snapshot.initial(item.coin, at, Vector.empty))
           states = states.updated(item.coin, State.reduce(before, event, at))
         case _ => ()
