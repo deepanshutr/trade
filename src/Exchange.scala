@@ -374,7 +374,7 @@ object Exchange:
   }.getOrElse(false)
 
   def market(meta: ujson.Value, coin: String): MarketRules =
-    require(coin.matches("[A-Z0-9][A-Z0-9._-]{0,19}"))
+    require(State.validMarket(coin))
     val found = meta("universe").arr.toVector.zipWithIndex
       .filter(_._1("name").str == coin)
     require(found.size == 1)
