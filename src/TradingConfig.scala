@@ -142,4 +142,9 @@ object TradingConfig:
           fee,
           onchainMarkets(j, refs)
         )
-      }.toEither.left.map(_ => "invalid or unreadable trading settings")
+      }.toEither.left.map { error =>
+        Option(error.getMessage) match
+          case Some(message) if message.startsWith("requirement failed: ") =>
+            "invalid trading settings: " + message.stripPrefix("requirement failed: ")
+          case _ => "invalid or unreadable trading settings"
+      }
