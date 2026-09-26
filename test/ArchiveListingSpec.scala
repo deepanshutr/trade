@@ -99,3 +99,27 @@ class ArchiveListingSpec extends munit.FunSuite:
       assertEquals(probe.listings, afterCheckpoint + 1)
     finally archive.close()
   }
+
+  private def withinBudget(checkpointFirst: Boolean): Unit =
+    val archive = MarketArchive.open(
+      Files.createTempDirectory("desk-archive-budget"),
+      maximumBytes = 4000L,
+      chunkBytes = 500L
+    )
+    val at = 1800000000000L
+    try
+      if checkpointFirst then
+        archive.record(Event.CandleUpdate("XMR", "1m", Candle(at - 60000L, 100, 102, 98, 101, 12)), at)
+        archive.checkpoint()
+      for i <- 1 to 300 do
+        archive.record(Event.SocketUp, at + i)
+        assert(archive.bytes <= 4000L, s"event $i left ${archive.bytes} bytes on disk")
+    finally archive.close()
+
+  test("recording between checkpoints stays within the disk budget") {
+    withinBudget(checkpointFirst = false)
+  }
+
+  test("the disk budget counts the checkpoint file written before later events") {
+    withinBudget(checkpointFirst = true)
+  }
