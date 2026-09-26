@@ -107,3 +107,10 @@ class TradingConfigSpec extends munit.FunSuite:
       Files.deleteIfExists(link)
       Files.deleteIfExists(p)
   }
+
+  test("a failure without a message keeps the generic settings error") {
+    val p = setting("""{"small":""}""")
+    try
+      assertEquals(TradingConfig.load(Some(p)), Left("invalid or unreadable trading settings"))
+    finally Files.deleteIfExists(p)
+  }
