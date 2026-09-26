@@ -68,6 +68,28 @@ class TradingConfigSpec extends munit.FunSuite:
     }
   }
 
+  test("invalid settings report fixed validation messages") {
+    val p = setting("""{"small":"2000","big":"1000"}""")
+    try
+      assertEquals(
+        TradingConfig.load(Some(p)),
+        Left("invalid trading settings: small exceeds big")
+      )
+    finally Files.deleteIfExists(p)
+  }
+
+  test("parse errors retain the generic settings error") {
+    Vector("broken", """{"small":"secret"}""").foreach { text =>
+      val p = setting(text)
+      try
+        assertEquals(
+          TradingConfig.load(Some(p)),
+          Left("invalid or unreadable trading settings")
+        )
+      finally Files.deleteIfExists(p)
+    }
+  }
+
   test("an explicit missing path does not silently use defaults") {
     assert(TradingConfig.load(Some(Path.of("/missing/desk/settings.json"))).isLeft)
   }
@@ -84,4 +106,11 @@ class TradingConfigSpec extends munit.FunSuite:
     finally
       Files.deleteIfExists(link)
       Files.deleteIfExists(p)
+  }
+
+  test("a failure without a message keeps the generic settings error") {
+    val p = setting("""{"small":""}""")
+    try
+      assertEquals(TradingConfig.load(Some(p)), Left("invalid or unreadable trading settings"))
+    finally Files.deleteIfExists(p)
   }
