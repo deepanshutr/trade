@@ -36,34 +36,3 @@ object Golden:
       Events.parse(fixture("r2_ctx.json")).get
     )
     rest.foldLeft(folded)((s, e) => State.reduce(s, e, now - 300))
-
-  def tradingRows: Vector[String] = tradingRowsAt(100)
-
-  def tradingRowsAt(cols: Int): Vector[String] =
-    val book = snapshot.book.get
-    val rules = MarketRules(0, 3, 5)
-    val currentPosition = BigDecimal(1)
-    val view = TradingView(
-      snapshot.coin,
-      Some(currentPosition),
-      snapshot.coin + " submitting",
-      false,
-      true,
-      Some(rules),
-      Some(BigDecimal(book.bids.head.px)),
-      Some(BigDecimal(book.asks.head.px)),
-      None
-    )
-    val preview: OrderIntent => Either[String, OrderPlan] = intent =>
-      Trading.plan(
-        snapshot.coin,
-        rules,
-        book,
-        view.reference(intent.side).get,
-        currentPosition,
-        intent,
-        TradeSizes()
-      )
-    val last = preview(OrderIntent(Side.Buy, OrderKind.Hard))
-      .fold(message => throw new IllegalStateException(message), identity)
-    TradingScreen.rows(view.copy(lastPlan = Some(last)), None, preview, cols = cols)

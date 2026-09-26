@@ -17,7 +17,7 @@ class ReferencePriceSpec extends munit.FunSuite:
           "PAXG" -> Ref(prices.map((t, p) => t -> (p * 10)), Map.empty)
         )
       )
-    val frame = Screen.renderMarket(s, 100, 40, now, ZoneOffset.UTC, Style.mono, true, 12)
+    val frame = Screen.renderMarket(s, 100, 19, now, ZoneOffset.UTC, Style.mono)
     val first = frame.priceRows + 2
     val btc = frame.lines
       .slice(first, first + 3)
@@ -33,12 +33,10 @@ class ReferencePriceSpec extends munit.FunSuite:
     val frame = Screen.renderMarket(
       Snapshot.initial("XMR", now),
       100,
-      40,
+      19,
       now,
       ZoneOffset.UTC,
-      Style.mono,
-      true,
-      12
+      Style.mono
     )
     val first = frame.priceRows + 2
     assert(

@@ -322,9 +322,9 @@ class StateSpec extends munit.FunSuite:
 
   test("scrub back adds a quarter window at the zoom and scrub forward clamps at zero") {
     val back = press(s0, Command.ScrubBack)
-    assertEquals(back.offsetSec, 30L)
+    assertEquals(back.offsetSec, 11L)
     val wide = press(State.reduce(s0, Event.Resize(120, 40), t0), Command.ZoomOut)
-    assertEquals(press(wide, Command.ScrubBack).offsetSec, 80L)
+    assertEquals(press(wide, Command.ScrubBack).offsetSec, 42L)
     val fwd = press(back, Command.ScrubForward)
     assertEquals(fwd.offsetSec, 0L)
     assertEquals(press(fwd, Command.ScrubForward).offsetSec, 0L)
@@ -332,7 +332,7 @@ class StateSpec extends munit.FunSuite:
 
   test("a zoom change keeps the offset") {
     val back = press(s0, Command.ScrubBack)
-    assertEquals(press(back, Command.ZoomOut).offsetSec, 30L)
+    assertEquals(press(back, Command.ZoomOut).offsetSec, 11L)
   }
 
   test("a market switch clears the rings, resets the offset and since, and keeps the zoom") {
@@ -564,5 +564,5 @@ class StateSpec extends munit.FunSuite:
   test("the scrub step at the widest zoom is a quarter window of weeks") {
     val wide = (1 to 20).foldLeft(s0)((s, _) => press(s, Command.ZoomOut))
     assertEquals(State.zooms(wide.zoom), 604800)
-    assertEquals(press(wide, Command.ScrubBack).offsetSec, 30L * 604800)
+    assertEquals(press(wide, Command.ScrubBack).offsetSec, 11L * 604800)
   }

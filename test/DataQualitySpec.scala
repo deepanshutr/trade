@@ -5,14 +5,6 @@ class DataQualitySpec extends munit.FunSuite:
   private def candles(n: Int): Vector[Candle] =
     Vector.tabulate(n)(i => Candle(i * 60000L, 100, 105, 95, 100 + i % 7, 1))
 
-  test("a full horizon requires every paired return at the stated spacing") {
-    val cs = candles(18)
-    assert(Gauges.correlation(cs, cs, 15).isDefined)
-    assertEquals(Gauges.correlation(cs, cs.drop(4), 15), None)
-    assertEquals(Gauges.correlation(cs, cs.filterNot(_.t == 8 * 60000L), 15), None)
-    assertEquals(Gauges.correlation(cs.map(c => c.copy(t = c.t * 2)), cs, 15), None)
-  }
-
   test("replayed venue trades are counted once but distinct equal fills survive") {
     def batch(ids: Vector[Int]): Event = Events
       .parse(

@@ -10,8 +10,6 @@ object Layout:
   val scaleW = 9
   val volRows = 1
   val referenceRows = 3
-  val gaugeRows = 6
-  val footerRows = 4
   val candleW = 4
   def workspaceMarketWidth(cols: Int): Int = (cols * 3 / 5).min(cols - 47)
   val outlookWidth = 38
@@ -21,5 +19,3 @@ object Layout:
   def plotColumns(cols: Int, mode: ChartMode): Int = mode match
     case ChartMode.Line    => dotCols(cols)
     case ChartMode.Candles => cells(cols) / candleW
-  def priceRows(rows: Int, referenceCount: Int = 2): Int =
-    rows - 1 - volRows - referenceCount * referenceRows - 1 - gaugeRows - footerRows

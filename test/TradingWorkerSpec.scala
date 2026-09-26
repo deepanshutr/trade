@@ -5,6 +5,32 @@ import java.util.concurrent.{CountDownLatch, LinkedBlockingQueue, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
 class TradingWorkerSpec extends munit.FunSuite:
+  private def workspaceText(view: TradingView): String =
+    val controller = new DeskController(
+      PanelView(mode = "LIVE"),
+      () => 1000L,
+      _ => Left("unused"),
+      _ => false,
+      _ => false,
+      _ => Left("unused")
+    )
+    try
+      controller.orders(view)
+      Workspace
+        .draw(
+          Snapshot.initial(view.coin, 1000L),
+          view,
+          controller.panel,
+          160,
+          45,
+          1000L,
+          java.time.ZoneOffset.UTC,
+          Style.mono
+        )
+        .lines
+        .mkString("\n")
+    finally controller.close()
+
   private def waitFor(label: String)(condition: => Boolean): Unit =
     val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
     while !condition && System.nanoTime() < end do Thread.sleep(2)
@@ -409,10 +435,8 @@ class TradingWorkerSpec extends munit.FunSuite:
       assert(!current.ready)
       assert(current.block.exists(_.contains("Wallet change")))
       assert(
-        TradingScreen
-          .rows(current, None, f.worker.preview)
-          .mkString
-          .contains("Wallet change")
+        workspaceText(current)
+          .contains("Account unavailable")
       )
       assert(!f.worker.submit(buy, "XMR"))
       assertEquals(f.posts.get(), 0)
@@ -1264,29 +1288,33 @@ class TradingWorkerSpec extends munit.FunSuite:
         Event.BboUpdate("BTC", Level("1", "1", 1), Level("2", "1", 1), 3001)
       )
       val depth =
-        TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
-      assert(depth.contains("selected depth stale"), depth)
-      assert(depth.contains("XMR filled 1 at 100"), depth)
+        workspaceText(f.worker.view)
+      assert(depth.contains("Waiting for prices"), depth)
+      assert(f.worker.view.outcome.exists(_.contains("XMR filled 1 at 100")))
+      assert(!depth.contains("Filled #1"), depth)
       f.fresh(f.worker, time = 3001)
       val account =
-        TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
-      assert(account.contains("account data stale"), account)
-      assert(account.contains("XMR filled 1 at 100"), account)
+        workspaceText(f.worker.view)
+      assert(account.contains("Account unavailable"), account)
+      assert(f.worker.view.outcome.exists(_.contains("XMR filled 1 at 100")))
+      assert(!account.contains("Filled #1"), account)
       f.readFailure = true
       waitFor("failed refresh not observed")(
         f.worker.view.message == "Waiting for market or account data"
       )
       val failed =
-        TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
-      assert(failed.contains("account data stale"), failed)
-      assert(failed.contains("XMR filled 1 at 100"), failed)
+        workspaceText(f.worker.view)
+      assert(failed.contains("Account unavailable"), failed)
+      assert(f.worker.view.outcome.exists(_.contains("XMR filled 1 at 100")))
+      assert(!failed.contains("Filled #1"), failed)
       assert(!f.worker.view.ready)
       assert(!f.worker.submit(buy, "XMR"))
       f.worker.observe(Event.SocketDown)
       val down =
-        TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
-      assert(down.contains("connection disconnected"), down)
-      assert(down.contains("XMR filled 1 at 100"), down)
+        workspaceText(f.worker.view)
+      assert(down.contains("Reconnecting"), down)
+      assert(f.worker.view.outcome.exists(_.contains("XMR filled 1 at 100")))
+      assert(!down.contains("Filled #1"), down)
       assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }
@@ -1302,10 +1330,8 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.ready()
       assert(!f.worker.submit(buy, "BTC"))
       assert(
-        TradingScreen
-          .rows(f.worker.view, None, f.worker.preview)
-          .mkString
-          .contains("XMR filled 1 at 100")
+        workspaceText(f.worker.view)
+          .contains("Filled #1")
       )
       f.worker.observe(
         Event.BookUpdate(
@@ -1320,10 +1346,34 @@ class TradingWorkerSpec extends munit.FunSuite:
       )
       assert(f.worker.view.ready)
       assert(!f.worker.submit(buy, "XMR"))
-      val text =
-        TradingScreen.rows(f.worker.view, None, f.worker.preview).mkString("\n")
-      assert(text.contains("No visible quantity fits this order"), text)
-      assert(!text.contains("filled 1 at 100"), text)
+      assertEquals(f.worker.view.message, "No visible quantity fits this order")
+      assertEquals(f.worker.view.outcome, None)
+      val controller = new DeskController(
+        PanelView(mode = "LIVE"),
+        () => f.clock.get(),
+        f.worker.preview,
+        _ => fail("an invalid preview submitted an order"),
+        _ => false,
+        _ => Left("unused")
+      )
+      try
+        val snapshot = Snapshot.initial("XMR", f.clock.get())
+        def draw() = Workspace.draw(
+          snapshot,
+          f.worker.view,
+          controller.panel,
+          160,
+          45,
+          f.clock.get(),
+          java.time.ZoneOffset.UTC,
+          Style.mono
+        )
+        controller.publish(draw())
+        controller.handle(Command.PlaceOrder(buy), snapshot, f.worker.view, (160, 45), false)
+        val text = draw().lines.mkString("\n")
+        assert(text.contains("No visible quantity fits this order"), text)
+        assert(!text.contains("Filled #1"), text)
+      finally controller.close()
       assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }

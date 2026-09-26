@@ -18,11 +18,11 @@ class ChartWindowRegressionSpec extends munit.FunSuite:
     val labels = Vector("now", "10s", "30s", "1m", "5m", "15m")
     val readings = Vector("+1.00", "+0.00", "-0.33", "-0.50", "-0.60", "-0.71")
     for cols <- Vector(100, 101, 120) do
-      val rows = Gauges
-        .rows(s, now, cols, Style.mono)
+      val rows = Workspace
+        .indicatorRows(s, now, cols / 2, Style.mono)
         .map(Chart.plain)
-        .map(_.take(cols / 2))
-      assertEquals(rows.map(_.slice(5, 9).trim), labels)
+        .take(6)
+      assertEquals(rows.map(_.slice(5, 8).trim), labels)
       for (row, value) <- rows.zip(readings) do assert(row.contains(s"D$value Q$value"), row)
   }
 
@@ -42,11 +42,11 @@ class ChartWindowRegressionSpec extends munit.FunSuite:
     val labels = Vector("10s", "1m", "5m", "15m", "1h", "4h")
     val readings = Vector("+1.00", "+0.00", "-0.33", "-0.50", "-0.60", "-0.67")
     for cols <- Vector(100, 101, 120) do
-      val rows = Gauges
-        .rows(s, now, cols, Style.mono)
+      val rows = Workspace
+        .indicatorRows(s, now, cols / 2, Style.mono)
         .map(Chart.plain)
-        .map(_.drop(cols / 2))
-      assertEquals(rows.map(_.slice(5, 9).trim), labels)
+        .drop(6)
+      assertEquals(rows.map(_.slice(5, 8).trim), labels)
       for ((row, value), index) <- rows.zip(readings).zipWithIndex do
-        assert(row.contains(s"F$value n=${index + 1} "), row)
+        assert(row.contains(s"F$value n${index + 1}"), row)
   }

@@ -1,7 +1,5 @@
 package desk
 
-import java.nio.file.{Files, Path}
-
 class DisplayCacheSpec extends munit.FunSuite:
   test("populated tape gauges and sample volume retain the recorded quantities") {
     val s = Golden.snapshot
@@ -46,12 +44,4 @@ class DisplayCacheSpec extends munit.FunSuite:
       Chart.fromSamples(samples, tape, first, 14400, 2)
     }
     assert(volumeBytes < 1000000, s"Volume allocated $volumeBytes bytes per call")
-  }
-
-  test("three retained sizes preserve twenty-four recorded frame hashes") {
-    val expected =
-      Files.readString(Path.of("golden", "display_frames.sha256")).linesIterator.toVector
-    val actual = DisplayCost.frameHashes
-    assertEquals(actual.size, 24)
-    assertEquals(actual, expected)
   }

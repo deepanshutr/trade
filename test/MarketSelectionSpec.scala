@@ -210,7 +210,7 @@ class MarketSelectionSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("pending selection blocks displayed, keyboard and legacy trade actions") {
+  test("pending selection blocks displayed and keyboard trade actions") {
     val normal = Snapshot.initial("XMR", 1000L)
     val pending = normal.copy(marketPending = Some((1L, "BTC")))
     val view = TradingView(
@@ -257,17 +257,6 @@ class MarketSelectionSpec extends munit.FunSuite:
       controller.handle(Command.Pointer(action.x, action.y, 0), pending, view, (100, 30), false)
       assertEquals((previews, sends), (0, 0))
       assert(!frame(pending).buttons.exists(_.action.isInstanceOf[DeskAction.Prepare]))
-      Main.handleTrade(
-        Command.PlaceOrder(Trading.action(0)),
-        pending,
-        false,
-        (100, 30),
-        view,
-        Some("XMR"),
-        0,
-        None,
-        (_, _) => { sends += 1; true }
-      )
       assertEquals(sends, 0)
       assert(!controller.handle(Command.CancelTarget, pending, view, (100, 30), false))
     finally controller.close()

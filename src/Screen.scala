@@ -69,46 +69,16 @@ object Screen:
       }
       .padTo(cols, ' ')
 
-  def render(
-      s: Snapshot,
-      cols: Int,
-      rows: Int,
-      now: Long,
-      zone: java.time.ZoneId,
-      style: Style,
-      footer: Vector[String] = Vector.empty,
-      marketOnly: Boolean = false,
-      reservedRows: Int = Layout.gaugeRows + Layout.footerRows
-  ): Vector[String] =
-    if cols < (if marketOnly then Layout.leftW + Layout.scaleW + 4
-               else Layout.minCols) || rows < Layout.minRows
-    then Vector(s"need ${Layout.minCols}x${Layout.minRows}, have ${cols}x$rows")
-    else
-      val market = renderMarket(s, cols, rows, now, zone, style, marketOnly, reservedRows)
-      val controls = footer
-        .take(Layout.footerRows)
-        .padTo(Layout.footerRows, "")
-        .map(Chart.fit(_, cols))
-      if marketOnly then market.lines
-      else market.lines ++ Gauges.rows(s, now, cols, style) ++ controls
-
   def renderMarket(
       s: Snapshot,
       cols: Int,
-      rows: Int,
+      priceRows: Int,
       now: Long,
       zone: java.time.ZoneId,
       style: Style,
-      marketOnly: Boolean,
-      reservedRows: Int,
-      maxPriceRows: Int = Int.MaxValue,
       portfolio: PortfolioView = PortfolioView()
   ): MarketFrame =
     val references = s.referenceCoins.distinct.filterNot(_ == s.coin)
-    val priceRows = (Layout.priceRows(
-      rows,
-      references.size
-    ) + Layout.gaugeRows + Layout.footerRows - reservedRows).min(maxPriceRows)
     require(priceRows >= 3)
     val cells = Layout.cells(cols)
     val count = Layout.plotColumns(cols, s.chartMode)
@@ -140,10 +110,9 @@ object Screen:
       val ink = ax.fold(Vector.fill(Layout.referenceRows)(" " * cells))(a =>
         Chart.plot(values, a, cells, s.chartMode)
       )
-      val labels = if marketOnly then
-        val label = if coin == "PAXG" then "PAXG (token tied to gold)" else coin
+      val label = if coin == "PAXG" then "PAXG (token tied to gold)" else coin
+      val labels =
         Vector(Chart.fit(label, Layout.leftW)).padTo(Layout.referenceRows, " " * Layout.leftW)
-      else Gauges.correlationRows(s, coin)
       val currentText = current.map(p => Trading.display(BigDecimal(p), Layout.scaleW - 1))
       val prices = Chart.scaleRows(ax, Layout.referenceRows, current.map(_ => 1), currentText)
       (0 until Layout.referenceRows).map(i => labels(i) + ink(i) + prices(i))

@@ -7,6 +7,24 @@ import java.util.concurrent.atomic.AtomicReference
 import scala.jdk.CollectionConverters.*
 
 class PublicInputSpec extends munit.FunSuite:
+  private def market(
+      s: Snapshot,
+      cols: Int,
+      rows: Int,
+      now: Long,
+      zone: java.time.ZoneId,
+      style: Style
+  ): Vector[String] =
+    Screen
+      .renderMarket(
+        s,
+        cols,
+        rows - 13 - 3 * s.referenceCoins.distinct.count(_ != s.coin),
+        now,
+        zone,
+        style
+      )
+      .lines
   private val now = 1788345727341L
   private def fixture(name: String): ujson.Value =
     ujson.read(Files.readString(Path.of("fixtures", name)))
@@ -20,8 +38,8 @@ class PublicInputSpec extends munit.FunSuite:
     assertEquals(after.tape, before.tape)
     assertEquals(after.candles, before.candles)
     assertEquals(after.ctx, before.ctx)
-    val frames = Screen.render(after, 100, 30, Golden.now, ZoneOffset.UTC, Style.mono)
-    assertEquals(frames.size, 30)
+    val frames = market(after, 100, 30, Golden.now, ZoneOffset.UTC, Style.mono)
+    assertEquals(frames.size, 20)
     assert(frames.forall(line => Chart.plain(line).length == 100))
     after
 
@@ -74,8 +92,8 @@ class PublicInputSpec extends munit.FunSuite:
 
   private def freshDrawing(text: String): Snapshot =
     val state = State.reduce(Snapshot.initial("XMR", now), Events.parse(text).get, now)
-    val frame = Screen.render(state, 100, 30, now, ZoneOffset.UTC, Style.mono)
-    assertEquals(frame.size, 30)
+    val frame = market(state, 100, 30, now, ZoneOffset.UTC, Style.mono)
+    assertEquals(frame.size, 20)
     assert(frame.forall(line => Chart.plain(line).length == 100))
     state
 
@@ -161,7 +179,7 @@ class PublicInputSpec extends munit.FunSuite:
     assertEquals(after.ctx.get.funding, "-0.0001302411")
     assertEquals(after.ctx.get.openInterest, "0")
     assert(
-      Screen.render(after, 100, 30, now, ZoneOffset.UTC, Style.mono).head.contains("fund -0.0130%")
+      market(after, 100, 30, now, ZoneOffset.UTC, Style.mono).head.contains("fund -0.0130%")
     )
   }
 
@@ -187,8 +205,7 @@ class PublicInputSpec extends munit.FunSuite:
     assert(Chart.depthRows(Chart.spans(state.book.get, Map.empty), axis)._1.forall(_.isFinite))
     assert(columns.flatten.forall(_.volume.isFinite))
     assert(
-      Screen
-        .render(state, 100, 30, now, ZoneOffset.UTC, Style.mono)
+      market(state, 100, 30, now, ZoneOffset.UTC, Style.mono)
         .forall(line =>
           !line.contains("NaN") && !line.contains("Infinity") && Chart.plain(line).length == 100
         )

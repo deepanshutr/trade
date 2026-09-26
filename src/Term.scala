@@ -51,16 +51,10 @@ object Term:
   def frame(lines: Vector[String]): String =
     esc + "[H" + lines.map(_ + esc + "[K").mkString("\r\n") + esc + "[J"
 
-  def bytes(lines: Vector[String]): Array[Byte] =
-    frame(lines).getBytes(java.nio.charset.StandardCharsets.UTF_8)
-
   private def checkedWrite(payload: Array[Byte], output: java.io.PrintStream): Unit =
     output.write(payload)
     output.flush()
     if output.checkError() then throw new java.io.IOException("terminal write failed")
-
-  def write(lines: Vector[String], output: java.io.PrintStream = System.out): Unit =
-    checkedWrite(bytes(lines), output)
 
   final class Writer(output: java.io.PrintStream = System.out):
     private var previous: Option[((Int, Int), Vector[String])] = None
