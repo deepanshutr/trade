@@ -1,4 +1,3 @@
-//> using target.scope test
 package desk
 
 import java.util.concurrent.{CountDownLatch, TimeUnit}

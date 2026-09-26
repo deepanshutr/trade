@@ -8,7 +8,7 @@ live:
 	$(SCALA_CLI) test . -- --include-tags=live
 
 check:
-	$(SCALA_CLI) compile . && $(SCALA_CLI) fmt --check .
+	$(SCALA_CLI) compile --test . && $(SCALA_CLI) fmt --check .
 
 build:
 	mkdir -p bin
