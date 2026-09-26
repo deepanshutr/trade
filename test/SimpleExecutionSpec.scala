@@ -43,20 +43,16 @@ class SimpleExecutionSpec extends munit.FunSuite:
   }
 
   test("primary controls cover a large three-row target at minimum width") {
-    val frame = Workspace.draw(
-      snapshot,
-      view,
-      PanelView(mode = "PAPER"),
-      100,
-      30,
-      now,
-      ZoneOffset.UTC,
-      Style.mono
-    )
+    val f = new Fixture
+    val frame = f.draw()
     val buy = frame.buttons.find(_.action == DeskAction.Prepare(Trading.action(0))).get
     assert(buy.width >= 20)
-    for y <- buy.y until buy.y + 3; x <- buy.x until buy.x + buy.width do
-      assertEquals(frame.hit(x, y, 100, 30, "XMR"), Some(buy.action))
+    for y <- buy.y until buy.y + buy.height; x <- buy.x until buy.x + buy.width do
+      val before = f.sent.size
+      f.key(Command.PointerPress(x, y, 0))
+      f.key(Command.Pointer(x, y, 0))
+      assertEquals(f.sent.size, before + 1)
+      assertEquals(f.sent.last.intent, Trading.action(0))
   }
 
   private final class Fixture:
@@ -75,7 +71,7 @@ class SimpleExecutionSpec extends munit.FunSuite:
           TradeSizes()
         ),
       review => { sent :+= review; true },
-      _ => Right("Synthetic account")
+      _ => Right(())
     )
     def draw(v: TradingView = view): WorkspaceFrame =
       val f =
@@ -159,8 +155,8 @@ class SimpleExecutionSpec extends munit.FunSuite:
         assert(y >= 1 && y <= rows && x >= 1 && x <= cols)
         assert(occupied.add((x, y)), s"overlap $name at $x,$y")
         if frame.buttons.contains(b) then
-          assertEquals(frame.hit(x, y, cols, rows, "XMR"), Some(b.action))
-        else assertEquals(frame.hit(x, y, cols, rows, "XMR"), None)
+          assertEquals(frame.buttons.find(_.contains(x, y)).map(_.action), Some(b.action))
+        else assertEquals(frame.buttons.find(_.contains(x, y)).map(_.action), None)
       sys.props.get("desk.simple.frames").foreach { path =>
         val root = Path.of(path)
         Files.createDirectories(root)

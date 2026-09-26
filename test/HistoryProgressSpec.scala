@@ -47,7 +47,6 @@ class HistoryProgressSpec extends munit.FunSuite:
       val directMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began)
       assert(directMs <= 100, s"held history blocked state access for ${directMs}ms")
       assertEquals(panel.messages.size, 300)
-      assertEquals(panel.historySavingAt, Some(now))
       val frame = Workspace.draw(
         Snapshot.initial("XMR", now),
         TradingView("XMR", Some(BigDecimal(5)), "Paper ready", ready = true),
@@ -58,13 +57,11 @@ class HistoryProgressSpec extends munit.FunSuite:
         java.time.ZoneOffset.UTC,
         Style.mono
       )
-      assertEquals(panel.historySavingAt, Some(now))
       assert(frame.lines.exists(_.contains("Bought")))
       release.countDown()
       c.close()
       assertEquals(saved.asScala.toVector.size, 2)
       assertEquals(saved.get(1), c.panel.messages)
-      assertEquals(c.panel.historySavingAt, None)
       println(s"Held history: 400 queued messages and state read ${directMs}ms")
     finally
       release.countDown()

@@ -60,7 +60,7 @@ class UiBoundarySpec extends munit.FunSuite:
       () => now,
       _ => Right(plan),
       order => { sent :+= order; true },
-      name => { modes :+= name; Right("selected account") }
+      name => { modes :+= name; Right(()) }
     )
     def draw(cols: Int = 120, rows: Int = 40): WorkspaceFrame =
       val frame =
@@ -115,7 +115,7 @@ class UiBoundarySpec extends munit.FunSuite:
         assert(rendered.exists(_.contains(button.label)))
         for
           y <- button.y until button.y + button.height; x <- button.x until button.x + button.width
-        do assertEquals(frame.hit(x, y, cols, 30, "XMR"), Some(button.action))
+        do assertEquals(frame.buttons.find(_.contains(x, y)).map(_.action), Some(button.action))
       assert(frame.lines.forall(line => Chart.plain(line).length == cols))
   }
 

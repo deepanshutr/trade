@@ -379,3 +379,35 @@ class PaperAccountingSpec extends munit.FunSuite:
       assertEquals(next.portfolio.net, Some(BigDecimal("19.69")))
     finally worker.close()
   }
+
+  test("current wallet audit fields survive loading, another fill and reload") {
+    temporary { directory =>
+      LocalFiles.write(
+        directory.resolve("wallet-mainnet.json"),
+        """{"cash":"799.8","deposit":"1000","realized":"12","fees":"0.2","positions":{"XMR":{"quantity":"2","entry":"100"}},"orders":["previous fill"],"count":1}"""
+      )
+      val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(50000), fee)
+      val expected = PaperAccount(
+        cash = BigDecimal("799.8"),
+        deposit = BigDecimal(1000),
+        realized = BigDecimal(12),
+        fees = BigDecimal("0.2"),
+        positions = Map("XMR" -> PaperPosition(BigDecimal(2), BigDecimal(100))),
+        orders = Vector("previous fill"),
+        count = 1L
+      )
+      val filled = try
+        assertEquals(ledger.account, expected)
+        assert(ledger.fill(plan(Side.Buy, BigDecimal(1), BigDecimal(100)), now).isRight)
+        ledger.account
+      finally ledger.close()
+      val reopened = PaperLedger.open(directory, "mainnet", BigDecimal(50000), fee)
+      try
+        assertEquals(reopened.account, filled)
+        assertEquals(reopened.account.cash, BigDecimal("699.7"))
+        assertEquals(reopened.account.positions("XMR").quantity, BigDecimal(3))
+        assertEquals(reopened.account.orders.head, "previous fill")
+        assertEquals(reopened.account.count, 2L)
+      finally reopened.close()
+    }
+  }

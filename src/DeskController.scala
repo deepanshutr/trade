@@ -5,7 +5,7 @@ final class DeskController(
     wall: () => Long,
     preview: OrderIntent => Either[String, OrderPlan],
     submit: OrderReview => Boolean,
-    switchMode: String => Either[String, String],
+    switchMode: String => Either[String, Unit],
     persist: Vector[DeskMessage] => Unit = _ => (),
     mute: Boolean => Unit = _ => ()
 ) extends AutoCloseable:
@@ -28,7 +28,7 @@ final class DeskController(
       after: WorkspaceFrame
   ): Boolean =
     before.cols == after.cols && before.rows == after.rows && before.coin == after.coin &&
-      before.mode == after.mode && before.review == after.review &&
+      before.mode == after.mode &&
       before.buttons.contains(button) == after.buttons.contains(button) && after.controls.contains(
         button
       )
@@ -48,16 +48,12 @@ final class DeskController(
     shown = None
     pressed = None
   }
-  def status(data: String, account: String): Unit = synchronized {
-    current = current.copy(dataStatus = data, account = account)
-  }
   def outlook(value: OutlookView): Unit = synchronized {
     current = current.copy(outlook = value)
   }
   private def saveMessages(): Unit =
     if !storageFailed && !stopping then
       messagesToSave = Some(current.messages)
-      current = current.copy(historySavingAt = current.historySavingAt.orElse(Some(wall())))
       notifyAll()
 
   def start(): Unit = synchronized {
@@ -82,9 +78,6 @@ final class DeskController(
           case None           => done = true
           case Some(messages) =>
             persist(messages)
-            synchronized {
-              if messagesToSave.isEmpty then current = current.copy(historySavingAt = None)
-            }
     catch
       case _: Exception =>
         synchronized {
@@ -93,7 +86,6 @@ final class DeskController(
           serial += 1
           val reason = "Message history save failed. Trade results remain visible for this session"
           current = current.copy(
-            historySavingAt = None,
             historyFailure = Some(reason),
             messages =
               (current.messages :+ DeskMessage(serial, wall(), "storage", reason)).takeRight(300)
@@ -120,6 +112,10 @@ final class DeskController(
     )
     saveMessages()
   }
+
+  private def cancel(): Unit =
+    current = current.copy(modeReview = None)
+    shown = None
 
   def handle(
       command: Command,
@@ -183,10 +179,9 @@ final class DeskController(
             shown = None
           case DeskAction.ConfirmMode(name) if current.modeReview.contains(name) && !view.pending =>
             switchMode(name) match
-              case Right(account) =>
+              case Right(()) =>
                 current = current.copy(
                   mode = name,
-                  account = account,
                   modeReview = None,
                   actionNotice = None
                 )
@@ -194,9 +189,7 @@ final class DeskController(
                 current = current.copy(modeReview = None)
                 addMessage("mode", reason)
             shown = None
-          case DeskAction.Cancel =>
-            current = current.copy(modeReview = None)
-            shown = None
+          case DeskAction.Cancel     => cancel()
           case DeskAction.Prepare(_) => refuse()
           case _                     => ()
     command match
@@ -229,8 +222,7 @@ final class DeskController(
             current.modeReview.foreach(name => act(DeskAction.ConfirmMode(name)))
             true
           case Command.CancelTarget =>
-            current = current.copy(modeReview = None)
-            shown = None
+            cancel()
             true
           case Command.Mode(name) =>
             act(DeskAction.Mode(name))

@@ -80,7 +80,7 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
         if button.height == 1 then assertEquals(text, "[" + button.label + "]")
         for
           y <- button.y until button.y + button.height; x <- button.x until button.x + button.width
-        do assertEquals(actual.hit(x, y, cols, rows, "XMR"), Some(button.action))
+        do assertEquals(actual.buttons.find(_.contains(x, y)).map(_.action), Some(button.action))
       if pending then assert(!actual.buttons.exists(b => tradeAction(b.action)))
   }
 

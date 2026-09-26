@@ -212,7 +212,7 @@ class LiveReadinessAuditSpec extends munit.FunSuite:
       () => f.clock.get(),
       () => f.clock.get()
     )
-    val changed = new AtomicReference[Either[String, String]]()
+    val changed = new AtomicReference[Either[String, Unit]]()
     val switcher = new Thread(() => changed.set(route.switchMode("PAPER")))
     val readerReturned = new CountDownLatch(1)
     val reader = new Thread(() => { route.view; readerReturned.countDown() })

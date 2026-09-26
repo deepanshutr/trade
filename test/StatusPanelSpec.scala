@@ -4,8 +4,23 @@ class StatusPanelSpec extends munit.FunSuite:
   private val now = 1800000000000L
   private val snapshot = Snapshot.initial("XMR", now)
   private val panel = PanelView(mode = "PAPER", actionNotice = Some("PAPER XMR buy filled 5"))
-  private def draw(view: TradingView, p: PanelView = panel, cols: Int = 100): WorkspaceFrame =
-    Workspace.draw(snapshot, view, p, cols, 30, now, java.time.ZoneOffset.UTC, Style.mono)
+  private def draw(
+      view: TradingView,
+      p: PanelView = panel,
+      cols: Int = 100,
+      logsUnavailable: Boolean = false
+  ): WorkspaceFrame =
+    Workspace.draw(
+      snapshot,
+      view,
+      p,
+      cols,
+      30,
+      now,
+      java.time.ZoneOffset.UTC,
+      Style.mono,
+      logsUnavailable = logsUnavailable
+    )
 
   test("current connection and account blocks replace old success immediately") {
     for (reason, expected) <- Vector(
@@ -37,8 +52,9 @@ class StatusPanelSpec extends munit.FunSuite:
     for cols <- Vector(100, 120, 160) do
       val frame = draw(
         TradingView("XMR", message = "Ready", ready = true),
-        panel.copy(dataStatus = "Logs unavailable", historyFailure = Some("save failed")),
-        cols
+        panel.copy(historyFailure = Some("save failed")),
+        cols,
+        logsUnavailable = true
       )
       assert(frame.lines.head.contains("!logs !save"))
       assert(frame.lines.forall(_.length == cols))
@@ -66,4 +82,10 @@ class StatusPanelSpec extends munit.FunSuite:
     )
     assert(frame.lines.exists(_.contains("Not sent")))
     assert(!frame.lines.exists(_.contains("Account unavailable")))
+  }
+
+  test("logs warning follows only the explicit flag, including a mismatched market view") {
+    for coin <- Vector("XMR", "BTC"); unavailable <- Vector(false, true) do
+      val frame = draw(TradingView(coin, message = "Ready"), logsUnavailable = unavailable)
+      assertEquals(frame.lines.head.contains(" !logs"), unavailable)
   }

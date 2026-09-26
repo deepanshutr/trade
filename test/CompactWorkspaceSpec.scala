@@ -9,7 +9,6 @@ class CompactWorkspaceSpec extends munit.FunSuite:
 
   test("normal trading view shows three horizons without the transcript or running logs") {
     val panel = PanelView(
-      dataStatus = "capture log should stay hidden",
       messages = Vector(DeskMessage(1, now, "analysis", "verbose answer should stay hidden"))
     )
     for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
