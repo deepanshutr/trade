@@ -109,7 +109,10 @@ class ArchiveListingSpec extends munit.FunSuite:
     val at = 1800000000000L
     try
       if checkpointFirst then
-        archive.record(Event.CandleUpdate("XMR", "1m", Candle(at - 60000L, 100, 102, 98, 101, 12)), at)
+        archive.record(
+          Event.CandleUpdate("XMR", "1m", Candle(at - 60000L, 100, 102, 98, 101, 12)),
+          at
+        )
         archive.checkpoint()
       for i <- 1 to 300 do
         archive.record(Event.SocketUp, at + i)
