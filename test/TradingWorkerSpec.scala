@@ -11,7 +11,6 @@ class TradingWorkerSpec extends munit.FunSuite:
       () => 1000L,
       _ => Left("unused"),
       _ => false,
-      _ => false,
       _ => Left("unused")
     )
     try
@@ -1353,7 +1352,6 @@ class TradingWorkerSpec extends munit.FunSuite:
         () => f.clock.get(),
         f.worker.preview,
         _ => fail("an invalid preview submitted an order"),
-        _ => false,
         _ => Left("unused")
       )
       try
