@@ -24,15 +24,12 @@ final case class DeskMessage(
 )
 final case class PanelView(
     mode: String = "VIEW",
-    account: String = "",
-    dataStatus: String = "Public data collecting",
     messages: Vector[DeskMessage] = Vector.empty,
     sizes: TradeSizes = TradeSizes(),
     modeReview: Option[String] = None,
     outlook: OutlookView = Outlook.empty(""),
     muted: Boolean = false,
     actionNotice: Option[String] = None,
-    historySavingAt: Option[Long] = None,
     historyFailure: Option[String] = None,
     actionNumber: Long = 0L,
     bigOrder: Boolean = false
@@ -52,24 +49,12 @@ final case class WorkspaceFrame(
     coin: String,
     cols: Int,
     rows: Int,
-    completeReview: Boolean,
-    review: Option[OrderReview] = None,
     mode: String = "VIEW",
     outlook: Option[OutlookView] = None,
-    scrollLimit: Int = 0,
     disabledButtons: Vector[DeskButton] = Vector.empty,
     shortcuts: Set[DeskAction] = Set.empty
 ):
   def controls: Vector[DeskButton] = buttons ++ disabledButtons
-  def hit(
-      x: Int,
-      y: Int,
-      actualCols: Int,
-      actualRows: Int,
-      actualCoin: String
-  ): Option[DeskAction] =
-    if actualCols != cols || actualRows != rows || actualCoin != coin then None
-    else buttons.find(_.contains(x, y)).map(_.action)
 
 object Workspace:
   def safeText(text: String): String =
@@ -96,11 +81,6 @@ object Workspace:
         case _                                        => " "
       }
       .take(30000)
-
-  def wrap(text: String, width: Int): Vector[String] =
-    safeText(text).split("\n", -1).toVector.flatMap { line =>
-      if line.isEmpty then Vector("") else line.grouped(width.max(1)).toVector
-    }
 
   def indicatorRows(s: Snapshot, now: Long, width: Int, style: Style): Vector[String] =
     val h = ((width - 24) / 2).max(1).min(20)
@@ -198,18 +178,18 @@ object Workspace:
       rows: Int,
       now: Long,
       zone: java.time.ZoneId,
-      style: Style
+      style: Style,
+      logsUnavailable: Boolean = false
   ): WorkspaceFrame =
     if view.coin != s.coin then
-      return draw(s, view.forMarket(s.coin), panel, cols, rows, now, zone, style)
+      return draw(s, view.forMarket(s.coin), panel, cols, rows, now, zone, style, logsUnavailable)
     if cols < Layout.minCols || rows < Layout.minRows then
       WorkspaceFrame(
         Vector(s"need ${Layout.minCols}x${Layout.minRows}, have ${cols}x$rows"),
         Vector.empty,
         s.coin,
         cols,
-        rows,
-        false
+        rows
       )
     else
       val leftWidth = Layout.workspaceMarketWidth(cols)
@@ -357,7 +337,7 @@ object Workspace:
                 content.slice(start, start + b.width)
               ) + content.drop(start + b.width)
             }
-        val warnings = (if panel.dataStatus.contains("Logs unavailable") then " !logs" else "") +
+        val warnings = (if logsUnavailable then " !logs" else "") +
           (if panel.historyFailure.nonEmpty then " !save" else "")
         val publicLine = if i == 0 && warnings.nonEmpty then
           Chart
@@ -371,8 +351,6 @@ object Workspace:
         s.coin,
         cols,
         rows,
-        false,
-        None,
         panel.mode,
         Some(outlook),
         disabledButtons = inactive,

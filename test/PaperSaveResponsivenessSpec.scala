@@ -6,15 +6,14 @@ import java.nio.file.Files
 import java.time.ZoneId
 
 class PaperSaveResponsivenessSpec extends munit.FunSuite:
-  test("router view, account label and controller draw stay responsive during a held paper save") {
+  test("router view and controller draw stay responsive during a held paper save") {
     val at = 1800000000000L
     val saving = new CountDownLatch(1)
     val release = new CountDownLatch(1)
     val sent = new CountDownLatch(1)
-    val readersStarted = new CountDownLatch(3)
-    val viewed = new CountDownLatch(3)
+    val readersStarted = new CountDownLatch(2)
+    val viewed = new CountDownLatch(2)
     val shown = new AtomicReference[TradingView]()
-    val label = new AtomicReference[String]()
     val drawn = new AtomicReference[WorkspaceFrame]()
     val saved = new AtomicReference[PaperAccount]()
     val errors = new java.util.concurrent.ConcurrentLinkedQueue[Throwable]()
@@ -119,9 +118,7 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
       thread
     val readers = Vector(
       reader("synthetic-paper-view")(shown.set(router.view)),
-      reader("synthetic-paper-label")(label.set(router.accountLabel)),
       reader("synthetic-paper-frame") {
-        controller.status("synthetic data", router.accountLabel)
         drawn.set(draw())
       }
     )
@@ -172,7 +169,6 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
       assert(errors.isEmpty, errors.toString)
       assert(shown.get().pending)
       assertEquals(shown.get().position, Some(BigDecimal(0)))
-      assert(label.get().startsWith("Cash $10000"))
       assert(drawn.get().lines.map(Chart.plain).mkString("\n").contains("Saving 0s"))
       assertEquals(saved.get(), null)
       release.countDown()

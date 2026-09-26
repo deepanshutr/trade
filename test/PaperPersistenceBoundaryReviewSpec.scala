@@ -142,7 +142,7 @@ class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
       assertEquals(pending.message, "PAPER saving 5s | XMR")
       assertEquals(pending.position, Some(BigDecimal(0)))
       assertEquals(pending.outcome, None)
-      assert(f.quick("account label")(f.router.accountLabel).startsWith("Cash $10000"))
+      assertEquals(pending.portfolio.stables, Some(BigDecimal(10000)))
       release.countDown()
       f.complete()
       assert(f.router.view.outcome.exists(_.contains("storage failed")))

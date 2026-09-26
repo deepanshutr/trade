@@ -105,15 +105,7 @@ final class ExecutionRouter(
     else if selected == "LIVE" then live.view
     else live.view.copy(ready = false, block = Some("View only"))
   }
-  def accountLabel: String = synchronized {
-    if selected == "PAPER" then paperWorker().accountLabel
-    else if selected == "LIVE" then
-      config.network + " " + config.owner.fold("setup required")(address =>
-        address.take(8) + "..." + address.takeRight(6)
-      )
-    else "Public market view"
-  }
-  def switchMode(next: String): Either[String, String] = synchronized {
+  def switchMode(next: String): Either[String, Unit] = synchronized {
     if closed then Left("Trading stopped")
     else if live.view.pending || paper.exists(_.view.pending) then
       Left("Wait for the pending order outcome before changing mode")
@@ -122,7 +114,7 @@ final class ExecutionRouter(
         val _ = paperWorker()
         selected = "PAPER"
         retireLive()
-        accountLabel
+        ()
       }.toEither.left.map(_ => "Paper storage cannot be opened. Its saved balance was preserved")
     else if next == "LIVE" && !config.configured then
       Left(
@@ -133,7 +125,7 @@ final class ExecutionRouter(
       selected = "LIVE"
       if !liveEnabled && retirement.isEmpty then
         if live.isRetired then startLive() else retireLive()
-      Right(accountLabel)
+      Right(())
     else Left("Unknown trading mode")
   }
   def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized {

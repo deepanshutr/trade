@@ -32,7 +32,7 @@ class RefineTradingSpec extends munit.FunSuite:
           TradeSizes()
         ),
       review => { sent :+= review; true },
-      _ => Right("Synthetic account")
+      _ => Right(())
     )
     def draw(v: TradingView = view): WorkspaceFrame =
       val frame =

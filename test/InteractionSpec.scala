@@ -32,7 +32,7 @@ class InteractionSpec extends munit.FunSuite:
           TradeSizes()
         ),
       order => { sent :+= order; view = view.copy(ready = false, pending = true); true },
-      mode => { modes :+= mode; Right("selected") }
+      mode => { modes :+= mode; Right(()) }
     )
     def draw(cols: Int = 120, rows: Int = 40): WorkspaceFrame =
       val frame = Workspace.draw(

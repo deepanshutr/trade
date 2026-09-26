@@ -84,3 +84,21 @@ class CompactInteractionSpec extends munit.FunSuite:
     assert(!rows.contains("To hit"), rows)
     assert(rows.contains("Test 5%"), rows)
   }
+
+  test("Escape and the Cancel button leave identical panels and invalidate the shown controls") {
+    val escape = new Fixture
+    val button = new Fixture
+    for f <- Vector(escape, button) do
+      f.draw()
+      f.key(Command.Mode("LIVE"))
+      f.draw()
+      assertEquals(f.controller.panel.modeReview, Some("LIVE"))
+    escape.key(Command.CancelTarget)
+    button.click("Esc Cancel")
+    assertEquals(escape.controller.panel, button.controller.panel)
+    assertEquals(escape.controller.panel.modeReview, None)
+    for f <- Vector(escape, button) do
+      f.key(Command.Mode("LIVE"))
+      assertEquals(f.controller.panel.modeReview, None)
+      assert(!f.draw().buttons.exists(_.action == DeskAction.ConfirmMode("LIVE")))
+  }

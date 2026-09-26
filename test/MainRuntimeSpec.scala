@@ -53,7 +53,6 @@ class MainRuntimeSpec extends munit.FunSuite:
     assertEquals(review.leverage, Some(3))
     assertEquals(review.marginMode, Some("isolated"))
     val frame = draw()
-    assert(!frame.completeReview)
   }
 
   test("paper and recorder modes have explicit independent startup choices") {

@@ -1,6 +1,6 @@
 package desk
 
-import java.nio.file.{Files, Path}
+import java.nio.file.Path
 import java.util.concurrent.{CountDownLatch, LinkedBlockingQueue, TimeUnit}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
 import scala.util.Try
@@ -25,10 +25,21 @@ object WorkspaceApp:
       now: Long,
       zone: java.time.ZoneId,
       style: Style,
-      outlook: OutlookWorker
+      outlook: OutlookWorker,
+      logsUnavailable: Boolean = false
   ): WorkspaceFrame =
     val visible = outlook.forDisplay(panel.outlook, market, now)
-    Workspace.draw(market, view, panel.copy(outlook = visible), cols, rows, now, zone, style)
+    Workspace.draw(
+      market,
+      view,
+      panel.copy(outlook = visible),
+      cols,
+      rows,
+      now,
+      zone,
+      style,
+      logsUnavailable
+    )
 
   private[desk] def announce(
       alert: Announcement,
@@ -360,8 +371,6 @@ object WorkspaceApp:
         measured
       }
       var sizeAt = 0L
-      var statusAt = 0L
-      var captureStatus = "Public capture starting"
       var historyFailureLogged = false
       try
         while !state.get().quit do
@@ -382,23 +391,20 @@ object WorkspaceApp:
           if !historyFailureLogged && controller.panel.historyFailure.nonEmpty then
             diagnostics.failure(DiagnosticPart.History, new java.io.IOException())
             historyFailureLogged = true
-          if time - statusAt >= 2000L then
-            captureStatus = recorder.map(_.status).getOrElse {
-              val at = Try(
-                Files.getLastModifiedTime(publicDirectory.resolve("candles.json")).toMillis
-              ).getOrElse(0L)
-              if at > 0 && time >= at && time - at <= 30000L then
-                "Background capture saved " + (time - at) / 1000L + "s ago"
-              else "Public capture unavailable or stale"
-            }
-            statusAt = time
-          controller.status(
-            "Prices: " + routed.status + ". " + captureStatus + ". " + diagnostics.status,
-            worker.accountLabel
-          )
           val building = System.nanoTime()
           val frame =
-            drawFrame(market, view, controller.panel, size._1, size._2, time, zone, style, outlook)
+            drawFrame(
+              market,
+              view,
+              controller.panel,
+              size._1,
+              size._2,
+              time,
+              zone,
+              style,
+              outlook,
+              diagnostics.status.nonEmpty
+            )
           diagnostics.slow(DiagnosticPart.Build, System.nanoTime() - building)
           val waiting = System.nanoTime()
           var lockWait = 0L

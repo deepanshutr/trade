@@ -43,8 +43,6 @@ class WorkspaceSpec extends munit.FunSuite:
       assert(frame.lines(tape).contains("GOLD"))
       assert(!frame.lines.exists(_.contains("Ask")))
       assert(frame.buttons.nonEmpty)
-      assertEquals(frame.hit(1, 1, cols - 1, rows, "XMR"), None)
-      assertEquals(frame.hit(1, 1, cols, rows, "BTC"), None)
   }
 
   test("one-click controls have no send button and a small screen has no controls") {
@@ -59,7 +57,6 @@ class WorkspaceSpec extends munit.FunSuite:
       java.time.ZoneId.of("UTC"),
       Style.mono
     )
-    assert(!frame.completeReview)
     assert(!frame.buttons.exists(_.label.contains("Send")))
     val small = Workspace.draw(s, view, panel, 99, 29, now, java.time.ZoneId.of("UTC"), Style.mono)
     assertEquals(small.buttons, Vector.empty[DeskButton])

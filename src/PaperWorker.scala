@@ -85,14 +85,6 @@ final class PaperWorker(
     else None
   private def ready: Boolean = block.isEmpty
   def account: PaperAccount = ledger.account
-  def accountLabel: String = synchronized {
-    val a = ledger.account
-    val position = a.positions.get(coin)
-    val mark = touch.map(_.midpoint)
-    val unrealized = for p <- position; px <- mark yield p.quantity * (px - p.entry)
-    "Cash $" + Trading.display(a.cash) + " realized $" + Trading.display(a.realized) + unrealized
-      .fold("")(p => " open $" + Trading.display(p))
-  }
   def view: TradingView = synchronized {
     val account = ledger.account
     val reason = block
