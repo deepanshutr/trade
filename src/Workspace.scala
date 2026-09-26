@@ -107,7 +107,7 @@ object Workspace:
       else fitted
       style.wrap(style.tape, marked)
     }
-    val correlations = Vector("BTC", "PAXG").flatMap { coin =>
+    val correlations = State.refCoins.flatMap { coin =>
       Gauges.horizons.map { (label, interval, n) =>
         val r = if coin == s.coin then Comparison(None, 0, n, "same market")
         else
