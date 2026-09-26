@@ -334,7 +334,6 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
       () => f.clock.get(),
       f.worker.preview,
       f.worker.submitReviewed,
-      _ => false,
       _ => Left("disabled")
     )
     def snapshot: Snapshot = Snapshot

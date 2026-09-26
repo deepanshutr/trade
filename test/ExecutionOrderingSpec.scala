@@ -15,7 +15,6 @@ class ExecutionOrderingSpec extends munit.FunSuite:
       () => 1000L,
       _ => Left("no new order"),
       _ => false,
-      _ => false,
       _ => Left("no mode switch")
     )
     controller.publish(

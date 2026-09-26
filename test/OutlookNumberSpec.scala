@@ -71,9 +71,4 @@ class OutlookNumberSpec extends munit.FunSuite:
         shown == "--" || math.abs(shown.toDouble / level - 1) < 0.01,
         s"$level displayed as $shown at width $width"
       )
-      assert(
-        OutlookScreen
-          .details(outlook(level))
-          .contains("Target " + BigDecimal(level).bigDecimal.stripTrailingZeros().toPlainString)
-      )
   }

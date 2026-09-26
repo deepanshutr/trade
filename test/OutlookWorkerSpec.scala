@@ -120,7 +120,6 @@ class OutlookWorkerSpec extends munit.FunSuite:
       () => now,
       _ => Left("disabled"),
       _ => fail("unexpected order"),
-      _ => true,
       _ => Left("disabled")
     )
     val worker = new OutlookWorker(

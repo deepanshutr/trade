@@ -15,7 +15,6 @@ class HistoryUxIndependentSpec extends munit.FunSuite:
       () => epoch,
       _ => Left("unused"),
       _ => false,
-      _ => false,
       _ => Left("unused"),
       save
     )

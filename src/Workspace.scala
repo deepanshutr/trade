@@ -2,18 +2,10 @@ package desk
 
 enum DeskAction:
   case Prepare(intent: OrderIntent)
-  case Target(side: Side)
-  case OrderType(kind: OrderKind)
   case OrderSize(big: Boolean)
-  case Submit, Refresh, Cancel, Ask, SendQuestion, Status, Details, ToggleMute
-  case Feedback(id: Long, accepted: Boolean)
-  case Scroll(lines: Int)
+  case Cancel
   case Mode(name: String)
   case ConfirmMode(name: String)
-  case Page(value: DetailPage)
-
-enum DetailPage:
-  case Method, Sources, Answers
 
 final case class OrderReview(
     intent: OrderIntent,
@@ -34,28 +26,17 @@ final case class PanelView(
     mode: String = "VIEW",
     account: String = "",
     dataStatus: String = "Public data collecting",
-    analysisStatus: String = "Analysis starting",
-    review: Option[OrderReview] = None,
     messages: Vector[DeskMessage] = Vector.empty,
-    input: Option[String] = None,
-    scroll: Int = 0,
-    target: Option[(Side, BigDecimal)] = None,
     sizes: TradeSizes = TradeSizes(),
-    fee: BigDecimal = BigDecimal("0.0005"),
     modeReview: Option[String] = None,
-    details: Boolean = false,
     outlook: OutlookView = Outlook.empty(""),
     alerts: Vector[Announcement] = Vector.empty,
     muted: Boolean = false,
     soundStatus: String = "Sound on",
-    newsStatus: String = "News waiting",
-    newsDetails: String = "News waiting",
-    detailPage: DetailPage = DetailPage.Method,
     actionNotice: Option[String] = None,
     historySavingAt: Option[Long] = None,
     historyFailure: Option[String] = None,
     actionNumber: Long = 0L,
-    orderKind: OrderKind = OrderKind.Hard,
     bigOrder: Boolean = false
 )
 final case class DeskButton(

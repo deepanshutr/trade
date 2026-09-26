@@ -1,19 +1,6 @@
 package desk
 
-final case class MarketAnalysis(
-    interval: String,
-    count: Int,
-    expected: Int,
-    status: String,
-    fast: Option[Double],
-    slow: Option[Double],
-    support: Option[Double],
-    resistance: Option[Double],
-    at: Option[Long]
-)
-
 final case class Comparison(value: Option[Double], count: Int, expected: Int, status: String)
-final case class CrossingStudy(samples: Int, mean: Option[Double], positive: Int)
 
 object Quant:
   private def closed(cs: Vector[Candle], step: Long, now: Long): Vector[Candle] =
@@ -40,23 +27,6 @@ object Quant:
       else if selected.size != n then "partial"
       else "complete"
     (selected, status)
-
-  def measure(cs: Vector[Candle], interval: String, now: Long): MarketAnalysis =
-    require(State.intervals.contains(interval))
-    val step = State.intervalMs(interval)
-    val (slow, status) = window(cs, step, 50, now)
-    val (fast, fastStatus) = window(cs, step, 20, now)
-    MarketAnalysis(
-      interval,
-      slow.size,
-      50,
-      status,
-      Option.when(fastStatus == "complete")(fast.map(_.c).sum / 20),
-      Option.when(status == "complete")(slow.map(_.c).sum / 50),
-      Option.when(status == "complete")(slow.map(_.l).min),
-      Option.when(status == "complete")(slow.map(_.h).max),
-      slow.lastOption.map(_.t)
-    )
 
   def compare(
       main: Vector[Candle],
@@ -91,41 +61,3 @@ object Quant:
       n,
       if status == "complete" && value.isEmpty then "flat" else status
     )
-
-  def crossings(
-      candles: Vector[Candle],
-      interval: String,
-      fast: Int,
-      slow: Int,
-      ahead: Int,
-      now: Long,
-      fee: Double
-  ): CrossingStudy =
-    require(
-      State.intervals.contains(interval) && fast > 0 && slow > fast &&
-        slow <= 1000 && ahead > 0 && ahead <= 1000 && fee >= 0 && fee <= 0.1 && fee.isFinite
-    )
-    val step = State.intervalMs(interval)
-    val cs = closed(candles, step, now)
-    def difference(at: Int): Double =
-      cs.slice(at - fast + 1, at + 1).map(_.c).sum / fast -
-        cs.slice(at - slow + 1, at + 1).map(_.c).sum / slow
-    val outcomes = Vector.newBuilder[Double]
-    var nextEntry = 0
-    for i <- slow until (cs.size - ahead - 1) do
-      val span = cs.slice(i - slow, i + ahead + 2)
-      val continuous = span.zip(span.drop(1)).forall((a, b) => b.t - a.t == step)
-      if continuous && i >= nextEntry then
-        val previous = difference(i - 1)
-        val current = difference(i)
-        val direction =
-          if previous <= 0 && current > 0 then 1
-          else if previous >= 0 && current < 0 then -1
-          else 0
-        if direction != 0 then
-          val entry = cs(i + 1).o
-          val exit = cs(i + 1 + ahead).c
-          outcomes += direction * (exit - entry) / entry - fee * (1 + exit / entry)
-          nextEntry = i + ahead + 1
-    val results = outcomes.result()
-    CrossingStudy(results.size, Gauges.mean(results), results.count(_ > 0))

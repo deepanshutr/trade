@@ -62,7 +62,6 @@ class TradeProgressSpec extends munit.FunSuite:
       () => f.clock.get(),
       f.worker.preview,
       f.worker.submitReviewed,
-      _ => false,
       _ => Left("disabled")
     )
     try
@@ -255,7 +254,6 @@ class TradeProgressSpec extends munit.FunSuite:
       () => start,
       plan,
       _ => false,
-      _ => false,
       _ => Left("disabled"),
       persist = _ => {
         entered.countDown()
@@ -266,7 +264,7 @@ class TradeProgressSpec extends munit.FunSuite:
     val writer = new Thread(() => c.addMessage("order", "PAPER filled 5 XMR"))
     val reader = new Thread(() => {
       draw(c)
-      c.handle(Command.Details, snapshot, ready, (100, 30), false)
+      c.handle(Command.ToggleMute, snapshot, ready, (100, 30), false)
       read.countDown()
     })
     writer.setDaemon(true)
@@ -291,7 +289,6 @@ class TradeProgressSpec extends munit.FunSuite:
         () => start,
         _ => fail("unavailable control prepared an order"),
         _ => fail("sent unavailable order"),
-        _ => false,
         _ => Left("disabled")
       )
       val stale = ready.copy(
@@ -306,7 +303,6 @@ class TradeProgressSpec extends munit.FunSuite:
         c.handle(Command.Pointer(b.x, b.y + 2, 0), snapshot, stale, (100, 30), false)
       else c.handle(Command.PlaceOrder(Trading.action(0)), snapshot, stale, (100, 30), false)
       assert(c.panel.actionNotice.exists(_.toLowerCase.contains("stale")), c.panel.toString)
-      assertEquals(c.panel.review, None)
     }
 
   test("progress remains readable beside a long position at all supported sizes") {
@@ -320,7 +316,6 @@ class TradeProgressSpec extends munit.FunSuite:
       PanelView(mode = "PAPER"),
       () => start,
       plan,
-      _ => false,
       _ => false,
       _ => Left("disabled")
     )
@@ -348,11 +343,10 @@ class TradeProgressSpec extends munit.FunSuite:
     test(s"visible one-click paper $scenario pipeline at $cols x$rows colour=" + style.colour) {
       val f = new Paper(if scenario == "capacity" then BigDecimal(200) else BigDecimal(10000))
       val c = new DeskController(
-        PanelView(mode = "PAPER", fee = BigDecimal(0)),
+        PanelView(mode = "PAPER"),
         () => f.clock.get(),
         f.worker.preview,
         f.worker.submitReviewed,
-        _ => false,
         _ => Left("disabled")
       )
       val updates = new OrderUpdates

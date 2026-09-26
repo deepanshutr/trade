@@ -88,7 +88,6 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
       () => at,
       router.preview,
       router.submitReviewed,
-      _ => false,
       router.switchMode
     )
     def draw(): WorkspaceFrame = Workspace.draw(
@@ -122,7 +121,7 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
       reader("synthetic-paper-view")(shown.set(router.view)),
       reader("synthetic-paper-label")(label.set(router.accountLabel)),
       reader("synthetic-paper-frame") {
-        controller.status("synthetic data", "disabled", router.accountLabel)
+        controller.status("synthetic data", router.accountLabel)
         drawn.set(draw())
       }
     )

@@ -1,12 +1,6 @@
 package desk
 
-import java.time.Instant
-
 object OutlookScreen:
-  private def exact(value: Option[Double]): String =
-    value
-      .filter(_.isFinite)
-      .fold("--")(n => BigDecimal(n).bigDecimal.stripTrailingZeros().toPlainString)
   private def number(value: Option[Double], limit: Int, precision: Int = 6): String =
     value.filter(_.isFinite).fold("--") { n =>
       val rounded = (precision to 1 by -1)
@@ -29,8 +23,6 @@ object OutlookScreen:
     }
   private def rate(value: HistoricalRate): String =
     value.percent.fold("--")(p => f"$p%.0f%%")
-  private def band(value: HistoricalRate): String =
-    value.band.fold("--")((lo, hi) => f"$lo%.0f-$hi%.0f%%")
 
   def rows(
       view: OutlookView,
@@ -98,30 +90,3 @@ object OutlookScreen:
     (0 until height + 5).toVector.map { row =>
       columns.map(column => Chart.fit(column(row), cellWidth)).mkString("|")
     }
-
-  def details(view: OutlookView): String =
-    val method = "Base counts past periods that touched the displayed percentage target distance. " +
-      "Match uses periods with the same 20/50-average trend. Features use 50 closed candles. " +
-      "Up means price above the 20 average above the 50 average. Down is the reverse. " +
-      "Support is the lowest low and resistance the highest high. " +
-      "S marks support, T target and R resistance on the graph price scale. " +
-      "An up or down mark means the level is outside that scale. Combined letters share a tick. " +
-      "A star means different prices share one tick, with exact prices below. Levels are rounded for display. " +
-      "If a value cannot fit within 1% precision, -- is shown. Exact levels follow. " +
-      "Periods do not overlap. At least 100 Base and 50 Match samples and 90% complete history are required. " +
-      "Band is a rough 95% historical count interval. Market observations can remain related. " +
-      "These are past target touches, not forecast confidence or profitable trades. " +
-      "Test is the percentage distance from the last reference close, not the remaining live move. " +
-      "A reached target or stale price suppresses the rates."
-    method + "\n" + view.columns
-      .map { c =>
-        val start = c.from.map(t => Instant.ofEpochMilli(t).toString).getOrElse("unknown")
-        val end = c.to.map(t => Instant.ofEpochMilli(t).toString).getOrElse("unknown")
-        s"${c.horizon.label}: ${c.horizon.interval} candles, ${c.horizon.bars} future candles. " +
-          s"Reference close ${exact(c.reference)}. Target ${exact(c.target)}. " +
-          s"Support ${exact(c.support)}. Resistance ${exact(c.resistance)}. " +
-          s"${c.base.samples}/${c.expected} complete periods. Base ${rate(c.base)} (${c.base.hits}/${c.base.samples}), " +
-          s"band ${band(c.base)}. Match ${rate(c.matched)} (${c.matched.hits}/${c.matched.samples}), " +
-          s"band ${band(c.matched)}. Observed $start to $end. ${c.status}."
-      }
-      .mkString("\n")

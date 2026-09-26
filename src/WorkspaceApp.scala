@@ -211,16 +211,13 @@ object WorkspaceApp:
         PanelView(
           mode = mode,
           sizes = config.sizes,
-          fee = config.paperFee,
           messages = history.messages,
           muted = args.audio == "mute",
-          soundStatus = if args.audio == "mute" then "Muted" else "Sound on",
-          newsStatus = if args.analysis then "News waiting" else "News disabled"
+          soundStatus = if args.audio == "mute" then "Muted" else "Sound on"
         ),
         now,
         worker.preview,
         worker.submitReviewed,
-        _ => false,
         worker.switchMode,
         history.save,
         announcements.setMuted
@@ -287,11 +284,7 @@ object WorkspaceApp:
           val time = now()
           val found = alerts.market(state.get(), time)
           found.foreach(announce(_, controller, announcements))
-          controller.alertStatus(
-            announcements.status,
-            "News disabled",
-            "News disabled"
-          )
+          controller.alertStatus(announcements.status)
           Thread.sleep(250L)
       }
       val publicThreads = publicLoops(feed) ++ onchain.toVector.map(o =>
@@ -342,7 +335,6 @@ object WorkspaceApp:
           }
           diagnostics.slow(DiagnosticPart.Input, System.nanoTime() - began)
         while !quitting && !state.get().quit do
-          val focused = marketPrompt || controller.panel.input.nonEmpty
           if System.in.available() > 0 then
             val byte = System.in.read()
             if byte < 0 then emit(Command.Quit)
@@ -350,16 +342,15 @@ object WorkspaceApp:
               val (next, command) = Keys.step(
                 pending,
                 byte,
-                focused,
-                mouseEnabled = true,
-                textInput = controller.panel.input.nonEmpty
+                marketPrompt,
+                mouseEnabled = true
               )
               pending = next
               if pending == Vector(27) then escapeAt = System.nanoTime()
               command.foreach(emit)
           else
             if pending == Vector(27) && System.nanoTime() - escapeAt >= Main.escapeWaitNanos then
-              val (next, command) = Keys.expire(pending, focused)
+              val (next, command) = Keys.expire(pending, marketPrompt)
               pending = next
               command.foreach(emit)
             Thread.sleep(10L)
@@ -407,7 +398,6 @@ object WorkspaceApp:
             statusAt = time
           controller.status(
             "Prices: " + routed.status + ". " + captureStatus + ". " + diagnostics.status,
-            "",
             worker.accountLabel
           )
           val building = System.nanoTime()

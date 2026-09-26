@@ -20,7 +20,6 @@ class CompactFollowupSpec extends munit.FunSuite:
       () => now,
       _ => Left("disabled"),
       _ => fail("unexpected order"),
-      _ => false,
       _ => Left("disabled")
     )
     val worker = new OutlookWorker(() => market, () => now, controller.outlook)

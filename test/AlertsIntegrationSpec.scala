@@ -35,7 +35,7 @@ class AlertsIntegrationSpec extends munit.FunSuite:
     assert(Main.parseArgs(Vector("--mute", "--chime")).isLeft)
   }
 
-  test("news retains publication and retrieval times through the Sources view") {
+  test("news retains publication and retrieval times without exposing source prose") {
     val policy = new AlertPolicy
     policy.news(Map(News.crypto -> Vector.empty), now)
     val item = NewsItem(
@@ -51,10 +51,7 @@ class AlertsIntegrationSpec extends munit.FunSuite:
     assertEquals(alerts.head.publishedAt, item.publishedAt)
     assertEquals(alerts.head.retrievedAt, Some(item.retrievedAt))
     val panel = PanelView(
-      details = true,
-      detailPage = DetailPage.Sources,
-      alerts = alerts,
-      newsDetails = "News partial. Missing source: calendar"
+      alerts = alerts
     )
     val frame = Workspace.draw(
       snapshot,
@@ -87,7 +84,6 @@ class AlertsIntegrationSpec extends munit.FunSuite:
       () => now,
       _ => Left("disabled"),
       _ => fail("unexpected order"),
-      _ => false,
       _ => Left("disabled"),
       persist = _ => fail("announcement attempted message storage")
     )
@@ -100,7 +96,7 @@ class AlertsIntegrationSpec extends munit.FunSuite:
         )
       assertEquals(controller.panel.alerts.map(_.id), (1 to 5).map(_.toString).toVector)
       assert(sound.status.contains("1 dropped"))
-      controller.alertStatus(sound.status, "News 8 sources")
+      controller.alertStatus(sound.status)
       val frame = Workspace.draw(
         snapshot,
         TradingView("XMR", message = "View only"),

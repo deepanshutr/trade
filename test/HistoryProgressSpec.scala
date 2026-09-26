@@ -12,7 +12,6 @@ class HistoryProgressSpec extends munit.FunSuite:
       clock,
       _ => Left("disabled"),
       _ => false,
-      _ => false,
       _ => Left("disabled"),
       persist
     )
