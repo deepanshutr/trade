@@ -10,11 +10,10 @@ class TradingConfigSpec extends munit.FunSuite:
     Files.writeString(p, text)
     p
 
-  test("defaults preserve dollar sizes and bounded reference count") {
+  test("defaults preserve dollar sizes and age limits") {
     val c = TradingConfig.load(None).toOption.get
     assertEquals(c.sizes, TradeSizes())
     assertEquals(c.network, "mainnet")
-    assertEquals(c.references, Vector("BTC", "PAXG"))
     assertEquals(c.quoteAgeMs, 1000L)
     assertEquals(c.positionAgeMs, 2000L)
     assert(!c.configured)
@@ -29,7 +28,6 @@ class TradingConfigSpec extends munit.FunSuite:
       assertEquals(c.sizes.small, BigDecimal("501.01"))
       assertEquals(c.sizes.target, BigDecimal(800))
       assertEquals(c.baseUrl, "https://api.hyperliquid-testnet.xyz")
-      assertEquals(c.references, Vector("BTC", "ETH"))
     finally Files.deleteIfExists(p)
   }
 
@@ -47,14 +45,20 @@ class TradingConfigSpec extends munit.FunSuite:
       Files.deleteIfExists(rounded)
   }
 
+  test("legacy references settings load and their values are ignored") {
+    Vector("[\"ETH\"]", "[]", "[\"BTC\",\"BTC\"]", "null", "42").foreach { value =>
+      val p = setting(s"""{"references":$value}""")
+      try assertEquals(TradingConfig.load(Some(p)), TradingConfig.load(None))
+      finally Files.deleteIfExists(p)
+    }
+  }
+
   test("invalid and unknown settings fail closed") {
     val cases = Vector(
       """{"small":"0"}""",
       """{"small":"1001","big":"1000"}""",
       """{"target":"-1"}""",
       """{"network":"elsewhere"}""",
-      """{"references":["BTC","BTC"]}""",
-      """{"references":["BTC","ETH","SOL","PAXG"]}""",
       """{"quoteAgeMs":"999999"}""",
       """{"owner":"not an address"}""",
       """{"privateKey":"never read this"}""",

@@ -11,7 +11,6 @@ final case class TradingConfig(
     owner: Option[String] = None,
     agent: Option[String] = None,
     keyService: String = "desk",
-    references: Vector[String] = State.refCoins,
     quoteAgeMs: Long = 1000L,
     positionAgeMs: Long = 2000L,
     paperBalance: BigDecimal = BigDecimal("10000"),
@@ -35,7 +34,7 @@ object TradingConfig:
     "owner",
     "agent",
     "keyService",
-    "references",
+    "references", // Accepted for saved settings compatibility; its value is ignored.
     "quoteAgeMs",
     "positionAgeMs",
     "paperBalance",
@@ -45,10 +44,7 @@ object TradingConfig:
   private val marketName = "[A-Z0-9][A-Z0-9._-]{0,19}"
   private val endpoint = "https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?"
 
-  private[desk] def onchainMarkets(
-      j: ujson.Value,
-      references: Vector[String]
-  ): Vector[OnchainMarket] =
+  private[desk] def onchainMarkets(j: ujson.Value): Vector[OnchainMarket] =
     val markets = j.obj.get("onchain").map(_.arr.toVector).getOrElse(Vector.empty).map { m =>
       val name = m("name").str
       require(name.matches(marketName) && State.validMarket(name), "invalid on-chain market name")
@@ -65,7 +61,10 @@ object TradingConfig:
     }
     val names = markets.map(_.name)
     require(markets.size <= 8 && names.distinct == names, "duplicate on-chain markets")
-    require(names.forall(n => !references.contains(n)), "an on-chain market cannot be a reference")
+    require(
+      names.forall(n => !State.refCoins.contains(n)),
+      "an on-chain market cannot be a reference"
+    )
     markets
   private val forbidden = Set(
     PosixFilePermission.GROUP_READ,
@@ -116,13 +115,6 @@ object TradingConfig:
         require(sizes.small <= sizes.big, "small exceeds big")
         val network = string("network", "mainnet")
         require(Set("mainnet", "testnet").contains(network), "invalid network")
-        val refs = j.obj.get("references").map(_.arr.toVector.map(_.str)).getOrElse(State.refCoins)
-        require(
-          refs.size <= 3 && refs.distinct == refs && refs.forall(
-            _.matches("[A-Z0-9][A-Z0-9._-]{0,19}")
-          ),
-          "invalid references"
-        )
         val service = string("keyService", "desk")
         require(service.matches("[A-Za-z0-9._-]{1,80}"), "invalid key service")
         val balance = decimal("paperBalance", BigDecimal("10000"))
@@ -135,12 +127,11 @@ object TradingConfig:
           address("owner"),
           address("agent"),
           service,
-          refs,
           millis("quoteAgeMs", 1000L),
           millis("positionAgeMs", 2000L),
           balance,
           fee,
-          onchainMarkets(j, refs)
+          onchainMarkets(j)
         )
       }.toEither.left.map { error =>
         Option(error.getMessage) match

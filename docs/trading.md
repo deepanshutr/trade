@@ -15,7 +15,6 @@ default file permits public viewing and paper trading with these defaults:
   "big": "1000",
   "target": "1000",
   "network": "mainnet",
-  "references": ["BTC", "PAXG"],
   "paperBalance": "10000",
   "paperFee": "0.0005"
 }

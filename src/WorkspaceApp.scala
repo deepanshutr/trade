@@ -124,7 +124,7 @@ object WorkspaceApp:
       def peek(): Event = null
       def poll(): Event = null
       def offer(event: Event): Boolean = true
-    val feed = new Feed(connector, rest, sink, now, args.coin, config.references, recorder.observe)
+    val feed = new Feed(connector, rest, sink, now, args.coin, State.refCoins, recorder.observe)
     recorder.start()
     val threads = publicLoops(feed)
     Runtime.getRuntime.addShutdownHook(new Thread(() => {
@@ -185,7 +185,7 @@ object WorkspaceApp:
         sys.exit(1)
       }
       val publicDirectory = directory.resolve("public")
-      val seed = Snapshot.initial(args.coin, now(), config.references).copy(workspace = true)
+      val seed = Snapshot.initial(args.coin, now(), State.refCoins).copy(workspace = true)
       val recovered = Try(MarketArchive.restore(publicDirectory, seed))
       val state = new AtomicReference(recovered.getOrElse(seed))
       val recorder = Try(new PublicRecorder(MarketArchive.open(publicDirectory), now)).toOption
@@ -197,10 +197,9 @@ object WorkspaceApp:
       // on-chain it follows the first reference so nothing is asked of the venue for
       // a name it does not list.
       val venueCoin =
-        if config.onchainMarket(args.coin).nonEmpty then
-          config.references.headOption.getOrElse("BTC")
+        if config.onchainMarket(args.coin).nonEmpty then State.refCoins.head
         else args.coin
-      val feed = new Feed(connector, rest, queue, now, venueCoin, config.references, observe)
+      val feed = new Feed(connector, rest, queue, now, venueCoin, State.refCoins, observe)
       val clients = scala.collection.concurrent.TrieMap.empty[String, HttpRpc]
       // The trading workers follow the venue only, so on-chain events reach the recorder alone.
       val onchain = Option.when(config.onchain.nonEmpty)(
