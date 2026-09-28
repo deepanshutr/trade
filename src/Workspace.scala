@@ -84,10 +84,8 @@ object Workspace:
 
   def indicatorRows(s: Snapshot, now: Long, width: Int, style: Style): Vector[String] =
     val h = ((width - 24) / 2).max(1).min(20)
-    val books = Gauges.bookLenses.zipWithIndex.map { case ((label, _), i) =>
-      val original = Chart.plain(Gauges.bookRow(s, i, now, h, Style.mono))
-      val compact =
-        original.replace("BOOK " + Chart.rjust(label, 4), "BOOK " + Chart.rjust(label, 3))
+    val books = Gauges.bookLenses.indices.map { i =>
+      val compact = Chart.plain(Gauges.bookRow(s, i, now, h, Style.mono, labelWidth = 3))
       val fitted = Chart.fit(compact, width)
       val marked = if style.colour && Gauges.bookLenses(i)._2 * 1000 > now - s.since then
         fitted.take(5) + Screen.dim + fitted.slice(5, 8) + Screen.reset + style.book + fitted.drop(
@@ -199,15 +197,12 @@ object Workspace:
       val marketFrame = Screen.renderMarket(
         s,
         chartWidth,
-        rows,
-        now,
-        zone,
-        style,
-        marketOnly = true,
-        reservedRows = 12,
-        maxPriceRows = (tradeTop - 8).min(
+        priceRows = (tradeTop - 8).min(
           tradeTop - 3 - Layout.referenceRows * s.referenceCoins.distinct.count(_ != s.coin)
         ),
+        now = now,
+        zone = zone,
+        style = style,
         portfolio = view.forMarket(s.coin).portfolio
       )
       val gauges = indicatorRows(s, now, (leftWidth - 1) / 2, style).map(Chart.fit(_, leftWidth))

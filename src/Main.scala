@@ -81,58 +81,6 @@ object Main:
       case _ => ()
     queue.put(Event.Key(command))
 
-  def handleTrade(
-      command: Command,
-      snapshot: Snapshot,
-      promptOpen: Boolean,
-      size: (Int, Int),
-      view: TradingView,
-      shownCoin: Option[String],
-      pendingPrompts: Int,
-      target: Option[(Side, BigDecimal)],
-      submit: (OrderIntent, String) => Boolean
-  ): (Boolean, Option[(Side, BigDecimal)]) =
-    val visible = size._1 >= Layout.minCols && size._2 >= Layout.minRows
-    val outsidePrompt = !promptOpen && snapshot.prompt.isEmpty &&
-      snapshot.marketPending.isEmpty && pendingPrompts == 0
-    val matching = shownCoin.contains(snapshot.coin) && view.coin == snapshot.coin
-    val permitted = visible && outsidePrompt && matching && !snapshot.quit &&
-      view.ready && !view.pending
-    command match
-      case Command.StartMarketPrompt | Command.PromptCancel | Command.PromptSubmit =>
-        (false, None)
-      case Command.CancelTarget       => (true, None)
-      case Command.PlaceOrder(intent) =>
-        if permitted && target.isEmpty then
-          val _ = submit(intent, snapshot.coin)
-        (true, target)
-      case Command.SelectTarget(side) =>
-        if visible && outsidePrompt && matching && !snapshot.quit && !view.pending then
-          val selected = for
-            rules <- view.rules
-            price <- view.reference(side)
-            if Trading.validPrice(price, rules)
-          yield (side, price)
-          (true, selected.orElse(target))
-        else (true, target)
-      case Command.SubmitTarget =>
-        val accepted = target.exists { (side, price) =>
-          permitted && submit(
-            OrderIntent(side, OrderKind.Target, target = Some(price)),
-            snapshot.coin
-          )
-        }
-        (true, if accepted then None else target)
-      case Command.ZoomIn | Command.ZoomOut if target.nonEmpty =>
-        val moved = for
-          selected <- target
-          rules <- view.rules
-          price <- Trading.nextPrice(selected._2, rules, command == Command.ZoomIn)
-        yield (selected._1, price)
-        (true, moved.orElse(target))
-      case Command.ScrubBack | Command.ScrubForward if target.nonEmpty => (true, target)
-      case _                                                           => (false, target)
-
   def main(argv: Array[String]): Unit =
     parseArgs(argv.toSeq) match
       case Left(message) =>
@@ -225,43 +173,6 @@ object Main:
           after.marketPending.foreach(request => { val _ = switches.offer(Left(request)) })
     }
     Vector(market, fold)
-
-  def startTradingFold(
-      queue: LinkedBlockingQueue[Event],
-      state: AtomicReference[Snapshot],
-      feed: MarketFeed,
-      now: () => Long,
-      pendingPrompts: AtomicInteger,
-      targetLock: Object,
-      target: AtomicReference[Option[(Side, BigDecimal)]],
-      select: String => Unit
-  ): Vector[Thread] =
-    startFold(
-      queue,
-      state,
-      feed,
-      now,
-      coin =>
-        targetLock.synchronized {
-          target.set(None)
-          select(coin)
-        },
-      () => {
-        val _ = pendingPrompts.decrementAndGet()
-      }
-    )
-
-  def writeMarketFrame(
-      coin: String,
-      size: (Int, Int),
-      shownCoin: AtomicReference[Option[String]],
-      output: () => Unit,
-      complete: Boolean = true
-  ): Unit =
-    val visible = size._1 >= Layout.minCols && size._2 >= Layout.minRows && complete
-    shownCoin.set(None)
-    output()
-    shownCoin.set(Option.when(visible)(coin))
 
   def run(
       args: Args,

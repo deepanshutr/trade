@@ -69,11 +69,11 @@ class RefinePortfolioSpec extends munit.FunSuite:
           samples = Vector.tabulate(200)(i => (now / 1000 - 199 + i, 99.0 + i % 3)),
           book = Some(Book(Vector(Level("99", "1", 1)), Vector(Level("101", "1", 1)), now))
         )
-      val original = Screen.renderMarket(s, 61, 30, now, ZoneOffset.UTC, style, true, 12)
+      val original = Screen.renderMarket(s, 61, 9, now, ZoneOffset.UTC, style)
       val p =
         PortfolioView(entry = Some(BigDecimal("100")), liquidation = Some(BigDecimal("100.01")))
       val marked =
-        Screen.renderMarket(s, 61, 30, now, ZoneOffset.UTC, style, true, 12, portfolio = p)
+        Screen.renderMarket(s, 61, 9, now, ZoneOffset.UTC, style, portfolio = p)
       assertEquals(marked.axis, original.axis)
       for row <- 1 to original.priceRows do
         assertEquals(Chart.plain(marked.lines(row)).length, 61)

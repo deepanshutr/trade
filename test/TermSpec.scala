@@ -17,7 +17,10 @@ class TermSpec extends munit.FunSuite:
     assertEquals(Term.parseSize("x y"), None)
   }
   test("frames are encoded as UTF-8 bytes") {
-    val bytes = Term.bytes(Vector((0x2801).toChar.toString)).toVector.map(_ & 0xff)
+    val sink = new java.io.ByteArrayOutputStream()
+    new Term.Writer(new java.io.PrintStream(sink))
+      .write(Vector((0x2801).toChar.toString), (100, 30))
+    val bytes = sink.toByteArray.toVector.map(_ & 0xff)
     assert(bytes.containsSlice(Vector(0xe2, 0xa0, 0x81)), bytes)
   }
 
@@ -28,48 +31,4 @@ class TermSpec extends munit.FunSuite:
       esc + "[?2026l" + esc + "[?2004l" + esc + "[?25h" + esc + "[?1049l"
     )
     assertEquals(Main.escapeWaitNanos, 40_000_000L)
-  }
-
-  test("a recorded write or flush error cannot publish a completed market frame") {
-    for failFlush <- Vector(false, true) do
-      val sink = new java.io.OutputStream:
-        override def write(byte: Int): Unit =
-          if !failFlush then throw new java.io.IOException("held write")
-        override def flush(): Unit =
-          if failFlush then throw new java.io.IOException("held flush")
-      val output = new java.io.PrintStream(sink)
-      val shown = new java.util.concurrent.atomic.AtomicReference[Option[String]](Some("XMR"))
-      try
-        intercept[java.io.IOException] {
-          Main.writeMarketFrame(
-            "BTC",
-            (100, 30),
-            shown,
-            () => Term.write(Vector("BTC"), output),
-            complete = true
-          )
-        }
-        assert(output.checkError())
-        assertEquals(shown.get(), None)
-      finally output.close()
-  }
-
-  test("a successful byte write publishes its market after output finishes") {
-    val sink = new java.io.ByteArrayOutputStream()
-    val output = new java.io.PrintStream(sink)
-    val shown = new java.util.concurrent.atomic.AtomicReference(Option.empty[String])
-    val canvas = new Canvas(1, 1)
-    canvas.dot(0, 0)
-    val lines = Vector("XMR " + canvas.lines.head)
-    try
-      Main.writeMarketFrame(
-        "XMR",
-        (100, 30),
-        shown,
-        () => Term.write(lines, output),
-        complete = true
-      )
-      assertEquals(shown.get(), Some("XMR"))
-      assertEquals(sink.toByteArray.toVector, Term.bytes(lines).toVector)
-    finally output.close()
   }

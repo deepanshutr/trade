@@ -353,3 +353,130 @@ class TradingSpec extends munit.FunSuite:
       assertEquals(result(intent, book(), market = rules.copy(maxLeverage = maximum)), Right(usual))
     }
   }
+
+  test("public maximum Target price step preserves exact value and planner rejection") {
+    val now = 1000L
+    val coin = "XMR"
+    val bidText = "9" + "0" * 99
+    val askText = "1" + "0" * 100
+    val rules = MarketRules(0, 0, 5)
+    def level(price: String) = ujson.Obj("px" -> price, "sz" -> "1", "n" -> 1)
+    val payload = ujson.Obj(
+      "channel" -> "l2Book",
+      "data" -> ujson.Obj(
+        "coin" -> coin,
+        "time" -> ujson.Num(now.toDouble),
+        "levels" -> ujson.Arr(ujson.Arr(level(bidText)), ujson.Arr(level(askText)))
+      )
+    )
+    val event = Events.parse(payload.render()).get
+    val book = event match
+      case Event.BookUpdate(`coin`, value, true) => value
+      case other => fail(s"public parser rejected the allowed boundary: $other")
+    val view = TradingView(
+      coin,
+      Some(BigDecimal(1)),
+      "Ready",
+      ready = true,
+      rules = Some(rules),
+      bid = Some(BigDecimal(book.bids.head.px)),
+      ask = Some(BigDecimal(book.asks.head.px))
+    )
+    val preview: OrderIntent => Either[String, OrderPlan] = intent =>
+      Trading.plan(
+        coin,
+        rules,
+        book,
+        view.reference(intent.side).get,
+        BigDecimal(1),
+        intent,
+        TradeSizes()
+      )
+    val initial = Some(Side.Buy -> view.reference(Side.Buy).get)
+    assertEquals(Trading.displayExact(initial.get._2), "1e100")
+    val selected = Trading.nextPrice(initial.get._2, rules, up = true)
+    val exact = "1" + "0" * 99 + "1"
+    assertEquals(Trading.displayExact(selected.get), exact)
+    assertEquals(exact.length, 101)
+    assertEquals(
+      preview(OrderIntent(Side.Buy, OrderKind.Target, target = selected)),
+      Left("Book contains an invalid number")
+    )
+  }
+
+  for cols <- Vector(100, 120) do
+    test(s"Target limit longer than $cols columns retains planner rejection") {
+      val now = 1000L
+      val coin = "XMR"
+      val rules = MarketRules(0, 0, 5)
+      val bid = "8" * (cols + 1)
+      val ask = "9" * (cols + 1)
+      val book = Book(Vector(Level(bid, "1", 1)), Vector(Level(ask, "1", 1)), now)
+      val view = TradingView(
+        coin,
+        Some(BigDecimal(1)),
+        "Ready",
+        ready = true,
+        rules = Some(rules),
+        bid = Some(BigDecimal(bid)),
+        ask = Some(BigDecimal(ask))
+      )
+      val target = Some(Side.Buy -> view.reference(Side.Buy).get)
+      assertEquals(target, Some(Side.Buy -> BigDecimal(ask)))
+      val preview: OrderIntent => Either[String, OrderPlan] = intent =>
+        Trading.plan(
+          coin,
+          rules,
+          book,
+          view.reference(intent.side).get,
+          BigDecimal(1),
+          intent,
+          TradeSizes()
+        )
+      val intent = OrderIntent(Side.Buy, OrderKind.Target, target = target.map(_._2))
+      assertEquals(preview(intent), Left("Book contains an invalid number"))
+      assertEquals(Trading.displayExact(target.get._2), ask)
+    }
+
+  test("huge integral Target prices retain the real planner rejection") {
+    val maximum = BigDecimal("1000000000")
+    val sizes = TradeSizes(maximum, maximum, maximum)
+    for (bid, ask) <- Vector(
+        ("9" * 63, "1" + "0" * 63),
+        ("9" + "0" * 99, "1" + "0" * 100),
+        ("8" * 100, "9" * 100)
+      )
+    do
+      val coin = "X" * 40
+      val market = MarketRules(0, 0, 5)
+      val book = Book(Vector(Level(bid, "1", 1)), Vector(Level(ask, "1", 1)), 1000)
+      val view = TradingView("XMR", message = "Ready").copy(
+        coin = coin,
+        rules = Some(market),
+        bid = Some(BigDecimal(bid)),
+        ask = Some(BigDecimal(ask))
+      )
+      for direction <- Vector(Side.Buy, Side.Sell) do
+        val target = Some(direction -> view.reference(direction).get)
+        val preview: OrderIntent => Either[String, OrderPlan] = intent =>
+          Trading.plan(
+            coin,
+            market,
+            book,
+            view.reference(intent.side).get,
+            BigDecimal(1),
+            intent,
+            sizes
+          )
+        val reason = preview(
+          OrderIntent(direction, OrderKind.Target, target = target.map(_._2))
+        ).swap.toOption.get
+        assertEquals(
+          reason,
+          if bid.length > 64 || ask.length > 64 then "Book contains an invalid number"
+          else "No visible quantity fits this order"
+        )
+        val exact = Trading.displayExact(target.get._2)
+        assertEquals(BigDecimal(exact), target.get._2)
+        assert(!exact.contains("~"))
+  }

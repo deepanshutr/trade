@@ -3,6 +3,24 @@ package desk
 import java.time.ZoneOffset
 
 class CandleModeSpec extends munit.FunSuite:
+  private def market(
+      s: Snapshot,
+      cols: Int,
+      rows: Int,
+      now: Long,
+      zone: java.time.ZoneId,
+      style: Style
+  ): Vector[String] =
+    Screen
+      .renderMarket(
+        s,
+        cols,
+        rows - 13 - 3 * s.referenceCoins.distinct.count(_ != s.coin),
+        now,
+        zone,
+        style
+      )
+      .lines
   private val now = 1_700_000_000_000L
   private def press(s: Snapshot, command: Command): Snapshot =
     State.reduce(s, Event.Key(command), now)
@@ -66,10 +84,10 @@ class CandleModeSpec extends munit.FunSuite:
     val (first, z) = Chart.window(s, count, now)
     assertEquals(first + count - 1, Math.floorDiv(now / 1000, 60L))
     assertEquals(z, 60)
-    assertEquals(press(s, Command.ScrubBack).offsetSec, 180L)
+    assertEquals(press(s, Command.ScrubBack).offsetSec, 60L)
     val wide = s.copy(cols = 120)
     assertEquals(Layout.plotColumns(120, ChartMode.Candles), 20)
-    assertEquals(press(wide, Command.ScrubBack).offsetSec, 300L)
+    assertEquals(press(wide, Command.ScrubBack).offsetSec, 120L)
   }
 
   test("candle columns use stored trade candles rather than fine midpoint samples") {
@@ -191,14 +209,14 @@ class CandleModeSpec extends munit.FunSuite:
         chartMode = mode,
         zoom = if mode == ChartMode.Candles then State.candleMinZoom else 0
       )
-      val frame = Screen.render(s, cols, rows, Golden.now, ZoneOffset.UTC, Style.colour)
-      assertEquals(frame.size, rows)
+      val frame = market(s, cols, rows, Golden.now, ZoneOffset.UTC, Style.colour)
+      assertEquals(frame.size, rows - 10)
       assert(frame.map(Chart.plain).forall(_.length == cols))
       assert(!frame.exists(_.contains(Screen.esc + "[35m")))
-      val axis = frame(rows - Layout.footerRows - Layout.gaugeRows - 1)
+      val axis = frame(frame.size - 1)
       assert(axis.contains(if mode == ChartMode.Candles then "1m/candle" else "1s/col"))
       if mode == ChartMode.Candles then
-        val count = Layout.priceRows(rows)
+        val count = rows - 19
         val main = frame.slice(1, count + 1).map(Chart.plain).map(_.slice(30, cols - 9))
         assert(!main.exists(_.exists(c => c >= 0x2800 && c <= 0x28ff)))
   }
@@ -234,7 +252,7 @@ class CandleModeSpec extends munit.FunSuite:
       val cells = Layout.cells(cols)
       val start = (count - 2) * Layout.candleW
       val end = start + 8
-      val frame = Screen.render(s, cols, 30, at, ZoneOffset.UTC, Style.colour).map(Chart.plain)
+      val frame = market(s, cols, 30, at, ZoneOffset.UTC, Style.colour).map(Chart.plain)
       val main = frame.slice(1, 12).map(_.slice(Layout.leftW, cols - Layout.scaleW))
       assert(main.exists(_.slice(start, end) == "┌─┐ ███ "))
       assert(main.exists(_.slice(start, end) == "│ │ ███ "))

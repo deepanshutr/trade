@@ -14,10 +14,7 @@ class IndependentCompactTapeSpec extends munit.FunSuite:
       val elapsed = seconds * 1000L + delta
       val s = Snapshot.initial("XMR", now).copy(since = now - elapsed)
       val compact = Gauges.compactTapeRow(s, i, now, 1, Style.colour)
-      val normal = Gauges.tapeRow(s, i, now, 1, Style.colour)
-      assertEquals(normal.contains(Screen.dim), delta < 0L, "existing age contract")
       assertEquals(compact.contains(Screen.dim), delta < 0L, compact)
-      assertEquals(compact.contains(Screen.dim), normal.contains(Screen.dim))
     }
 
   test("minimum workspace preserves maximum tape count and both book readings") {

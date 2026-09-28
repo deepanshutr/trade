@@ -3,25 +3,31 @@ package desk
 import java.time.ZoneOffset
 
 class StackedChartSpec extends munit.FunSuite:
+  private def market(
+      s: Snapshot,
+      cols: Int,
+      rows: Int,
+      now: Long,
+      zone: java.time.ZoneId,
+      style: Style
+  ): Vector[String] =
+    Screen
+      .renderMarket(
+        s,
+        cols,
+        rows - 13 - 3 * s.referenceCoins.distinct.count(_ != s.coin),
+        now,
+        zone,
+        style
+      )
+      .lines
   private val now = Golden.now
   private def draw(s: Snapshot, cols: Int = 100, rows: Int = 30): Vector[String] =
-    Screen.render(s, cols, rows, now, ZoneOffset.UTC, Style.mono).map(Chart.plain)
+    market(s, cols, rows, now, ZoneOffset.UTC, Style.mono).map(Chart.plain)
   private def references(s: Snapshot): Vector[String] =
     s.referenceCoins.distinct.filterNot(_ == s.coin)
   private def mainEnd(s: Snapshot, rows: Int = 30): Int =
-    1 + Layout.priceRows(rows, references(s).size)
-
-  test("the minimum frame gives eleven main rows and reserves four controls") {
-    assertEquals(Layout.priceRows(30), 11)
-    assertEquals(Layout.priceRows(30, 3), 8)
-    assertEquals(Layout.priceRows(40), 21)
-    val frame = draw(Golden.snapshot)
-    assertEquals(frame.size, 30)
-    assert(frame.forall(_.length == 100))
-    assertEquals(frame.takeRight(4), Vector.fill(4)(" " * 100))
-    assertEquals(frame.slice(20, 26).map(_.take(4)), Vector.fill(6)("BOOK"))
-    assertEquals(frame.slice(20, 26).map(_.slice(50, 54)), Vector.fill(6)("TAPE"))
-  }
+    1 + (rows - 13 - 3 * references(s).size)
 
   test("reference data changes the lower plots without changing the main plot") {
     val full = Golden.snapshot
@@ -34,8 +40,8 @@ class StackedChartSpec extends munit.FunSuite:
     assert(panels.take(3).exists(_.slice(30, 91).trim.nonEmpty))
     assert(panels.drop(3).exists(_.slice(30, 91).trim.nonEmpty))
     assert(withoutRefs.slice(end + 1, end + 7).forall(_.slice(30, 91).trim.isEmpty))
-    assert(panels.head.startsWith("bitcoin"))
-    assert(panels(3).startsWith("gold"))
+    assert(panels.head.startsWith("BTC"))
+    assert(panels(3).startsWith("PAXG"))
   }
 
   test("each reference uses its own axis and the shared window") {
@@ -60,7 +66,7 @@ class StackedChartSpec extends munit.FunSuite:
     val filled = State.reduce(s, event, now)
     assertEquals(filled.refs("ETH").samples, Vector(now / 1000 -> 2001.0))
     val frame = draw(filled)
-    assertEquals(frame.size, 30)
+    assertEquals(frame.size, 20)
     assert(frame.forall(_.length == 100))
     assert(frame.exists(_.startsWith("ETH")))
     intercept[IllegalArgumentException] {
@@ -98,19 +104,8 @@ class StackedChartSpec extends munit.FunSuite:
     assert(draw(switched).drop(1).exists(_.startsWith("ETH")))
   }
 
-  test("footer rows are fitted without broken escapes or wrapping") {
-    val footer =
-      Vector(Screen.bold + "a" * 130 + Screen.reset, "second", "third", "fourth", "fifth")
-    val frame = Screen.render(Golden.snapshot, 100, 30, now, ZoneOffset.UTC, Style.colour, footer)
-    assertEquals(frame.size, 30)
-    assert(frame.map(Chart.plain).forall(_.length == 100))
-    assertEquals(Chart.plain(frame(26)), "a" * 100)
-    assert(frame(26).endsWith(Screen.reset))
-    assertEquals(Chart.plain(frame.last).trim, "fourth")
-  }
-
   test("reference plots and main volume stay plain in colour mode") {
-    val frame = Screen.render(Golden.snapshot, 100, 30, now, ZoneOffset.UTC, Style.colour)
+    val frame = market(Golden.snapshot, 100, 30, now, ZoneOffset.UTC, Style.colour)
     val plainPart = frame.slice(12, 19)
     assert(!plainPart.exists(_.contains(Screen.esc + "[3")))
     assert(!frame.exists(_.contains(Screen.esc + "[35m")))
@@ -121,6 +116,6 @@ class StackedChartSpec extends munit.FunSuite:
       val s = Golden.snapshot.copy(referenceCoins = refs)
       for (cols, rows) <- Vector((100, 30), (101, 31), (120, 40), (166, 50)) do
         val frame = draw(s, cols, rows)
-        assertEquals(frame.size, rows)
+        assertEquals(frame.size, rows - 10)
         assert(frame.forall(_.length == cols), (cols, rows, frame.map(_.length)))
   }

@@ -1,6 +1,24 @@
 package desk
 
 class ScreenSpec extends munit.FunSuite:
+  private def market(
+      s: Snapshot,
+      cols: Int,
+      rows: Int,
+      now: Long,
+      zone: java.time.ZoneId,
+      style: Style
+  ): Vector[String] =
+    Screen
+      .renderMarket(
+        s,
+        cols,
+        rows - 13 - 3 * s.referenceCoins.distinct.count(_ != s.coin),
+        now,
+        zone,
+        style
+      )
+      .lines
   val t0 = 1_700_000_000_000L
   val zone = java.time.ZoneId.of("UTC")
   def lv(px: String, sz: String) = Level(px, sz, 1)
@@ -69,26 +87,16 @@ class ScreenSpec extends munit.FunSuite:
     assertEquals(Screen.short(12.34), "12.3")
     assertEquals(Screen.short(3_314_300_000.0), "3.3B")
   }
-  test("render keeps the small terminal message") {
-    assertEquals(
-      Screen.render(Golden.snapshot, 80, 24, Golden.now, zone, Style.colour),
-      Vector("need 100x30, have 80x24")
-    )
-    assertEquals(
-      Screen.render(Golden.snapshot, 100, 29, Golden.now, zone, Style.mono),
-      Vector("need 100x30, have 100x29")
-    )
-  }
 
   test("render yields rows lines of the width at both golden sizes") {
     for (cols, rows) <- Vector((100, 30), (110, 30), (120, 40), (166, 50)) do
-      val frame = Screen.render(Golden.snapshot, cols, rows, Golden.now, zone, Style.colour)
-      assertEquals(frame.size, rows)
+      val frame = market(Golden.snapshot, cols, rows, Golden.now, zone, Style.colour)
+      assertEquals(frame.size, rows - 10)
       assert(frame.map(plain).forall(_.length == cols), frame.map(plain).map(_.length))
   }
 
   test("the price rows carry the mid marker on one row with the bold exact mid in the scale") {
-    val frame = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour)
+    val frame = market(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour)
     val priceRows = frame.slice(1, 12)
     val marked = priceRows.filter(l => plain(l).charAt(8) == '>')
     assertEquals(marked.size, 1)
@@ -102,17 +110,16 @@ class ScreenSpec extends munit.FunSuite:
   }
 
   test("the colour frame keeps side colours and reference plots read without them") {
-    val colour = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour)
-    val mono = Screen.render(Golden.snapshot, 120, 40, Golden.now, zone, Style.mono)
+    val colour = market(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour)
+    val mono = market(Golden.snapshot, 120, 40, Golden.now, zone, Style.mono)
     assert(colour.exists(_.contains(Style.colour.bid)))
     assert(colour.exists(_.contains(Style.colour.ask)))
     assert(!colour.slice(12, 19).exists(_.contains(Screen.esc + "[3")))
     assert(!mono.exists(_.contains(Screen.esc + "[3")))
-    assert(mono.exists(_.contains(Screen.dim)))
   }
 
   test("the price rows carry braille bars on every visible row and no hash marks") {
-    val frame = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.mono).map(plain)
+    val frame = market(Golden.snapshot, 100, 30, Golden.now, zone, Style.mono).map(plain)
     val bars = frame.slice(1, 12).map(_.slice(9, 30))
     assert(bars.count(_.trim.nonEmpty) >= 10, bars)
     assert(!frame.exists(_.contains("#")))
@@ -121,26 +128,25 @@ class ScreenSpec extends munit.FunSuite:
 
   test("when the main market is itself a reference market, that reference draws no line") {
     val asBtc = Golden.snapshot.copy(coin = "BTC")
-    val withBtcRefData = Screen.render(asBtc, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    val withoutBtcRefData = Screen
-      .render(
-        asBtc.copy(refs = asBtc.refs.updated("BTC", Ref.empty)),
-        100,
-        30,
-        Golden.now,
-        zone,
-        Style.mono
-      )
+    val withBtcRefData = market(asBtc, 100, 30, Golden.now, zone, Style.mono).map(plain)
+    val withoutBtcRefData = market(
+      asBtc.copy(refs = asBtc.refs.updated("BTC", Ref.empty)),
+      100,
+      30,
+      Golden.now,
+      zone,
+      Style.mono
+    )
       .map(plain)
     assertEquals(withBtcRefData, withoutBtcRefData)
   }
 
   test("volume and shared clocks occupy their own rows") {
-    val frame = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour).map(plain)
+    val frame = market(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour).map(plain)
     assert(frame(12).startsWith(" " * 23 + "volume "))
     assert(frame(12).drop(91).trim.startsWith("v "))
-    assert(frame(13).startsWith("bitcoin"))
-    assert(frame(16).startsWith("gold"))
+    assert(frame(13).startsWith("BTC"))
+    assert(frame(16).startsWith("PAXG"))
     assert(frame(19).startsWith(" " * 16 + "c line 1s/col "))
     assert(frame(19).drop(30).take(8).matches("\\d\\d:\\d\\d:\\d\\d"))
     assert(frame(19).drop(83).take(8).matches("\\d\\d:\\d\\d:\\d\\d"))
@@ -153,8 +159,8 @@ class ScreenSpec extends munit.FunSuite:
       Candle(minute - (129 - i) * 60_000L, o, o + 0.2, o - 0.2, o + 0.05, 1.0 + i % 5)
     }
     val s = Golden.snapshot.copy(candles = Map("1m" -> candles), zoom = 5)
-    val frame = Screen.render(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    assertEquals(frame.size, 30)
+    val frame = market(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
+    assertEquals(frame.size, 20)
     assert(frame.forall(_.length == 100), frame.map(_.length))
     assert(frame(19).contains("1m/col"), frame(19))
     assertEquals("""\d\d:\d\d""".r.findAllIn(frame(19)).size, 3, frame(19))
@@ -171,100 +177,14 @@ class ScreenSpec extends munit.FunSuite:
       Candle(minute - (129 - i) * 60_000L, o, o + 0.2, o - 0.2, o + 0.05, v)
     }
     val s = Golden.snapshot.copy(candles = Map("1m" -> candles), zoom = 5)
-    val frame = Screen.render(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
+    val frame = market(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
     assert(frame(12).endsWith("v 12.3k"), frame(12))
   }
 
   test("a coarse zoom draws candles with dates on the axis and history from the series") {
     val s = Golden.snapshot.copy(zoom = State.zooms.indexOf(86400))
-    val frame = Screen.render(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
+    val frame = market(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
     assert(frame(19).startsWith(" " * 16 + "c line 1d/col "), frame(19))
     assert(frame(19).drop(30).take(10).matches("\\d{4}-\\d\\d-\\d\\d"), frame(19))
     assert(frame.slice(1, 12).exists(_.slice(30, 91).exists(c => c >= 0x2800 && c <= 0x28ff)))
-  }
-
-  test("six rows carry all book and tape lenses above the controls") {
-    val frame = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour).map(plain)
-    val rows = frame.slice(20, 26)
-    assertEquals(rows.map(_.take(4)), Vector.fill(6)("BOOK"))
-    assertEquals(rows.map(_.slice(50, 54)), Vector.fill(6)("TAPE"))
-    assertEquals(rows.map(_.slice(5, 9).trim), Gauges.bookLenses.map(_._1))
-    assertEquals(rows.map(_.slice(55, 59).trim), Gauges.tapeLenses.map(_._1))
-  }
-
-  test("the reference plots carry all six correlations for each market") {
-    val frame = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour).map(plain)
-    val labels = frame.slice(13, 19).map(_.take(30))
-    val readings = "r([+-]\\d\\.\\d\\d|   --)".r
-    assertEquals(labels.map(l => readings.findAllIn(l).size).sum, 12)
-    assert(labels.exists(l => "r[+-]\\d\\.\\d\\d".r.findFirstIn(l).nonEmpty))
-    assert(labels.head.startsWith("bitcoin") && labels(3).startsWith("gold"))
-    assert(!frame.head.contains("big"))
-  }
-
-  test("the screen reserves four footer rows in ordinary viewing mode") {
-    val frame = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.mono)
-    assertEquals(frame.size, 30)
-    assertEquals(frame.takeRight(4), Vector.fill(4)(" " * 100))
-    assert(frame.map(plain).forall(_.length == 100))
-  }
-
-  test("four supplied controls remain visible and cannot wrap the frame") {
-    val rows = Vector(
-      "Hard 1 buy $500",
-      "Best 5 buy --",
-      "9 target buy  0 target sell",
-      "Position unavailable  " + "x" * 150,
-      "discard this fifth row"
-    )
-    val frame = Screen.render(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour, rows)
-    assertEquals(frame.size, 30)
-    assert(frame.map(plain).forall(_.length == 100))
-    assert(frame(26).startsWith("Hard 1 buy $500"))
-    assert(frame(27).startsWith("Best 5 buy --"))
-    assert(frame(28).startsWith("9 target buy  0 target sell"))
-    assert(frame(29).startsWith("Position unavailable"))
-    assert(!frame.exists(_.contains("discard this fifth row")))
-  }
-
-  private def frames: Vector[(String, Snapshot, Int, Int, Style)] = Vector(
-    ("frame_100x30.txt", Golden.snapshot, 100, 30, Style.colour),
-    ("frame_120x40.txt", Golden.snapshot, 120, 40, Style.mono),
-    (
-      "candles_100x30.txt",
-      Golden.snapshot.copy(chartMode = ChartMode.Candles, zoom = State.candleMinZoom),
-      100,
-      30,
-      Style.mono
-    )
-  )
-
-  test("write the golden frames when asked") {
-    assume(sys.env.contains("WRITE_GOLDEN"), "set WRITE_GOLDEN=1 to regenerate the frames")
-    java.nio.file.Files.createDirectories(java.nio.file.Paths.get("golden"))
-    for (name, snapshot, cols, rows, style) <- frames do
-      val frame =
-        Screen.render(snapshot, cols, rows, Golden.now, zone, style, Golden.tradingRowsAt(cols))
-      val path = java.nio.file.Paths.get("golden", name)
-      val bytes = (frame.mkString("\n") + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)
-      java.nio.file.Files.write(path, bytes)
-  }
-
-  test("render matches the line and candle golden frames with trading controls") {
-    for (name, snapshot, cols, rows, style) <- frames do
-      val frame =
-        Screen.render(snapshot, cols, rows, Golden.now, zone, style, Golden.tradingRowsAt(cols))
-      assertEquals(frame.size, rows)
-      assert(frame.forall(l => plain(l).length == cols), frame.map(plain).map(_.length))
-      assert(frame(rows - 4).startsWith("Hard XMR buy limit $"))
-      assert(frame(rows - 3).contains("request") && frame(rows - 3).contains("estimate"))
-      assert(frame(rows - 3).contains("value $") && frame(rows - 3).contains("average $"))
-      assert(frame(rows - 2).contains("position long 1"))
-      assert(frame(rows - 2).contains("press estimate long"))
-      assert(frame.last.startsWith("pending | XMR submitting"))
-      val path = java.nio.file.Paths.get("golden", name)
-      assertEquals(
-        frame.mkString("\n") + "\n",
-        java.nio.file.Files.readString(path, java.nio.charset.StandardCharsets.UTF_8)
-      )
   }

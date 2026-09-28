@@ -9,18 +9,6 @@ class PromptScheduleSpec extends munit.FunSuite:
     while state.get().coin != coin && System.nanoTime() < deadline do Thread.sleep(1)
     assertEquals(state.get().coin, coin)
   private val now = 10000L
-  private val view = TradingView(
-    "XMR",
-    Some(BigDecimal(0)),
-    "ready",
-    true,
-    false,
-    Some(MarketRules(0, 3, 5)),
-    Some(BigDecimal("99.99")),
-    Some(BigDecimal(100)),
-    None
-  )
-
   private def feed(queue: LinkedBlockingQueue[Event]): Feed =
     val connector = new Connector:
       def connect(text: String => Unit, closed: () => Unit): Socket =
@@ -37,34 +25,16 @@ class PromptScheduleSpec extends munit.FunSuite:
   ):
     var pending = Vector.empty[Int]
     var promptOpen = false
-    var target = Option.empty[(Side, BigDecimal)]
-    val sent = scala.collection.mutable.ArrayBuffer.empty[String]
 
     def byte(value: Int): Unit =
       val (next, command) = Keys.step(pending, value, promptOpen)
       pending = next
       command.foreach { cmd =>
-        val snapshot = state.get()
-        val (handled, selected) = Main.handleTrade(
-          cmd,
-          snapshot,
-          promptOpen,
-          (100, 30),
-          view.copy(coin = snapshot.coin),
-          Some(snapshot.coin),
-          pendingPrompts.get(),
-          target,
-          (_, coin) => {
-            sent += coin
-            true
-          }
-        )
-        target = selected
         promptOpen = Main.nextPromptOpen(promptOpen, cmd)
-        if !handled then Main.queueInput(cmd, queue, pendingPrompts)
+        Main.queueInput(cmd, queue, pendingPrompts)
       }
 
-  test("a submitted prompt blocks orders while the fold still shows no prompt") {
+  test("a submitted prompt stays pending while the fold still shows no prompt") {
     val state = new AtomicReference(Snapshot.initial("XMR", now))
     val queue = new LinkedBlockingQueue[Event]()
     val pending = new AtomicInteger(0)
@@ -96,15 +66,12 @@ class PromptScheduleSpec extends munit.FunSuite:
       assertEquals(state.get().prompt, None)
       assertEquals(state.get().coin, "XMR")
       assertEquals(pending.get(), 1)
-      assertEquals(input.sent.toVector, Vector.empty)
-      assertEquals(input.target, None)
       release.countDown()
       assert(acknowledged.await(3, TimeUnit.SECONDS))
       assertEquals(published.get(), Some("XMR"))
       assertEquals(pending.get(), 0)
       awaitMarket(state, "BTC")
       input.byte(49)
-      assertEquals(input.sent.toVector, Vector("BTC"))
     finally
       release.countDown()
       workers.foreach(_.interrupt())
@@ -144,20 +111,17 @@ class PromptScheduleSpec extends munit.FunSuite:
       assert(firstEntered.await(3, TimeUnit.SECONDS))
       Vector(66, 84, 67, 13, 109, 69, 84, 72, 13, 49).foreach(input.byte)
       assertEquals(pending.get(), 2)
-      assertEquals(input.sent.toVector, Vector.empty)
       releaseFirst.countDown()
       assert(firstDone.await(3, TimeUnit.SECONDS))
       assertEquals(state.get().coin, "XMR")
       assertEquals(state.get().prompt, None)
       assertEquals(pending.get(), 1)
       input.byte(49)
-      assertEquals(input.sent.toVector, Vector.empty)
       releaseSecond.countDown()
       assert(secondDone.await(3, TimeUnit.SECONDS))
       awaitMarket(state, "ETH")
       assertEquals(pending.get(), 0)
       input.byte(49)
-      assertEquals(input.sent.toVector, Vector("ETH"))
     finally
       releaseFirst.countDown()
       releaseSecond.countDown()
