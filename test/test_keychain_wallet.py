@@ -14,7 +14,12 @@ spec = importlib.util.spec_from_file_location(
     "keychain_wallet", Path(__file__).parents[1] / "tools/keychain_wallet.py"
 )
 wallet = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(wallet)
+try:
+    spec.loader.exec_module(wallet)
+except ModuleNotFoundError as error:
+    if error.name.split(".")[0] not in {"cryptography", "Crypto", "eth_account"}:
+        raise
+    raise unittest.SkipTest("key helper crypto module missing: " + error.name) from error
 
 FIXTURE = bytes.fromhex("00" * 31 + "01")
 PUBLIC = "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
@@ -32,13 +37,39 @@ class Store:
 
 
 class KeychainWalletTests(unittest.TestCase):
+    def test_missing_private_settings_reports_reason(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            error = io.StringIO()
+            store = Store()
+            with patch.object(wallet.Path, "home", return_value=Path(temporary)), \
+                    patch.object(wallet, "MacKeychain", return_value=store), \
+                    patch.object(wallet, "generate") as generate, \
+                    patch.object(sys, "argv", ["setup", "--create", "agent"]), \
+                    contextlib.redirect_stderr(error):
+                self.assertEqual(wallet.main(), 1)
+            self.assertEqual(json.loads(error.getvalue())["message"],
+                             "private Desk settings directory required")
+            generate.assert_not_called()
+            self.assertEqual(store.calls, [])
+
+    def test_unexpected_errors_keep_fixed_message(self):
+        for failure in (ValueError(FIXTURE.hex()), RuntimeError(FIXTURE.hex())):
+            with self.subTest(error=type(failure).__name__):
+                error = io.StringIO()
+                with patch.object(wallet, "MacKeychain", side_effect=failure), \
+                        patch.object(sys, "argv", ["setup", "--create", "agent"]), \
+                        contextlib.redirect_stderr(error):
+                    self.assertEqual(wallet.main(), 1)
+                self.assertEqual(json.loads(error.getvalue())["message"],
+                                 "Setup did not finish. Preserve any setup record and inspect the named item before retrying.")
+
     def test_known_address(self):
         self.assertEqual(wallet.address(FIXTURE), PUBLIC)
 
     def test_reject_invalid_secrets(self):
         for value in (b"", bytes(31), bytes(32), bytes([255]) * 32, bytes(33)):
             with self.subTest(value_length=len(value)):
-                with self.assertRaises(ValueError):
+                with self.assertRaises(wallet.SetupError):
                     wallet.address(value)
 
     def test_owner_and_trading_roles_use_separate_services(self):
@@ -68,7 +99,7 @@ class KeychainWalletTests(unittest.TestCase):
     def test_invalid_role_never_generates_or_stores(self):
         calls = []
         store = Store()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(wallet.SetupError):
             wallet.create("unknown", store, lambda: calls.append(True))
         self.assertEqual(calls, [])
         self.assertEqual(store.calls, [])
@@ -83,7 +114,7 @@ class KeychainWalletTests(unittest.TestCase):
         class Wrong:
             address = "0x" + "00" * 20
         with patch.object(wallet.Account, "from_key", return_value=Wrong()):
-            with self.assertRaisesRegex(ValueError, "independent public addresses differ"):
+            with self.assertRaisesRegex(wallet.SetupError, "independent public addresses differ"):
                 wallet.address(FIXTURE)
 
     def test_public_record_precedes_storage_and_keeps_both_states(self):
@@ -208,7 +239,7 @@ class KeychainWalletReviewTests(unittest.TestCase):
                           side_effect=AssertionError("invalid input reached crypto backend")) as derive:
             for value in invalid:
                 with self.subTest(length=len(value)):
-                    with self.assertRaisesRegex(ValueError, "invalid private scalar"):
+                    with self.assertRaisesRegex(wallet.SetupError, "invalid private scalar"):
                         wallet.address(value)
             derive.assert_not_called()
 

@@ -1,8 +1,11 @@
 SCALA_CLI ?= scala-cli
-.PHONY: test live check build install fmt
+.PHONY: test test-python live check build install fmt
 
-test:
+test: test-python
 	$(SCALA_CLI) test . -- --exclude-tags=live
+
+test-python:
+	python3 -m unittest discover -s test -p 'test_*.py'
 
 live:
 	$(SCALA_CLI) test . -- --include-tags=live

@@ -88,3 +88,15 @@ Logging uses a bounded background queue. `!logs` marks unavailable diagnostic
 storage. See [logging details](diagnostics.md).
 
 Restart an already running Desk after installation to load the new build.
+
+## Development
+
+Install Scala CLI, `python3` and `expect` to run the checks. `make test` runs the
+offline Scala suite and `make test-python`, which discovers `test/test_*.py`.
+The key-helper tests skip with a reason when `cryptography`, `pycryptodome`
+(`Crypto`) or `eth-account` is missing. They use fixture keys and fake stores,
+plus native access objects on macOS, without creating or reading keychain items.
+`make live` runs tests tagged `live` against public endpoints. `make slow` runs
+the slow terminal replay and must run before release.
+`WRITE_GOLDEN=1` is the historical golden-output write variable. The current
+screen tests have no golden-file writer, so setting it does not update fixtures.
