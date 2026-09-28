@@ -63,7 +63,7 @@ class WorkspaceRestoreSpec extends munit.FunSuite:
   }
 
   for failClose <- Vector(false, true) do
-    test(s"main thread stays silent after prior restore, cleanup failure=$failClose") {
+    test(s"main thread reports after its prior restore, cleanup failure=$failClose") {
       val events = scala.collection.mutable.ArrayBuffer.empty[String]
       val cleanup = new WorkspaceApp.Restoration(
         () => if failClose then throw new IllegalArgumentException("private close detail"),
@@ -84,7 +84,7 @@ class WorkspaceRestoreSpec extends munit.FunSuite:
       handler.uncaughtException(main, error)
       assertEquals(
         events.toVector,
-        Vector("terminal", "record")
+        Vector("terminal", "record", s"Desk stopped: ${error.getClass.getSimpleName}", "exit:1")
       )
     }
 
@@ -104,6 +104,29 @@ class WorkspaceRestoreSpec extends munit.FunSuite:
     )
     handler.uncaughtException(main, new IllegalStateException("render"))
     assertEquals(events.toVector, Vector("record", "close", "terminal", "report", "exit:1"))
+  }
+
+  test("first main failure reports once even when cleanup throws") {
+    val events = scala.collection.mutable.ArrayBuffer.empty[String]
+    val main = Thread.currentThread()
+    val cleanup = new WorkspaceApp.Restoration(
+      () => throw new IllegalArgumentException("close"),
+      () => { events += "terminal"; () }
+    )
+    val handler = WorkspaceApp.failureHandler(
+      cleanup,
+      main,
+      (_, _) => { events += "record"; () },
+      message => { events += message; () },
+      status => { events += s"exit:$status"; () }
+    )
+    intercept[IllegalArgumentException] {
+      handler.uncaughtException(main, new IllegalStateException("render"))
+    }
+    assertEquals(
+      events.toVector,
+      Vector("record", "terminal", "Desk stopped: IllegalStateException", "exit:1")
+    )
   }
 
   for mainFailure <- Vector(false, true) do
