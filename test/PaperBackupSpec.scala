@@ -130,3 +130,56 @@ class PaperBackupSpec extends munit.FunSuite:
       assert(!f.worker.submitReviewed(review))
     finally f.worker.close()
   }
+
+  test("preview reads a backup block once across a backward wall-clock step") {
+    val now = 1800000000000L
+    val config = TradingConfig()
+    var previewing = false
+    var reads = 0
+    def wall(): Long =
+      if !previewing then now
+      else
+        reads += 1
+        if reads == 1 then now - 1 else now
+    val ledger = PaperLedger.open(
+      Files.createTempDirectory("backup-clock-step"),
+      "mainnet",
+      config.paperBalance,
+      config.paperFee
+    )
+    val rest = new Rest:
+      def post(body: String): Option[String] = fail("unexpected metadata request")
+    val metadata = ujson.read(
+      """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}"""
+    )
+    val worker = new PaperWorker(
+      config,
+      "XMR",
+      ledger,
+      rest,
+      () => wall(),
+      () => 0L,
+      Some((metadata, 0L))
+    )
+    try
+      worker.observe(
+        Event.BookUpdate(
+          "XMR",
+          Book(
+            Vector(Level("99.99", "50", 1)),
+            Vector(Level("100", "50", 1)),
+            now + config.quoteAgeMs
+          ),
+          false
+        )
+      )
+      assert(worker.view.ready)
+      previewing = true
+      assertEquals(
+        worker.preview(OrderIntent(Side.Buy, OrderKind.Hard)),
+        Left("Paper prices stale. Waiting for fresh depth")
+      )
+      assertEquals(reads, 1)
+      assertEquals(ledger.account.count, 0L)
+    finally worker.close()
+  }

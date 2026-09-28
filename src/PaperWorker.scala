@@ -1,6 +1,6 @@
 package desk
 
-import java.util.concurrent.{ArrayBlockingQueue, TimeUnit}
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import scala.util.Try
 
@@ -23,6 +23,7 @@ final class PaperWorker(
   private final case class Touch(bid: Level, ask: Level, time: Long, receivedAt: Long):
     val bidPrice = BigDecimal(bid.px)
     val askPrice = BigDecimal(ask.px)
+    def quote(side: Side): BigDecimal = if side == Side.Buy then askPrice else bidPrice
     val bidSize = BigDecimal(bid.sz)
     val askSize = BigDecimal(ask.sz)
     val midpoint = BigDecimal(
@@ -89,6 +90,8 @@ final class PaperWorker(
     else None
   private def block: Option[String] = blockReason.map(_.text)
   private def ready: Boolean = block.isEmpty
+  private def held(account: PaperAccount): BigDecimal =
+    account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0))
   def account: PaperAccount = ledger.account
   def view: TradingView = synchronized {
     val account = ledger.account
@@ -101,7 +104,7 @@ final class PaperWorker(
     else reason.get.text
     TradingView(
       coin,
-      Some(account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0))),
+      Some(held(account)),
       message,
       dataReady && !working,
       working,
@@ -174,49 +177,50 @@ final class PaperWorker(
     else if pending.get() then Left("Wait for the pending paper order")
     else
       val account = ledger.account
-      val position = account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0))
-      val result = if !ready then Left(block.get)
-      else if intent.side == Side.Sell && position <= 0 then Left("No " + coin + " to sell")
-      else
-        Trading
-          .plan(
-            coin,
-            rules.get,
-            book.get._1,
-            if intent.side == Side.Buy then touch.get.askPrice else touch.get.bidPrice,
-            position,
-            intent,
-            config.sizes
-          )
-          .map(plan =>
-            if intent.side == Side.Sell then plan.copy(quantity = plan.quantity.min(position))
-            else plan
-          )
-          .flatMap(plan =>
-            Trading.fillAtLimit(
-              plan,
+      val position = held(account)
+      val result = block match
+        case Some(reason)                                      => Left(reason)
+        case None if intent.side == Side.Sell && position <= 0 => Left("No " + coin + " to sell")
+        case None                                              =>
+          Trading
+            .plan(
+              coin,
               rules.get,
               book.get._1,
-              if intent.side == Side.Buy then touch.get.askPrice else touch.get.bidPrice,
-              position
+              touch.get.quote(intent.side),
+              position,
+              intent,
+              config.sizes
             )
-          )
-          .flatMap(plan => ledger.check(plan, account).map(_ => plan))
+            .map(plan =>
+              if intent.side == Side.Sell then plan.copy(quantity = plan.quantity.min(position))
+              else plan
+            )
+            .flatMap(plan =>
+              Trading.fillAtLimit(
+                plan,
+                rules.get,
+                book.get._1,
+                touch.get.quote(intent.side),
+                position
+              )
+            )
+            .flatMap(plan => ledger.check(plan, account).map(_ => plan))
       prepared =
         result.toOption.map(plan => Prepared(intent, plan, rules.get, account.count, wall()))
       result
   }
   private def matches(review: OrderReview): Boolean =
-    !closed
-      .get() && ready && review.plan.coin == coin && review.createdAt <= wall() && wall() < review.expiresAt && BigInt(
-      review.expiresAt
-    ) - BigInt(
-      review.createdAt
-    ) <= 30000L && review.leverage.isEmpty && review.marginMode.isEmpty && prepared.exists(p =>
+    def validRequest: Boolean =
+      review.plan.coin == coin && review.createdAt <= wall() && wall() < review.expiresAt &&
+        BigInt(review.expiresAt) - BigInt(review.createdAt) <= 30000L &&
+        review.leverage.isEmpty && review.marginMode.isEmpty
+    def samePreparation: Boolean = prepared.exists(p =>
       p.intent == review.intent && p.plan == review.plan && rules.contains(p.rules) &&
         ledger.account.count == p.accountCount && p.at <= review.createdAt &&
         BigInt(wall()) - p.at <= TradingWorker.maximumReviewLifetimeMs
     )
+    !closed.get() && ready && validRequest && samePreparation
   def submitReviewed(review: OrderReview): Boolean = synchronized {
     if !matches(review) || !pending.compareAndSet(false, true) then false
     else
@@ -266,9 +270,9 @@ final class PaperWorker(
               stage = "checking"
               if matches(review) then
                 val position =
-                  ledger.account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0))
+                  held(ledger.account)
                 val currentQuote =
-                  if review.plan.side == Side.Buy then touch.get.askPrice else touch.get.bidPrice
+                  touch.get.quote(review.plan.side)
                 Trading
                   .fillAtLimit(review.plan, rules.get, book.get._1, currentQuote, position)
                   .map(plan => (plan, prepared.get.accountCount))
