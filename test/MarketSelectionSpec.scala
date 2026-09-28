@@ -72,7 +72,7 @@ class MarketSelectionSpec extends munit.FunSuite:
       for flags <- Vector(Seq.empty, Seq("--paper"), Seq("--trade"), Seq("--record")) do
         assertEquals(
           Main.parseArgs(Seq("xyz:TSLA") ++ flags).swap.toOption,
-          f.state.get().marketNotice
+          Some("Colon markets are not supported.")
         )
       assert(Screen.stats(f.state.get(), 1000L, 100).contains("Colon markets are not supported"))
       assertEquals(f.state.get().coin, "XMR")

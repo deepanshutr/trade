@@ -23,7 +23,7 @@ object Main:
     new Announcements(output, voice = args.audio != "chime", mutedInitially = args.audio == "mute")
 
   private def marketRefusal(name: String): Option[String] =
-    Option.when(name.contains(":"))("Colon markets are not supported. Press m to retry")
+    Option.when(name.contains(":"))("Colon markets are not supported.")
 
   def parseArgs(args: Seq[String]): Either[String, Args] =
     def loop(rest: List[String], chosen: Args, hasCoin: Boolean): Either[String, Args] =
@@ -138,7 +138,7 @@ object Main:
                 before.copy(
                   prompt = None,
                   marketPending = None,
-                  marketNotice = refusal
+                  marketNotice = refusal.map(_ + " Press m to retry")
                 )
               case Some(name) if State.validMarket(name) && name != before.coin =>
                 requestId += 1

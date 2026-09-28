@@ -19,7 +19,7 @@ def definition(java, jar, state, coin="XMR", config=None):
     paths = [java, jar, state] + ([config] if config else [])
     if not all(pathlib.Path(path).is_absolute() for path in paths):
         raise ValueError("Service paths must be absolute")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,39}", coin):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}", coin):
         raise ValueError("Invalid market")
     command = [str(java), "-XX:ActiveProcessorCount=2", "-Xmx512m", "-jar", str(jar),
                coin, "--record", "--no-analysis", "--state", str(state)]
