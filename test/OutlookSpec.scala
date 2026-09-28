@@ -82,7 +82,6 @@ class OutlookSpec extends munit.FunSuite:
       val cs = candles(horizon)
       val result = measured(cs, horizon)
       assertEquals(result.base.samples, 100)
-      assertEquals(result.expected, 100)
       assertEquals(
         result.at,
         Some(cs.last.t + State.intervalMs(horizon.interval))
@@ -103,8 +102,6 @@ class OutlookSpec extends munit.FunSuite:
     assertEquals(result.target, result.resistance)
     assertEquals(result.base, HistoricalRate(100, 100, 100))
     assertEquals(result.matched, HistoricalRate(100, 100, 50))
-    assertEquals(result.from, Some(60 * shortStep))
-    assertEquals(result.to, Some(1260 * shortStep))
   }
 
   test(
@@ -146,18 +143,13 @@ class OutlookSpec extends munit.FunSuite:
     "anchors stay on calendar boundaries instead of restarting from the first observation"
   ) {
     val result = measured(candles(offset = 11 * shortStep))
-    assertEquals(result.from, Some(72 * shortStep))
-    assertEquals(result.to, Some(1260 * shortStep))
-    assertEquals(result.expected, 99)
     assertEquals(result.base.samples, 99)
   }
 
   test("an unfinished last outcome is not counted") {
     val cs = candles()
     val result = measured(cs, at = Some(1260 * shortStep - 1L))
-    assertEquals(result.expected, 99)
     assertEquals(result.base.samples, 99)
-    assertEquals(result.to, Some(1248 * shortStep))
   }
 
   test(
@@ -181,22 +173,9 @@ class OutlookSpec extends munit.FunSuite:
     assertEquals(HistoricalRate(24, 49, 50).percent, None)
     assertEquals(HistoricalRate(25, 50, 50).percent, Some(50.0))
     assertEquals(HistoricalRate(25, 50, 50, available = false).percent, None)
-    assertEquals(HistoricalRate(25, 50, 50, available = false).band, None)
-    assertEquals(HistoricalRate(0, 0, 50).band, None)
   }
 
-  test(
-    "count bands stay within percent bounds and do not imply certainty at zero or all hits"
-  ) {
-    val middle = HistoricalRate(50, 100, 100).band.get
-    assertEqualsDouble(middle._1, 40.383153, 0.000001)
-    assertEqualsDouble(middle._2, 59.616847, 0.000001)
-    val none = HistoricalRate(0, 100, 100).band.get
-    val all = HistoricalRate(100, 100, 100).band.get
-    assertEqualsDouble(none._1, 0.0, 1e-12)
-    assertEqualsDouble(none._2, 3.699350, 0.000001)
-    assertEqualsDouble(all._1, 96.300650, 0.000001)
-    assertEqualsDouble(all._2, 100.0, 1e-12)
+  test("historical counts reject invalid samples and minimums") {
     intercept[IllegalArgumentException](HistoricalRate(2, 1, 1))
     intercept[IllegalArgumentException](HistoricalRate(-1, 1, 1))
     intercept[IllegalArgumentException](HistoricalRate(0, 0, 0))
@@ -210,7 +189,6 @@ class OutlookSpec extends munit.FunSuite:
     val boundary = measured(
       cs.filterNot(c => c.t >= 10 * shortStep && c.t <= 239 * shortStep)
     )
-    assertEquals(boundary.expected, 200)
     assertEquals(boundary.base.samples, 180)
     assertEquals(boundary.base.percent, Some(100.0))
     assertEquals(boundary.matched.percent, Some(100.0))
@@ -218,13 +196,11 @@ class OutlookSpec extends munit.FunSuite:
     val below = measured(
       cs.filterNot(c => c.t >= 10 * shortStep && c.t <= 250 * shortStep)
     )
-    assertEquals(below.expected, 200)
     assertEquals(below.base.samples, 179)
     assertEquals(below.base.hits, 179)
     assertEquals(below.status, "gapped history")
     assertEquals(below.base.percent, None)
     assertEquals(below.matched.percent, None)
-    assertEquals(below.base.band, None)
   }
 
   test(
@@ -233,7 +209,6 @@ class OutlookSpec extends munit.FunSuite:
     val cs = candles()
     val broken = cs.updated(10, cs(10).copy(h = cs(10).l - 1))
     val result = measured(broken)
-    assertEquals(result.expected, 100)
     assertEquals(result.base.samples, 99)
     assertEquals(result.matched.samples, 99)
   }
@@ -249,7 +224,6 @@ class OutlookSpec extends munit.FunSuite:
     assertEquals(result.base.percent, None)
     assertEquals(result.target, None)
     val older = measured(cs :+ cs(10).copy(h = cs(10).h + 1))
-    assertEquals(older.expected, 100)
     assertEquals(older.base.samples, 99)
   }
 
@@ -334,7 +308,6 @@ class OutlookSpec extends munit.FunSuite:
     val recent = candles(periods = 0, offset = 20L * 365 * 86400000L)
     val sparse = measured(Vector(Candle(0, 100, 101, 99, 100, 1)) ++ recent)
     assertEquals(sparse.status, "gapped history")
-    assert(sparse.expected > 100000)
     assertEquals(sparse.base.percent, None)
   }
 

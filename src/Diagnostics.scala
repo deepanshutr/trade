@@ -250,7 +250,7 @@ final class Diagnostics private[desk] (
       case Event.CandleHistoryFailed => emit("history_failed")
       case Event.SocketDown          => emit("connection", "state" -> "disconnected")
       case Event.SocketUp            => emit("connection", "state" -> "connected")
-      case Event.Bad(_)              => emit("invalid_public_event")
+      case Event.Bad                 => emit("invalid_public_event")
       case _                         => ()
   }
 

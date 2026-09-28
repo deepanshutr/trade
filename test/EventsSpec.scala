@@ -3,10 +3,15 @@ package desk
 import java.nio.file.{Files, Paths}
 
 class EventsSpec extends munit.FunSuite:
+  test("malformed public events carry no payload fields") {
+    val event = Events.parse("private malformed payload").get
+    assertEquals(event.productArity, 0)
+  }
+
   def fixture(name: String): String = Files.readString(Paths.get("fixtures", name))
 
   test("a null input is bad, not an exception") {
-    assert(Events.parse(null).exists(_.isInstanceOf[Event.Bad]))
+    assert(Events.parse(null).exists(_ == Event.Bad))
   }
   test("l2Book parses to a socket book with 20 levels a side") {
     Events.parse(fixture("l2Book.json")) match
@@ -51,7 +56,7 @@ class EventsSpec extends munit.FunSuite:
   test("a trade with an unknown side is bad") {
     val text =
       """{"channel":"trades","data":[{"coin":"XMR","side":"X","px":"1","sz":"1","time":1}]}"""
-    assert(Events.parse(text).exists(_.isInstanceOf[Event.Bad]))
+    assert(Events.parse(text).exists(_ == Event.Bad))
   }
   test("candle parses its text prices to numbers") {
     assertEquals(
@@ -109,7 +114,7 @@ class EventsSpec extends munit.FunSuite:
       """{"channel":"weird","data":1}""",
       """{"data":1}"""
     )
-    for text <- texts do assert(Events.parse(text).exists(_.isInstanceOf[Event.Bad]), text)
+    for text <- texts do assert(Events.parse(text).exists(_ == Event.Bad), text)
   }
   test("an unknown extra field still parses") {
     val text = fixture("bbo.json").replace("\"coin\":\"XMR\"", "\"coin\":\"XMR\",\"extra\":[1,2]")

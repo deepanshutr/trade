@@ -90,17 +90,16 @@ class RuntimeSafetySpec extends munit.FunSuite:
       recorder.close()
   }
 
-  test("recorder discards arbitrary error payloads and keeps public event categories only") {
+  test("recorder keeps public event categories only") {
     val directory = Files.createTempDirectory("desk-recorder-public-only")
     val recorder = new PublicRecorder(MarketArchive.open(directory), () => now)
     recorder.start()
-    recorder.observe(Event.Bad("synthetic-private-account-canary"))
+    recorder.observe(Event.Bad)
     recorder.observe(Event.SocketDown)
     recorder.close()
     val encoded = chunks(directory)
     assert(encoded.contains("invalid-or-dropped-event"))
     assert(encoded.contains("disconnected"))
-    assert(!encoded.contains("synthetic-private-account-canary"))
     assert(!encoded.contains("user") && !encoded.contains("signature"))
   }
 

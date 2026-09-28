@@ -64,7 +64,6 @@ object CompactDisplayFixtures:
           Trade(now - 500L, Side.Buy, price.toString, "3"),
           Trade(now - 15_000L, Side.Sell, price.toString, "1")
         ),
-        workspace = true,
         chartMode = mode,
         zoom = if mode == ChartMode.Candles then State.candleMinZoom else 0,
         cols = cols,
@@ -88,10 +87,7 @@ object CompactDisplayFixtures:
           Some(price),
           None,
           HistoricalRate(60, 100, 100),
-          HistoricalRate(35, 50, 50),
-          100,
-          None,
-          None
+          HistoricalRate(35, 50, 50)
         )
       }
     )

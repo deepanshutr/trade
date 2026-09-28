@@ -30,7 +30,7 @@ class CandleIntegritySpec extends munit.FunSuite:
       assert(
         Events
           .parse(ujson.Obj("channel" -> "candle", "data" -> data).render())
-          .exists(_.isInstanceOf[Event.Bad])
+          .exists(_ == Event.Bad)
       )
     }
     val flat = Candle(0, 100, 100, 100, 100, 0)

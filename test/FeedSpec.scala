@@ -113,7 +113,7 @@ class FeedSpec extends munit.FunSuite:
     c.onText(fixture("pong.json"))
     c.onText(fixture("subscriptionResponse.json"))
     c.onText("garbage")
-    assertEquals(queue.asScala.toVector, Vector(Event.Pong, Event.Bad("garbage")))
+    assertEquals(queue.asScala.toVector, Vector(Event.Pong, Event.Bad))
     c.onClose()
     t.join(1000)
   }
@@ -160,7 +160,7 @@ class FeedSpec extends munit.FunSuite:
         else candlesBody
     }
     val (feed, queue) = newFeed(new FakeConnector, rest)
-    feed.fetchHistory()
+    feed.repairHistory()
     assertEquals(rest.bodies.size, 19)
     val events = queue.asScala.toVector
     assertEquals(events.count { case Event.CandleHistory(_, _, _, _) => true; case _ => false }, 18)
@@ -170,7 +170,7 @@ class FeedSpec extends munit.FunSuite:
   test("fetching history sends eighteen requests and tags every series") {
     val rest = restAnswering()
     val (feed, queue) = newFeed(new FakeConnector, rest, () => 10_000_000L)
-    feed.fetchHistory()
+    feed.repairHistory()
     val bodies = rest.bodies.asScala.toVector
     assertEquals(bodies.size, 18)
     assert(bodies.forall(_.contains("candleSnapshot")), bodies)
@@ -183,14 +183,14 @@ class FeedSpec extends munit.FunSuite:
     assertEquals(tags.map(_._1).distinct, Vector("XMR", "BTC", "PAXG"))
     assertEquals(tags.filter(_._1 == "PAXG").map(_._2), State.intervals)
     val (feed2, queue2) = newFeed(new FakeConnector, restAnswering(candles = false))
-    feed2.fetchHistory()
+    feed2.repairHistory()
     assertEquals(queue2.asScala.toVector, Vector.fill(18)(Event.CandleHistoryFailed))
   }
   test("history for a market already followed as a reference is fetched once") {
     val rest = restAnswering()
     val queue = new ConcurrentLinkedQueue[Event]()
     val feed = new Feed(new FakeConnector, rest, queue, () => 10_000_000L, "BTC")
-    feed.fetchHistory()
+    feed.repairHistory()
     assertEquals(rest.bodies.asScala.count(_.contains("\"coin\":\"BTC\"")), 6)
     assertEquals(rest.bodies.asScala.size, 12)
     val tags = queue.asScala.toVector.collect { case Event.CandleHistory(c, _, _, _) => c }
@@ -348,7 +348,7 @@ class FeedSpec extends munit.FunSuite:
       val rest = restAnswering()
       val queue = new ConcurrentLinkedQueue[Event]()
       val feed = new Feed(new FakeConnector, rest, queue, () => 10_000_000L, main, refs)
-      feed.fetchHistory()
+      feed.repairHistory()
       val history = queue.asScala.toVector.collect { case Event.CandleHistory(c, i, _, _) =>
         (c, i)
       }

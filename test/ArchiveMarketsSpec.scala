@@ -46,7 +46,7 @@ class ArchiveMarketsSpec extends munit.FunSuite:
       assertEquals(saved.markets.size, 32)
       assert(!saved.markets.contains("COIN32"))
       assert(saved.markets.contains("NEW"))
-      assertEquals(MarketArchive.lastWrite(directory), at + 34)
+      assertEquals(saved.at, at + 34)
     finally reopened.close()
   }
 

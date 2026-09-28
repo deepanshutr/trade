@@ -147,7 +147,7 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
     )
     log.folded(pending, Event.MarketChecked((1L, "PRIVATE_SECRET"), Left("SECRET_REASON")), initial)
     log.failure(DiagnosticPart.Feed, new IllegalArgumentException("SECRET_EXCEPTION"))
-    log.folded(initial, Event.Bad("SECRET_PAYLOAD"), initial)
+    log.folded(initial, Event.Bad, initial)
     log.start()
     log.close()
     val text = saved.lines.mkString("\n")

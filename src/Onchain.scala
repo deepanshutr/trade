@@ -195,9 +195,8 @@ object Onchain:
         (interval, candle)
       }
 
-/** Reads on-chain markets every poll and pushes the market events the venue feed does. It never
-  * sends socket health events: the snapshot's one health field belongs to the venue link, and the
-  * trading workers read it. Its own state is its status line.
+/** Polls the shown on-chain market. Its books and candles mark that market fresh in the snapshot's
+  * health field, which Screen and Alerts read. Its own connection state supplies its status line.
   */
 final class OnchainFeed(
     markets: Vector[OnchainMarket],

@@ -183,8 +183,8 @@ final class Feed(
             case Event.Pong =>
               c.pingAt = None
               c.received = true
-            case Event.Bad(_) => ()
-            case _            => c.received = true
+            case Event.Bad => ()
+            case _         => c.received = true
           push(event)
         }
     }
@@ -294,7 +294,6 @@ final class Feed(
   private def history(
       c: String,
       i: String,
-      force: Boolean,
       relevant: () => Boolean = () => true
   ): Unit =
     val requestedAt = clock()
@@ -305,7 +304,7 @@ final class Feed(
           State.intervalMs(i).max(Feed.historyEveryMs)
         else Feed.historyEveryMs
       val due = historyAt.get(key).forall(at => requestedAt < at || requestedAt - at >= wait)
-      if !relevant() || historyInFlight.contains(key) || (!force && !due) then false
+      if !relevant() || historyInFlight.contains(key) || !due then false
       else
         historyAt = historyAt.updated(key, requestedAt)
         historyInFlight += key
@@ -330,16 +329,10 @@ final class Feed(
         synchronized { historyInFlight -= key }
         if !relevant() then wakeHistory()
 
-  def fetchHistoryFor(c: String): Unit = State.intervals.foreach(i => history(c, i, true))
-
-  def fetchHistory(): Unit =
-    val c = coin
-    (c +: references.filterNot(_ == c)).foreach(fetchHistoryFor)
-
   def repairHistory(): Unit =
     val (generation, c) = synchronized { (marketGeneration, coin) }
     (c +: references.filterNot(_ == c)).foreach(market =>
-      State.intervals.foreach(i => history(market, i, false, () => generation == marketGeneration))
+      State.intervals.foreach(i => history(market, i, () => generation == marketGeneration))
     )
 
   private def wakeHistory(): Unit = { val _ = historyWakeup.offer(java.lang.Boolean.TRUE) }

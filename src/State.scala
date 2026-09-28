@@ -54,7 +54,7 @@ enum Event:
   case CandleHistoryFailed
   case CtxUpdate(coin: String, ctx: Ctx)
   case Pong
-  case Bad(text: String)
+  case Bad
   case SocketUp
   case SocketDown
   case Key(command: Command)
@@ -88,7 +88,6 @@ final case class Snapshot(
     lineZoom: Int = 0,
     referenceCoins: Vector[String] = State.refCoins,
     candleReceipts: Map[(String, String), Map[Long, Long]] = Map.empty,
-    workspace: Boolean = false,
     marketPending: Option[(Long, String)] = None,
     marketNotice: Option[String] = None,
     marketHistory: Vector[(String, Ref)] = Vector.empty
@@ -286,7 +285,7 @@ object State:
       val fresh = s.copy(feed = Health.Live(now))
       if coin == s.coin then fresh.copy(ctx = Some(c)) else fresh
     case Event.Pong         => s.copy(feed = Health.Live(now))
-    case Event.Bad(_)       => s.copy(feed = Health.Live(now), bad = s.bad + 1)
+    case Event.Bad          => s.copy(feed = Health.Live(now), bad = s.bad + 1)
     case Event.SocketDown   => s.copy(feed = Health.Down(now, lastMsgAt(s.feed)))
     case Event.SocketUp     => s.copy(feed = Health.Live(now), marketNotice = None)
     case Event.Key(cmd)     => key(s, cmd, now)

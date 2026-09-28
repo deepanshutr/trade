@@ -29,15 +29,13 @@ final class PublicRecorder(archive: MarketArchive, wall: () => Long, capacity: I
             while !stopping.get() || !queue.isEmpty do
               val item = queue.poll(250, TimeUnit.MILLISECONDS)
               if item != null then
-                if dropped.getAndSet(0L) > 0 then
-                  archive.record(Event.Bad("recorder queue overflow"), item._2)
+                if dropped.getAndSet(0L) > 0 then archive.record(Event.Bad, item._2)
                 archive.record(item._1, item._2)
               if wall() - checkpointAt >= 10000L then
                 archive.checkpoint()
                 checkpointAt = wall()
                 text = "Public capture saved " + archive.bytes / 1000000L + " MB"
-            if dropped.getAndSet(0L) > 0 then
-              archive.record(Event.Bad("recorder queue overflow"), wall())
+            if dropped.getAndSet(0L) > 0 then archive.record(Event.Bad, wall())
             archive.close()
             text = "Public capture saved"
           catch

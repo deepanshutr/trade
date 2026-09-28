@@ -233,8 +233,6 @@ class AlertsSpec extends munit.FunSuite:
       (2 to 5).foreach(i => assert(alerts.offer(announcement(i))))
       assert(!alerts.offer(announcement(6)))
       assert(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began) < 1000)
-      assert(alerts.status.contains("4 queued"), alerts.status)
-      assert(alerts.status.contains("1 dropped"), alerts.status)
       assertEquals(output.calls.get(), 1)
     finally alerts.close()
     assert(output.closed.get())
@@ -272,13 +270,14 @@ class AlertsSpec extends munit.FunSuite:
     assert(!alerts.offer(announcement(1)))
     alerts.setMuted(false)
     assert(alerts.offer(announcement(2)))
-    checkSoon("failure status missing")(alerts.status.contains("unavailable"))
-    assert(!alerts.status.contains("synthetic"))
+    checkSoon("failed output was not called")(calls.get() == 1)
+    assert(alerts.offer(announcement(3)))
+    checkSoon("output failure stranded the queue")(calls.get() == 2)
     alerts.close()
     alerts.close()
     alerts.start()
     assert(!alerts.offer(announcement(3)))
-    assertEquals(calls.get(), 1)
+    assertEquals(calls.get(), 2)
   }
 
   test(
