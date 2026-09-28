@@ -22,6 +22,9 @@ object Main:
   private[desk] def announcements(args: Args, output: AnnouncementOutput): Announcements =
     new Announcements(output, voice = args.audio != "chime", mutedInitially = args.audio == "mute")
 
+  private def marketRefusal(name: String): Option[String] =
+    Option.when(name.contains(":"))("Colon markets are not supported.")
+
   def parseArgs(args: Seq[String]): Either[String, Args] =
     def loop(rest: List[String], chosen: Args, hasCoin: Boolean): Either[String, Args] =
       rest match
@@ -47,7 +50,9 @@ object Main:
         case "--state" :: _  => Left("give one local state directory after --state")
         case flag :: _ if flag.startsWith("--")                  => Left(s"unknown flag $flag")
         case coin :: tail if !hasCoin && State.validMarket(coin) =>
-          loop(tail, chosen.copy(coin = coin), true)
+          marketRefusal(coin) match
+            case Some(message) => Left(message)
+            case None          => loop(tail, chosen.copy(coin = coin), true)
         case extra :: _ => Left(s"unexpected argument $extra")
     loop(args.toList, Args("XMR", false), false)
 
@@ -127,12 +132,13 @@ object Main:
         val before = state.get()
         val after = event match
           case Event.Key(Command.PromptSubmit) =>
+            val refusal = before.prompt.flatMap(marketRefusal)
             before.prompt match
-              case Some(name) if name.contains(":") =>
+              case _ if refusal.nonEmpty =>
                 before.copy(
                   prompt = None,
                   marketPending = None,
-                  marketNotice = Some("Colon markets are not supported. Press m to retry")
+                  marketNotice = refusal.map(_ + " Press m to retry")
                 )
               case Some(name) if State.validMarket(name) && name != before.coin =>
                 requestId += 1
