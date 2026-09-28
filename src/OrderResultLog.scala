@@ -28,11 +28,13 @@ object OrderResultLog:
 
   private def lock(channel: FileChannel, began: Long): FileLock =
     var lease: FileLock = null
-    while lease == null && System.nanoTime() - began < 50000000L do
+    while lease == null do
       try lease = channel.tryLock()
       catch case _: OverlappingFileLockException => ()
-      if lease == null then Thread.sleep(1L)
-    if lease == null then throw new java.io.IOException("order result lock timed out")
+      if lease == null then
+        if System.nanoTime() - began >= 50000000L then
+          throw new java.io.IOException("order result lock timed out")
+        Thread.sleep(1L)
     lease
 
   def append(directory: Path, at: Long, text: String): Unit =
