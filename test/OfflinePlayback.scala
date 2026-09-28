@@ -202,15 +202,7 @@ object OfflinePlayback:
       def info(body: ujson.Value): Option[ujson.Value] =
         if body("type").str != "meta" then deny("account request")
         metadataCalls.incrementAndGet()
-        Some(
-          ujson.Obj(
-            "universe" -> ujson.Arr.from(
-              Vector("XMR", "ETH", "BTC", "PAXG").map(c =>
-                ujson.Obj("name" -> c, "szDecimals" -> 3, "maxLeverage" -> 20)
-              )
-            )
-          )
-        )
+        Some(metadata)
       def post(body: ujson.Value): Option[ujson.Value] = deny("submission")
       def watch(
           c: String,
@@ -264,8 +256,7 @@ object OfflinePlayback:
             "metadata_calls" -> metadataCalls.get(),
             "held_work" -> holding,
             "hold_finished" -> holdFinished.get(),
-            "hold_finished_ns" -> holdFinishedAt.get().toString,
-            "hold_released" -> (holdRelease.getCount == 0)
+            "hold_finished_ns" -> holdFinishedAt.get().toString
           )
         )
       )

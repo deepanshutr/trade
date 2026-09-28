@@ -14,7 +14,6 @@ parser.add_argument('--classpath', required=True)
 parser.add_argument('--output', required=True)
 args = parser.parse_args()
 args.fixtures = str(Path('fixtures').resolve())
-args.display_contract = 'workspace'
 output = Path(args.output)
 output.mkdir(exist_ok=True)
 
@@ -35,7 +34,7 @@ for number in range(3):
     try:
         run.event('connected')
         run.command('quote', coin='XMR')
-        run.frame(lambda f: playback.market_matches(f, 'workspace', 'XMR', '522.26'))
+        run.frame(lambda f: playback.market_matches(f, 'XMR', '522.26'))
         run.command('hold-queue')
         run.command('quote', coin='XMR')
         run.event('queue-held')

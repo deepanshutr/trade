@@ -30,21 +30,34 @@ class WorkspaceCaptureSpec(unittest.TestCase):
 
     def test_workspace_pins_market_and_target_at_actual_panel_rows(self):
         frame = self.frame()
-        self.assertTrue(playback.market_matches(frame, "workspace", "XMR", "522.26"))
-        self.assertTrue(playback.target_matches(frame, "workspace", "XMR", "buy", "522.28", "522.26"))
-        self.assertFalse(playback.target_matches(frame, "workspace", "XMR", "sell", "522.28", "522.26"))
-        self.assertFalse(playback.market_matches(frame, "workspace", "XMR", "522.260"))
+        self.assertTrue(playback.market_matches(frame, "XMR", "522.26"))
+        self.assertTrue(playback.target_matches(frame, "XMR", "buy", "522.28", "522.26"))
+        self.assertFalse(playback.target_matches(frame, "XMR", "sell", "522.28", "522.26"))
+        self.assertFalse(playback.market_matches(frame, "XMR", "522.260"))
         frame["lines"][25], frame["lines"][24] = frame["lines"][24], frame["lines"][25]
-        self.assertFalse(playback.target_matches(frame, "workspace", "XMR", "buy", "522.28", "522.26"))
+        self.assertFalse(playback.target_matches(frame, "XMR", "buy", "522.28", "522.26"))
+
+    def test_workspace_header_requires_a_fresh_exact_market(self):
+        frame = self.frame()
+        header = frame["lines"][0]
+        for age, expected in (("0.0", True), ("5.0", True), ("5.1", False),
+                              ("-0.1", False), ("NaN", False), ("1", False), ("1.00", False)):
+            frame["lines"][0] = header.replace("0.3s", age + "s")
+            self.assertEqual(playback.market_matches(frame, "XMR", "522.26"), expected)
+        for changed in (header.replace("active", "disconnected"), header.replace("XMR", "ETH"),
+                        header.replace("522.26", "522x26"), header.replace(" |", " bad 1 |")):
+            frame["lines"][0] = changed
+            self.assertFalse(playback.market_matches(frame, "XMR", "522.26"))
+        self.assertFalse(playback.market_matches({"lines": []}, "XMR", "522.26"))
 
     def test_cancelled_target_requires_idle_large_controls_and_no_selected_price(self):
         frame = self.frame()
         frame["lines"][22] = " " * 53 + "|" + "|   9 BUY target    | |  0 SELL target    |".ljust(46)
-        self.assertFalse(playback.idle_matches(frame, "workspace", "XMR", "522.26"))
+        self.assertFalse(playback.idle_matches(frame, "XMR", "522.26"))
         frame["lines"][24] = " " * 53 + "|" + " " * 46
-        self.assertTrue(playback.idle_matches(frame, "workspace", "XMR", "522.26"))
+        self.assertTrue(playback.idle_matches(frame, "XMR", "522.26"))
         frame["lines"][22] = " " * 53 + "|" + " " * 46
-        self.assertFalse(playback.idle_matches(frame, "workspace", "XMR", "522.26"))
+        self.assertFalse(playback.idle_matches(frame, "XMR", "522.26"))
 
 
 if __name__ == "__main__":

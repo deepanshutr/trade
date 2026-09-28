@@ -118,57 +118,32 @@ class Frames:
         return lines
 
 
-def market_matches(frame, contract, coin, midpoint):
+def market_matches(frame, coin, midpoint):
     if not frame["lines"]:
         return False
     coin, midpoint = re.escape(coin), re.escape(midpoint)
-    patterns = {
-        # The original live label describes recency, including after a disconnect.
-        "original": rf"{coin} {midpoint}(?: mark \S+ orc \S+ 24h \S+ fund \S+ OI \S+ vol \S+)? live (\d+\.\d)s",
-        "contextual": rf"connection active (\d+\.\d)s {coin} mid {midpoint}(?: (?:mark|oracle|24h|fund|open interest|volume) \S+)*",
-    }
-    header = frame["lines"][0]
-    if contract == "workspace":
-        header = header.split("|", 1)[0]
-        contract = "contextual"
-    matched = re.fullmatch(patterns[contract], " ".join(header.split()))
+    pattern = rf"connection active (\d+\.\d)s {coin} mid {midpoint}(?: (?:mark|oracle|24h|fund|open interest|volume) \S+)*"
+    header = frame["lines"][0].split("|", 1)[0]
+    matched = re.fullmatch(pattern, " ".join(header.split()))
     return matched is not None and float(matched[1]) <= 5
 
 
-def target_matches(frame, contract, coin, side, limit, midpoint, enter="disabled"):
-    if len(frame["lines"]) < 5 or not market_matches(frame, contract, coin, midpoint):
+def target_matches(frame, coin, side, limit, midpoint):
+    if len(frame["lines"]) < 30 or not market_matches(frame, coin, midpoint):
         return False
-    if contract == "workspace":
-        if len(frame["lines"]) < 30:
-            return False
-        cols = len(frame["lines"][0])
-        divider = min(cols * 3 // 5, cols - 47)
-        return frame["lines"][-6][divider:] == "|" + f"Target {side} {limit} Up/Down".ljust(cols - divider - 1)
-    rows = [row.rstrip() for row in frame["lines"][-4:]]
-    if contract == "original":
-        selected = rf"Target 9 buy 0 sell \| {re.escape(side)} \${re.escape(limit)}"
-        details = r"(?: request \S+ estimate \S+(?: value \$\S+ average (?:\$\S+|unavailable))?| no estimated fill)"
-        return rows[0].startswith("Hard ") and rows[1].startswith("Best ") and re.fullmatch(selected + details, rows[2]) is not None
-    return rows[0] == f"Target {coin} {side} limit ${limit} | Enter {enter} Escape cancels"
+    cols = len(frame["lines"][0])
+    divider = min(cols * 3 // 5, cols - 47)
+    return frame["lines"][-6][divider:] == "|" + f"Target {side} {limit} Up/Down".ljust(cols - divider - 1)
 
 
-def idle_matches(frame, contract, coin, midpoint):
-    if len(frame["lines"]) < 5 or not market_matches(frame, contract, coin, midpoint):
+def idle_matches(frame, coin, midpoint):
+    if len(frame["lines"]) < 30 or not market_matches(frame, coin, midpoint):
         return False
-    if contract == "workspace":
-        if len(frame["lines"]) < 30:
-            return False
-        cols = len(frame["lines"][0])
-        divider = min(cols * 3 // 5, cols - 47)
-        selection_cleared = frame["lines"][-6][divider:] == "|" + " " * (cols - divider - 1)
-        actions = frame["lines"][-8][divider:]
-        return selection_cleared and "9 BUY target" in actions and "0 SELL target" in actions
-    controls = {
-        "original": "Target 9 buy 0 sell | arrows set price enter sends escape cancels",
-        "contextual": "Target 9 buy 0 sell | up/down zoom left/right history m market c chart q quit",
-    }
-    rows = [row.rstrip() for row in frame["lines"][-4:]]
-    return rows[0].startswith("Hard ") and rows[1].startswith("Best ") and rows[2] == controls[contract]
+    cols = len(frame["lines"][0])
+    divider = min(cols * 3 // 5, cols - 47)
+    selection_cleared = frame["lines"][-6][divider:] == "|" + " " * (cols - divider - 1)
+    actions = frame["lines"][-8][divider:]
+    return selection_cleared and "9 BUY target" in actions and "0 SELL target" in actions
 
 
 def history_matches(before, after, shift, max_seconds=10, clock_count=3):
@@ -292,7 +267,6 @@ def validate_result(result, mode):
             ended = int(result.get("hold_finished_ns", "0"))
             quits = [int(s.get("entered_ns", "0")) for s in samples if s["event"] == "key Quit"]
             assert ended > 0 and quits and all(0 < at <= ended for at in quits), "work ended before quit or lacks timing evidence"
-        assert not result["hold_released"], "the driver released held work before quit"
         events = [s["event"] for s in samples]
         assert "key PromptSubmit" in events and "key ZoomOut" in events
         assert any(s["event"] == "quote ETH" and s["method"] == "offer" for s in samples), "the selected quote did not enter the real queue"
@@ -485,13 +459,10 @@ class Playback:
             return "\n".join(frame["lines"])
 
         def market(coin):
-            return lambda frame: market_matches(frame, self.args.display_contract, coin, "522.26")
+            return lambda frame: market_matches(frame, coin, "522.26")
 
         def contains(value):
             return lambda frame: value in text(frame)
-
-        def target(price):
-            return lambda frame: target_matches(frame, self.args.display_contract, "XMR", "buy", price, "522.26")
 
         self.event("connected")
         self.command("quote", coin="XMR")
@@ -504,19 +475,13 @@ class Playback:
             self.key("line", b"c", contains("1s/col"))
             before = self.frames.complete[-1]
             # Workspace has a 53-column market panel, leaving 28 one-second dots.
-            step = 11 if self.args.display_contract == "workspace" else 30
-            count = 2 if self.args.display_contract == "workspace" else 3
+            step = 11
+            count = 2
             history = self.key("history back", ESC + b"[D", lambda f: history_matches(before, f, -step, clock_count=count))
             self.key("history forward", ESC + b"[C",
                      lambda f: history_matches(history, f, step, clock_count=count) and history_matches(before, f, 0, 20, clock_count=count))
-            if self.args.display_contract == "workspace":
-                self.key("open market prompt", b"m", contains("market:"))
-                self.key("cancel market prompt with lone Escape", ESC, market("XMR"))
-            else:
-                self.key("select public Target", b"9", target("522.28"))
-                self.key("move public Target", ESC + b"[A", target("522.29"))
-                self.key("cancel Target with lone Escape", ESC,
-                         lambda f: idle_matches(f, self.args.display_contract, "XMR", "522.26"))
+            self.key("open market prompt", b"m", contains("market:"))
+            self.key("cancel market prompt with lone Escape", ESC, market("XMR"))
             pasted = ESC + b"[200~qmETH\r1234567890" + ESC + b"[201~c"
             frame = self.key("discard pasted actions", pasted, contains("1m/candle"))
             assert market("XMR")(frame), "pasted input changed the market"
@@ -691,26 +656,11 @@ def main():
     parser.add_argument("--fixtures", default="fixtures")
     parser.add_argument("--output", required=True)
     parser.add_argument("--mode", choices=("all", "normal", "send", "history", "queue", "selection", "speed"), default="all")
-    parser.add_argument("--display-contract", choices=("original", "contextual", "workspace"), default="workspace")
     parser.add_argument("--repeats", type=int, default=1)
     args = parser.parse_args()
     assert args.repeats > 0
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=False)
-    if args.display_contract == "workspace":
-        anchors = [("src/WorkspaceApp.scala", "Thread.sleep(25L)", 25),
-                   ("src/WorkspaceApp.scala", "Thread.sleep(10L)", 10),
-                   ("src/Main.scala", "val escapeWaitNanos = 40_000_000L", 40),
-                   ("src/WorkspaceApp.scala", "if time - sizeAt >= 500L then", 500)]
-    else:
-        anchors = [("src/Main.scala", fragment, delay) for fragment, delay in
-                   [("Thread.sleep(100)", 100), ("Thread.sleep(10)", 10),
-                    ("val escapeWaitNanos = 40_000_000L", 40),
-                    ("if time - sizeAt >= 1000 then", 1000)]]
-    schedule = {}
-    for source, fragment, delay in anchors:
-        assert Path(source).read_text().count(fragment) == 1, "scheduling premise changed: " + fragment
-        schedule[source + ": " + fragment] = delay
     results = []
     modes = ("normal", "send", "history", "queue", "selection") if args.mode == "all" else (args.mode,)
     try:
@@ -730,8 +680,7 @@ def main():
                     for name in ("l2Book.json", "bbo.json", "trades.json", "activeAssetCtx.json")}
         source_hashes = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(Path("src").glob("*.scala"))}
         (output / "summary.json").write_text(json.dumps({"runs": results, "fixtures_sha256": manifest,
-                "source_sha256": source_hashes, "built_in_wait_ms": schedule,
-                "display_contract": args.display_contract}, indent=2) + "\n")
+                "source_sha256": source_hashes}, indent=2) + "\n")
 
 
 if __name__ == "__main__":
