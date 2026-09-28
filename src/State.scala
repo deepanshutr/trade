@@ -4,10 +4,25 @@ enum Side:
   case Buy, Sell
 
 final case class Level(px: String, sz: String, n: Int)
-final case class Book(bids: Vector[Level], asks: Vector[Level], time: Long)
+final case class Book(bids: Vector[Level], asks: Vector[Level], time: Long):
+  def mid: Option[BigDecimal] =
+    def price(text: String): Option[BigDecimal] =
+      Option.when(text.length <= 80)(text).flatMap { value =>
+        value.toDoubleOption
+          .filter(n => n.isFinite && n > 0)
+          .flatMap(_ => scala.util.Try(BigDecimal(value)).toOption)
+      }
+    for
+      bid <- bids.headOption.flatMap(level => price(level.px))
+      ask <- asks.headOption.flatMap(level => price(level.px))
+      if bid <= ask
+    yield (bid + ask) / 2
 final case class Trade(time: Long, side: Side, px: String, sz: String, id: Option[Long] = None):
   val displaySize: Double = sz.toDouble
-final case class Candle(t: Long, o: Double, h: Double, l: Double, c: Double, v: Double)
+final case class Candle(t: Long, o: Double, h: Double, l: Double, c: Double, v: Double):
+  def valid: Boolean =
+    Vector(o, h, l, c).forall(n => n > 0 && n.isFinite) &&
+      v >= 0 && v.isFinite && l <= o && o <= h && l <= c && c <= h
 final case class Ctx(
     mark: String,
     oracle: String,
@@ -86,7 +101,6 @@ final case class Snapshot(
     refs: Map[String, Ref] = Map.empty,
     chartMode: ChartMode = ChartMode.Line,
     lineZoom: Int = 0,
-    referenceCoins: Vector[String] = State.refCoins,
     candleReceipts: Map[(String, String), Map[Long, Long]] = Map.empty,
     marketPending: Option[(Long, String)] = None,
     marketNotice: Option[String] = None,
@@ -94,19 +108,12 @@ final case class Snapshot(
 )
 
 object Snapshot:
-  def initial(
-      coin: String,
-      now: Long,
-      references: Vector[String] = State.refCoins
-  ): Snapshot =
-    val chosen = references.distinct
-    require(chosen.size <= 3, "choose at most three reference markets")
+  def initial(coin: String, now: Long): Snapshot =
     Snapshot(
       coin = coin,
       feed = Health.Down(now, now - 6000),
       since = now,
-      refs = chosen.map(_ -> Ref.empty).toMap,
-      referenceCoins = chosen
+      refs = State.refCoins.map(_ -> Ref.empty).toMap
     )
 
 object State:
@@ -169,8 +176,7 @@ object State:
     case Health.Down(_, t) => t
 
   def mid(b: Book): Option[Double] =
-    for bid <- b.bids.headOption; ask <- b.asks.headOption
-    yield (bid.px.toDouble + ask.px.toDouble) / 2
+    b.mid.map(_.toDouble)
 
   private def keep[A](ring: Vector[(Long, A)], sec: Long, ms: Long): Vector[(Long, A)] =
     val kept = ring.filter(_._1 >= sec - ms / 1000)

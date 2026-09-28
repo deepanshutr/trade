@@ -38,6 +38,8 @@ final case class OutlookView(
 )
 
 object Outlook:
+  private val baseMinimum = 100
+  private val matchedMinimum = 50
   val horizons: Vector[OutlookHorizon] = Vector(
     OutlookHorizon("LONG", "1h", 24),
     OutlookHorizon("MID", "15m", 16),
@@ -57,17 +59,12 @@ object Outlook:
       None,
       None,
       None,
-      HistoricalRate(0, 0, 100, available = false),
-      HistoricalRate(0, 0, 50, available = false)
+      HistoricalRate(0, 0, baseMinimum, available = false),
+      HistoricalRate(0, 0, matchedMinimum, available = false)
     )
 
   def empty(coin: String): OutlookView =
     OutlookView(coin, 0L, horizons.map(emptyColumn(_, "waiting")))
-
-  private def valid(c: Candle): Boolean =
-    Vector(c.o, c.h, c.l, c.c).forall(v => v > 0 && v.isFinite) &&
-      c.v >= 0 && c.v.isFinite && c.l <= c.o && c.o <= c.h &&
-      c.l <= c.c && c.c <= c.h
 
   private def average(cs: Vector[Candle]): Double =
     cs.zipWithIndex.foldLeft(0.0) { case (mean, (c, index)) =>
@@ -97,7 +94,7 @@ object Outlook:
     val points = grouped.collect {
       case (time, copies)
           if time % step == 0 && copies.forall(
-            valid
+            _.valid
           ) && copies.distinct.size == 1 =>
         time -> copies.head
     }
@@ -182,8 +179,8 @@ object Outlook:
               if touched then matchedHits += 1
     }
     val covered = samples > 0 && samples.toLong * 10 >= expected * 9
-    val base = HistoricalRate(hits, samples, 100, covered)
-    val matched = HistoricalRate(matchedHits, matches, 50, covered)
+    val base = HistoricalRate(hits, samples, baseMinimum, covered)
+    val matched = HistoricalRate(matchedHits, matches, matchedMinimum, covered)
     val status =
       if !covered then "gapped history"
       else if base.percent.isEmpty || matched.percent.isEmpty then "limited history"
@@ -251,7 +248,7 @@ object Outlook:
               .get(value.horizon.interval)
               .flatMap(_.lastOption)
               .filter(c => value.at.contains(c.t))
-            if current.exists(c => !valid(c)) then disabled(value, "invalid data")
+            if current.exists(c => !c.valid) then disabled(value, "invalid data")
             else
               val reached = value.target.exists { target =>
                 value.direction match

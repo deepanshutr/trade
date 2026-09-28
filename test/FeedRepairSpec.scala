@@ -123,13 +123,12 @@ class FeedRepairSpec extends munit.FunSuite:
       rest,
       new ConcurrentLinkedQueue[Event](),
       () => now.get(),
-      "XMR",
-      Vector.empty
+      "XMR"
     )
     feed.repairHistory()
     now.set(midnight + 61000L)
     feed.repairHistory()
-    assertEquals(requests.size(), 12)
+    assertEquals(requests.size(), 36)
   }
 
   test("failed and empty repairs retry after a minute without a new long-bar boundary") {
@@ -147,8 +146,7 @@ class FeedRepairSpec extends munit.FunSuite:
         rest,
         new ConcurrentLinkedQueue[Event](),
         () => now.get(),
-        "XMR",
-        Vector.empty
+        "XMR"
       )
       feed.repairHistory()
       val first = requests.size()

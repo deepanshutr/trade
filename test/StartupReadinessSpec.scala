@@ -72,7 +72,7 @@ class StartupReadinessSpec extends munit.FunSuite:
           def send(body: String): Unit = ()
           def close(): Unit = ()
     val feed =
-      new Feed(connector, rest, new ConcurrentLinkedQueue[Event](), () => at, "XMR", Vector.empty)
+      new Feed(connector, rest, new ConcurrentLinkedQueue[Event](), () => at, "XMR")
     val thread = new Thread(() =>
       try feed.runForever(_ => throw new InterruptedException())
       catch case _: InterruptedException => ()
@@ -104,7 +104,7 @@ class StartupReadinessSpec extends munit.FunSuite:
         connections.incrementAndGet()
         throw new java.io.IOException("test closes each connection")
     val feed =
-      new Feed(connector, rest, new ConcurrentLinkedQueue[Event](), () => at, "XMR", Vector.empty)
+      new Feed(connector, rest, new ConcurrentLinkedQueue[Event](), () => at, "XMR")
     final class Stop extends RuntimeException
     intercept[Stop] {
       feed.runForever(_ =>
@@ -136,7 +136,7 @@ class StartupReadinessSpec extends munit.FunSuite:
         new Socket:
           def send(body: String): Unit = ()
           def close(): Unit = closed.countDown()
-    val feed = new Feed(connector, rest, events, () => at, "XMR", Vector.empty)
+    val feed = new Feed(connector, rest, events, () => at, "XMR")
     val thread = new Thread(() =>
       try feed.runForever(_ => throw new InterruptedException())
       catch case _: InterruptedException => ()

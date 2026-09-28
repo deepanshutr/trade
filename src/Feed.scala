@@ -70,7 +70,7 @@ object Feed:
       )
     )
 
-  def subscriptions(c: String, referenceCoins: Vector[String] = State.refCoins): Vector[String] =
+  def subscriptions(c: String): Vector[String] =
     val main =
       Vector(
         sub("l2Book", c, "fast" -> ujson.Bool(true)),
@@ -79,13 +79,13 @@ object Feed:
         sub("activeAssetCtx", c)
       ) ++
         State.intervals.map(i => sub("candle", c, "interval" -> ujson.Str(i)))
-    val refs = referenceCoins.distinct.flatMap(r =>
+    val refs = State.refCoins.flatMap(r =>
       sub("bbo", r) +: State.intervals.map(i => sub("candle", r, "interval" -> ujson.Str(i)))
     )
     (main ++ refs).distinct
 
-  def unsubscriptions(c: String, referenceCoins: Vector[String] = State.refCoins): Vector[String] =
-    subscriptions(c, referenceCoins).map { text =>
+  def unsubscriptions(c: String): Vector[String] =
+    subscriptions(c).map { text =>
       val message = ujson.read(text)
       message("method") = "unsubscribe"
       ujson.write(message)
@@ -114,7 +114,6 @@ final class Feed(
     queue: java.util.Queue[Event],
     clock: () => Long,
     coin0: String,
-    referenceCoins: Vector[String] = State.refCoins,
     observer: Event => Unit = _ => (),
     monotonic: () => Long = () => System.nanoTime() / 1_000_000L
 ) extends MarketFeed:
@@ -162,9 +161,6 @@ final class Feed(
     def close(): Unit =
       thread.interrupt()
       thread.join(5000L)
-
-  private val references = referenceCoins.distinct
-  require(references.size <= 3, "choose at most three reference markets")
 
   private def push(e: Event): Unit =
     observer(e)
@@ -225,7 +221,7 @@ final class Feed(
                 true
               else false
             }
-            if accepted then Feed.subscriptions(coin, references).foreach(transmit(c, _))
+            if accepted then Feed.subscriptions(coin).foreach(transmit(c, _))
             else { val _ = Try(s.close()) }
             accepted
           }
@@ -353,7 +349,7 @@ final class Feed(
 
   def repairHistory(): Unit =
     val (generation, c) = synchronized { (marketGeneration, coin) }
-    (c +: references.filterNot(_ == c)).foreach(market =>
+    (c +: State.refCoins.filterNot(_ == c)).foreach(market =>
       State.intervals.foreach(i => history(market, i, () => generation == marketGeneration))
     )
 
@@ -385,12 +381,12 @@ final class Feed(
         }
         synchronized(current).foreach { c =>
           Feed
-            .unsubscriptions(old, references)
-            .diff(Feed.unsubscriptions(newCoin, references))
+            .unsubscriptions(old)
+            .diff(Feed.unsubscriptions(newCoin))
             .foreach(transmit(c, _))
           Feed
-            .subscriptions(newCoin, references)
-            .diff(Feed.subscriptions(old, references))
+            .subscriptions(newCoin)
+            .diff(Feed.subscriptions(old))
             .foreach(transmit(c, _))
         }
         true

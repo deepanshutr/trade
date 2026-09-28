@@ -70,14 +70,10 @@ object MarketArchive:
     finally listed.close()
 
   private def checked(saved: CandleCheckpoint): CandleCheckpoint =
-    require(saved.markets.size <= 32 && saved.markets.values.forall(_.forall { (i, cs) =>
-      State.intervals.contains(i) && cs.size <= State.seriesCap &&
-      cs.groupBy(_.t).values.forall(_.distinct.size == 1) && cs.forall(c =>
-        c.t >= 0 && Vector(c.o, c.h, c.l, c.c).forall(v =>
-          v > 0 && v.isFinite
-        ) && c.v >= 0 && c.v.isFinite && c.l <= c.o && c.o <= c.h &&
-          c.l <= c.c && c.c <= c.h
-      )
+    require(saved.markets.size <= State.marketHistoryLimit && saved.markets.values.forall(_.forall {
+      (i, cs) =>
+        State.intervals.contains(i) && cs.size <= State.seriesCap &&
+        cs.groupBy(_.t).values.forall(_.distinct.size == 1) && cs.forall(c => c.t >= 0 && c.valid)
     }))
     saved
 
@@ -128,7 +124,7 @@ final class MarketArchive private (
 ) extends AutoCloseable:
   import MarketArchive.{given, *}
   private var states = initial.markets.map { (coin, candles) =>
-    coin -> Snapshot.initial(coin, initial.at, Vector.empty).copy(candles = candles)
+    coin -> Snapshot.initial(coin, initial.at).copy(candles = candles)
   }
   private var output = Option.empty[(Path, FileChannel, Long)]
   private var lastAt = initial.at
@@ -203,12 +199,12 @@ final class MarketArchive private (
       event match
         case _: Event.CandleUpdate | _: Event.CandleHistory =>
           val kept =
-            if states.contains(item.coin) || states.size < 32 then states
+            if states.contains(item.coin) || states.size < State.marketHistoryLimit then states
             else
               states - states
                 .minBy(_._2.candles.valuesIterator.flatten.map(_.t).maxOption.getOrElse(0L))
                 ._1
-          val before = kept.getOrElse(item.coin, Snapshot.initial(item.coin, at, Vector.empty))
+          val before = kept.getOrElse(item.coin, Snapshot.initial(item.coin, at))
           states = kept.updated(item.coin, State.reduce(before, event, at))
         case _ => ()
       lastAt = at
@@ -220,7 +216,6 @@ final class MarketArchive private (
     val text = write(CandleCheckpoint(lastAt, states.map((coin, s) => coin -> s.candles)))
     val size = text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length.toLong
     require(size <= maximumBytes / 2, "candle checkpoint exceeds disk budget")
-    total = bytes
     if BigInt(total) + size > maximumBytes then closeChunk()
     else output.foreach { (_, channel, _) => channel.force(true) }
     prune(lastAt, size)

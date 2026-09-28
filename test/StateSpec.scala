@@ -18,45 +18,6 @@ class StateSpec extends munit.FunSuite:
     assertEquals(State.lastMsgAt(Snapshot.initial("X", t0).feed), t0 - 6000)
   }
 
-  test("initial snapshots keep their full cold state for each reference choice") {
-    val cases = Vector(
-      Snapshot.initial("XMR", t0) -> Vector("BTC", "PAXG"),
-      Snapshot.initial("XMR", t0, Vector.empty) -> Vector.empty,
-      Snapshot.initial("XMR", t0, Vector("BTC", "ETH", "BTC")) -> Vector("BTC", "ETH"),
-      Snapshot.initial("XMR", t0, Vector("ETH", "BTC", "PAXG")) -> Vector("ETH", "BTC", "PAXG")
-    )
-    for (actual, references) <- cases do
-      assertEquals(
-        actual,
-        Snapshot(
-          coin = "XMR",
-          book = None,
-          tape = Vector.empty,
-          candles = Map.empty,
-          ctx = None,
-          feed = Health.Down(t0, t0 - 6000),
-          bad = 0,
-          prompt = None,
-          quit = false,
-          samples = Vector.empty,
-          books = Vector.empty,
-          since = t0,
-          zoom = 0,
-          offsetSec = 0L,
-          cols = 100,
-          rows = 30,
-          coarse = Map.empty,
-          refs = references.map(_ -> Ref(Vector.empty, Map.empty)).toMap,
-          chartMode = ChartMode.Line,
-          lineZoom = 0,
-          referenceCoins = references
-        )
-      )
-    intercept[IllegalArgumentException] {
-      Snapshot.initial("XMR", t0, Vector("BTC", "ETH", "SOL", "PAXG"))
-    }
-  }
-
   test("a socket book marks the socket live and replaces the book") {
     val s = State.reduce(s0, Event.BookUpdate("XMR", b1, fromSocket = true), t0 + 10)
     assertEquals(s.book, Some(b1))

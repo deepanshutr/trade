@@ -236,7 +236,7 @@ final class Diagnostics private[desk] (
       case Event.CandleHistory(c, interval, candles, requestedAt)
           if State.intervals.contains(
             interval
-          ) && ((c == selected && verified) || after.referenceCoins.contains(c)) =>
+          ) && ((c == selected && verified) || State.refCoins.contains(c)) =>
         val retained =
           if c == selected then after.candles else after.refs.getOrElse(c, Ref.empty).candles
         emit(

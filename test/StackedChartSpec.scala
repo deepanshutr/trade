@@ -15,7 +15,7 @@ class StackedChartSpec extends munit.FunSuite:
       .renderMarket(
         s,
         cols,
-        rows - 13 - 3 * s.referenceCoins.distinct.count(_ != s.coin),
+        rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin),
         now,
         zone,
         style
@@ -25,13 +25,13 @@ class StackedChartSpec extends munit.FunSuite:
   private def draw(s: Snapshot, cols: Int = 100, rows: Int = 30): Vector[String] =
     market(s, cols, rows, now, ZoneOffset.UTC, Style.mono).map(Chart.plain)
   private def references(s: Snapshot): Vector[String] =
-    s.referenceCoins.distinct.filterNot(_ == s.coin)
+    State.refCoins.distinct.filterNot(_ == s.coin)
   private def mainEnd(s: Snapshot, rows: Int = 30): Int =
     1 + (rows - 13 - 3 * references(s).size)
 
   test("reference data changes the lower plots without changing the main plot") {
     val full = Golden.snapshot
-    val empty = full.copy(refs = full.referenceCoins.map(_ -> Ref.empty).toMap)
+    val empty = full.copy(refs = State.refCoins.map(_ -> Ref.empty).toMap)
     val withRefs = draw(full)
     val withoutRefs = draw(empty)
     val end = mainEnd(full)
@@ -59,21 +59,6 @@ class StackedChartSpec extends munit.FunSuite:
     assertEquals(draw(s).slice(16, 19), draw(changed).slice(16, 19))
   }
 
-  test("a configured third reference receives events and keeps its plot") {
-    val s = Snapshot.initial("XMR", now, Vector("BTC", "PAXG", "ETH", "ETH"))
-    assertEquals(s.referenceCoins, Vector("BTC", "PAXG", "ETH"))
-    val event = Event.BboUpdate("ETH", Level("2000", "1", 1), Level("2002", "1", 1), now)
-    val filled = State.reduce(s, event, now)
-    assertEquals(filled.refs("ETH").samples, Vector(now / 1000 -> 2001.0))
-    val frame = draw(filled)
-    assertEquals(frame.size, 20)
-    assert(frame.forall(_.length == 100))
-    assert(frame.exists(_.startsWith("ETH")))
-    intercept[IllegalArgumentException] {
-      Snapshot.initial("XMR", now, Vector("BTC", "PAXG", "ETH", "SOL"))
-    }
-  }
-
   test("reference scales show their prices and ignore main price movement") {
     val sec = now / 1000
     val s = Snapshot
@@ -94,14 +79,13 @@ class StackedChartSpec extends munit.FunSuite:
   test("a main reference has no duplicate plot and keeps history after a switch") {
     val cs = Vector(Candle(now - 60_000L, 1, 2, 0.5, 1.5, 3))
     val s = Snapshot
-      .initial("ETH", now, Vector("BTC", "PAXG", "ETH"))
+      .initial("BTC", now)
       .copy(candles = Map("1m" -> cs), prompt = Some("XMR"))
-    assertEquals(references(s), Vector("BTC", "PAXG"))
-    assert(!draw(s).drop(1).exists(_.startsWith("ETH")))
+    assertEquals(references(s), Vector("PAXG"))
+    assert(!draw(s).drop(1).exists(_.startsWith("BTC")))
     val switched = State.reduce(s, Event.Key(Command.PromptSubmit), now)
-    assertEquals(switched.referenceCoins, s.referenceCoins)
-    assertEquals(switched.refs("ETH").candles("1m"), cs)
-    assert(draw(switched).drop(1).exists(_.startsWith("ETH")))
+    assertEquals(switched.refs("BTC").candles("1m"), cs)
+    assert(draw(switched).drop(1).exists(_.startsWith("BTC")))
   }
 
   test("reference plots and main volume stay plain in colour mode") {
@@ -111,9 +95,9 @@ class StackedChartSpec extends munit.FunSuite:
     assert(!frame.exists(_.contains(Screen.esc + "[35m")))
   }
 
-  test("the lower charts retain dimensions at different sizes and without references") {
-    for refs <- Vector(Vector.empty[String], Vector("BTC"), Vector("BTC", "PAXG", "ETH")) do
-      val s = Golden.snapshot.copy(referenceCoins = refs)
+  test("the lower charts retain dimensions at different sizes and selected reference markets") {
+    for coin <- Vector("XMR", "BTC", "PAXG") do
+      val s = Golden.snapshot.copy(coin = coin)
       for (cols, rows) <- Vector((100, 30), (101, 31), (120, 40), (166, 50)) do
         val frame = draw(s, cols, rows)
         assertEquals(frame.size, rows - 10)

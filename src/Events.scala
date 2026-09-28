@@ -97,7 +97,7 @@ object Events:
       number(v("c")).toDouble,
       number(v("v"), zero = true).toDouble
     )
-    require(bar.l <= bar.o && bar.o <= bar.h && bar.l <= bar.c && bar.c <= bar.h)
+    require(bar.valid)
     bar
 
   private def ctx(c: ujson.Value): Ctx =

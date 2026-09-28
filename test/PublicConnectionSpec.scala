@@ -239,7 +239,6 @@ class PublicConnectionSpec extends munit.FunSuite:
       queue,
       () => 1_000_000L,
       "XMR",
-      State.refCoins,
       e => if e == Event.Pong then throw new Stop
     )
     val running = new Running(feed)

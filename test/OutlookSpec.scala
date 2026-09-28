@@ -25,7 +25,7 @@ class OutlookSpec extends munit.FunSuite:
 
   private def state(cs: Vector[Candle], interval: String = "5m"): Snapshot =
     Snapshot
-      .initial("BTC", 0L, Vector.empty)
+      .initial("BTC", 0L)
       .copy(candles = Map(interval -> cs))
 
   private def measured(

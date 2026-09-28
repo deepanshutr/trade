@@ -18,12 +18,7 @@ object Screen:
     else f"$x%.1f"
 
   private def midOf(b: Book): Option[String] =
-    for
-      a <- b.asks.headOption
-      d <- b.bids.headOption
-    yield ((BigDecimal(a.px) + BigDecimal(d.px)) / 2).bigDecimal
-      .stripTrailingZeros()
-      .toPlainString()
+    b.mid.map(_.bigDecimal.stripTrailingZeros().toPlainString)
 
   def stats(s: Snapshot, now: Long, cols: Int): String =
     val selection = s.marketPending
@@ -78,7 +73,7 @@ object Screen:
       style: Style,
       portfolio: PortfolioView = PortfolioView()
   ): MarketFrame =
-    val references = s.referenceCoins.distinct.filterNot(_ == s.coin)
+    val references = State.refCoins.distinct.filterNot(_ == s.coin)
     require(priceRows >= 3)
     val cells = Layout.cells(cols)
     val count = Layout.plotColumns(cols, s.chartMode)

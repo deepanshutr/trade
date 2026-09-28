@@ -10,7 +10,7 @@ class RefineMarketSpec extends munit.FunSuite:
     val history = Vector.tabulate(State.marketHistoryLimit) { i =>
       s"M$i" -> (if i == 0 then retained else Ref.empty)
     }
-    val original = Snapshot.initial("CURRENT", now, Vector.empty).copy(marketHistory = history)
+    val original = Snapshot.initial("CURRENT", now).copy(marketHistory = history)
     val returned = select(original, "M0")
     assertEquals(returned.candles.getOrElse("5m", Vector.empty), bars)
     assertEquals(returned.samples, retained.samples)
@@ -98,7 +98,7 @@ class RefineMarketSpec extends munit.FunSuite:
         Some(text)
     val connector = new Connector:
       def connect(onText: String => Unit, onClose: () => Unit): Socket = fail("network")
-    val venue = new Feed(connector, rest, queue, () => now, "XMR", Vector.empty)
+    val venue = new Feed(connector, rest, queue, () => now, "XMR")
     val token =
       OnchainMarket("TOKEN", "0x" + "1" * 40, "0x" + "2" * 40, Vector("https://example.invalid"))
     val chain = new OnchainFeed(Vector(token), _ => fail("network"), queue, () => now, "XMR")
@@ -150,7 +150,7 @@ class RefineMarketSpec extends munit.FunSuite:
         )
     val connector = new Connector:
       def connect(onText: String => Unit, onClose: () => Unit): Socket = fail("network")
-    val venue = new Feed(connector, rest, queue, () => now, "XMR", Vector.empty)
+    val venue = new Feed(connector, rest, queue, () => now, "XMR")
     val token =
       OnchainMarket("TOKEN", "0x" + "1" * 40, "0x" + "2" * 40, Vector("https://example.invalid"))
     val chain = new OnchainFeed(Vector(token), _ => fail("network"), queue, () => now, "XMR")
@@ -173,7 +173,8 @@ class RefineMarketSpec extends munit.FunSuite:
       repair.join(3000L)
       assert(!repair.isAlive, "replacement history stayed asleep")
       assertEquals(failures.asScala.toVector, Vector.empty)
-      val fiveMinute = requested.asScala.toVector.filter(_("interval").str == "5m")
+      val fiveMinute =
+        requested.asScala.toVector.filter(r => r("coin").str == "XMR" && r("interval").str == "5m")
       assertEquals(fiveMinute.size, 2, fiveMinute.toString)
       assert(
         fiveMinute.last("startTime").num.toLong <= bars.head.t,
