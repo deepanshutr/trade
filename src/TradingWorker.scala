@@ -20,7 +20,8 @@ final case class TradingView(
     leverage: Option[Int] = None,
     marginMode: Option[String] = None,
     outcomeId: Long = 0L,
-    portfolio: PortfolioView = PortfolioView()
+    portfolio: PortfolioView = PortfolioView(),
+    blockCode: BlockCode = BlockCode.Blocked
 ):
   def reference(side: Side): Option[BigDecimal] =
     if side == Side.Buy then ask else bid
@@ -163,18 +164,23 @@ final class TradingWorker private[desk] (
   def view: TradingView = synchronized {
     val paused = enabled && accountPaused()
     val block =
-      if disabled.get() then Some("Trading stopped")
-      else if !enabled then Some("View only")
-      else if paused then Some("Wallet change paused this account")
-      else if fatal || !config.configured then Some(message)
-      else if !connected then Some("connection disconnected")
-      else if rules.isEmpty then Some("waiting for market data")
-      else if exact.isEmpty || touch.isEmpty then Some("waiting for selected depth")
-      else if !touch.exists(t => t.bid > 0 && t.ask > t.bid) then Some("invalid selected quote")
-      else if !marketReady then Some("selected depth stale")
-      else if secret.isEmpty then Some(message)
-      else if leverageReady && !requiredLeverage then Some("Set XMR leverage to 5x")
-      else if !accountReady || waitingRefresh then Some("account data stale")
+      if disabled.get() then Some(ExecutionBlock(BlockCode.Blocked, "Trading stopped"))
+      else if !enabled then Some(ExecutionBlock(BlockCode.Blocked, "View only"))
+      else if paused then
+        Some(ExecutionBlock(BlockCode.Blocked, "Wallet change paused this account"))
+      else if fatal || !config.configured then Some(ExecutionBlock(BlockCode.Blocked, message))
+      else if !connected then Some(ExecutionBlock(BlockCode.Connection, "connection disconnected"))
+      else if rules.isEmpty then Some(ExecutionBlock(BlockCode.Market, "waiting for market data"))
+      else if exact.isEmpty || touch.isEmpty then
+        Some(ExecutionBlock(BlockCode.Prices, "waiting for selected depth"))
+      else if !touch.exists(t => t.bid > 0 && t.ask > t.bid) then
+        Some(ExecutionBlock(BlockCode.Prices, "invalid selected quote"))
+      else if !marketReady then Some(ExecutionBlock(BlockCode.Prices, "selected depth stale"))
+      else if secret.isEmpty then Some(ExecutionBlock(BlockCode.Blocked, message))
+      else if leverageReady && !requiredLeverage then
+        Some(ExecutionBlock(BlockCode.Leverage, "Set XMR leverage to 5x"))
+      else if !accountReady || waitingRefresh then
+        Some(ExecutionBlock(BlockCode.Account, "account data stale"))
       else None
     TradingView(
       coin,
@@ -187,7 +193,7 @@ final class TradingWorker private[desk] (
       touch.map(_.bid),
       touch.map(_.ask),
       lastPlan,
-      block,
+      block.map(_.text),
       outcome,
       Option.when(leverageReady)(activeLeverage),
       Option.when(leverageReady)(activeMode),
@@ -198,7 +204,8 @@ final class TradingWorker private[desk] (
           case ("unifiedAccount" | "portfolioMargin", cash, _) => cash
           case _                                               => None
         })
-      else PortfolioView()
+      else PortfolioView(),
+      blockCode = block.fold(BlockCode.Blocked)(_.code)
     )
   }
 

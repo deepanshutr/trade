@@ -64,36 +64,41 @@ final class PaperWorker(
   private def metadataFresh(age: Long): Boolean =
     val elapsed = BigInt(monotonic()) - metadataAt
     metadata.nonEmpty && elapsed >= 0 && elapsed <= age
-  private def block: Option[String] =
-    if closed.get() then Some("Paper closed. Restart Desk")
-    else if !ledger.available then Some("Paper storage unavailable. Restart to recover")
-    else if !connected && !backup then Some("Reconnecting. Waiting for fresh prices")
-    else if rules.isEmpty || !metadataFresh(60000L) then Some("Paper waiting for market details")
-    else if book.isEmpty || touch.isEmpty then Some("Paper waiting for selected-market depth")
+  private def blockReason: Option[ExecutionBlock] =
+    if closed.get() then Some(ExecutionBlock(BlockCode.Blocked, "Paper closed. Restart Desk"))
+    else if !ledger.available then
+      Some(ExecutionBlock(BlockCode.Storage, "Paper storage unavailable. Restart to recover"))
+    else if !connected && !backup then
+      Some(ExecutionBlock(BlockCode.Connection, "Reconnecting. Waiting for fresh prices"))
+    else if rules.isEmpty || !metadataFresh(60000L) then
+      Some(ExecutionBlock(BlockCode.Market, "Paper waiting for market details"))
+    else if book.isEmpty || touch.isEmpty then
+      Some(ExecutionBlock(BlockCode.Prices, "Paper waiting for selected-market depth"))
     else if !touch.exists(t =>
         t.bidPrice > 0 && t.askPrice > t.bidPrice && t.bidSize > 0 && t.askSize > 0
       )
-    then Some("Paper quote invalid. Waiting for prices")
+    then Some(ExecutionBlock(BlockCode.Prices, "Paper quote invalid. Waiting for prices"))
     else if !book.exists(b =>
         fresh(b._2) && (!backup || (BigInt(wall()) - b._1.time).abs <= config.quoteAgeMs)
       ) || !touch.exists(t => fresh(t.receivedAt))
-    then Some("Paper prices stale. Waiting for fresh depth")
+    then Some(ExecutionBlock(BlockCode.Prices, "Paper prices stale. Waiting for fresh depth"))
     else if !book.exists(b =>
         touch.exists(t => (BigInt(b._1.time) - BigInt(t.time)).abs <= config.quoteAgeMs)
       )
-    then Some("Paper depth behind quote. Waiting for depth")
+    then Some(ExecutionBlock(BlockCode.Prices, "Paper depth behind quote. Waiting for depth"))
     else None
+  private def block: Option[String] = blockReason.map(_.text)
   private def ready: Boolean = block.isEmpty
   def account: PaperAccount = ledger.account
   def view: TradingView = synchronized {
     val account = ledger.account
-    val reason = block
+    val reason = blockReason
     val dataReady = reason.isEmpty
     val working = pending.get()
     val elapsed = ((BigInt(monotonic()) - pendingAt).max(BigInt(0)) / 1000)
     val message = if working then s"PAPER $stage ${elapsed}s | $pendingCoin"
     else if dataReady then (if backup then "Paper ready: backup prices" else "Paper ready")
-    else reason.get
+    else reason.get.text
     TradingView(
       coin,
       Some(account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0))),
@@ -104,7 +109,7 @@ final class PaperWorker(
       touch.map(_.bidPrice),
       touch.map(_.askPrice),
       lastPlan,
-      reason,
+      reason.map(_.text),
       outcome,
       outcomeId = outcomeId,
       portfolio = if ledger.available then
@@ -113,7 +118,8 @@ final class PaperWorker(
           coin,
           Option.when(dataReady)(touch.map(_.midpoint)).flatten
         )
-      else PortfolioView()
+      else PortfolioView(),
+      blockCode = reason.fold(BlockCode.Blocked)(_.code)
     )
   }
   def select(next: String): Unit = synchronized {

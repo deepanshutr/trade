@@ -25,12 +25,13 @@ class PaperStatusSpec extends munit.FunSuite:
         true
       )
     )
-    def blocked(): Unit =
+    def blocked(code: BlockCode): Unit =
       val view = worker.view
       assert(!view.ready)
       assertEquals(view.block, Some(view.message))
+      assertEquals(view.blockCode, code)
     try
-      blocked()
+      blocked(BlockCode.Connection)
       worker.start()
       worker.observe(Event.SocketUp)
       publish()
@@ -39,20 +40,20 @@ class PaperStatusSpec extends munit.FunSuite:
       assert(worker.view.ready)
       assertEquals(worker.view.message, "Paper ready")
       clock.addAndGet(1001)
-      blocked()
+      blocked(BlockCode.Prices)
       publish()
       assert(worker.view.ready)
       assertEquals(worker.view.message, "Paper ready")
       worker.observe(Event.SocketDown)
-      blocked()
+      blocked(BlockCode.Connection)
       worker.observe(Event.SocketUp)
-      blocked()
+      blocked(BlockCode.Prices)
       clock.incrementAndGet()
       publish()
       assert(worker.view.ready)
       assertEquals(worker.view.message, "Paper ready")
       worker.select("BTC")
-      blocked()
+      blocked(BlockCode.Market)
       assertEquals(ledger.account.count, 0L)
     finally worker.close()
   }
