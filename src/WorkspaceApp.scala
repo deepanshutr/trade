@@ -133,14 +133,7 @@ object WorkspaceApp:
       case _                                            => { val _ = measure() }
 
   private def background(name: String)(body: => Unit): Thread =
-    val thread = new Thread(
-      () => {
-        try body
-        catch case _: InterruptedException => ()
-      },
-      name
-    )
-    thread.setDaemon(true)
+    val thread = Threads.daemon(name)(body)
     thread.start()
     thread
 

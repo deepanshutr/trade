@@ -140,22 +140,18 @@ final class Feed(
   private final class StartupLookup(val selection: (String, Long)):
     val done = new CountDownLatch(1)
     @volatile var result = Option.empty[Either[String, Unit]]
-    val thread = new Thread(
-      () =>
-        try
-          val found = checkMarket(selection._1)
-          Feed.this.synchronized {
-            result = Some(found)
-            if relevant && found == Left(Feed.unknownMarket) then
-              current.foreach(c => end(c, Feed.unknownMarket))
-              connectionStatus = Feed.unknownMarket
-              push(Event.MarketUnavailable(selection._1, Feed.unknownMarket))
-          }
-        catch case _: InterruptedException => ()
-        finally done.countDown(),
-      "market-check"
-    )
-    thread.setDaemon(true)
+    val thread = Threads.daemon("market-check") {
+      try
+        val found = checkMarket(selection._1)
+        Feed.this.synchronized {
+          result = Some(found)
+          if relevant && found == Left(Feed.unknownMarket) then
+            current.foreach(c => end(c, Feed.unknownMarket))
+            connectionStatus = Feed.unknownMarket
+            push(Event.MarketUnavailable(selection._1, Feed.unknownMarket))
+        }
+      finally done.countDown()
+    }
     def relevant: Boolean = selection == ((coin, selectionGeneration))
     def permitsConnection: Boolean = !relevant || !result.contains(Left(Feed.unknownMarket))
     def close(): Unit =

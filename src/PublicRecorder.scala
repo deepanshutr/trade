@@ -22,34 +22,30 @@ final class PublicRecorder(archive: MarketArchive, wall: () => Long, capacity: I
   }
   def start(): Unit = synchronized {
     if !stopping.get() && running.compareAndSet(false, true) then
-      val worker = new Thread(
-        () => {
-          var checkpointAt = wall()
-          try
-            while !stopping.get() || !queue.isEmpty do
-              val item = queue.poll(250, TimeUnit.MILLISECONDS)
-              if item != null then
-                if dropped.getAndSet(0L) > 0 then archive.record(Event.Bad, item._2)
-                archive.record(item._1, item._2)
-              if wall() - checkpointAt >= 10000L then
-                archive.checkpoint()
-                checkpointAt = wall()
-                text = "Public capture saved " + archive.bytes / 1000000L + " MB"
-            if dropped.getAndSet(0L) > 0 then archive.record(Event.Bad, wall())
-            archive.close()
-            text = "Public capture saved"
-          catch
-            case _: Exception =>
-              text = "Public capture failed. History has a gap"
-              try archive.close()
-              catch case _: Exception => ()
-          finally
-            stopping.set(true)
-            running.set(false)
-        },
-        "public-recorder"
-      )
-      worker.setDaemon(true)
+      val worker = Threads.daemon("public-recorder") {
+        var checkpointAt = wall()
+        try
+          while !stopping.get() || !queue.isEmpty do
+            val item = queue.poll(250, TimeUnit.MILLISECONDS)
+            if item != null then
+              if dropped.getAndSet(0L) > 0 then archive.record(Event.Bad, item._2)
+              archive.record(item._1, item._2)
+            if wall() - checkpointAt >= 10000L then
+              archive.checkpoint()
+              checkpointAt = wall()
+              text = "Public capture saved " + archive.bytes / 1000000L + " MB"
+          if dropped.getAndSet(0L) > 0 then archive.record(Event.Bad, wall())
+          archive.close()
+          text = "Public capture saved"
+        catch
+          case _: Exception =>
+            text = "Public capture failed. History has a gap"
+            try archive.close()
+            catch case _: Exception => ()
+        finally
+          stopping.set(true)
+          running.set(false)
+      }
       thread = Some(worker)
       worker.start()
   }

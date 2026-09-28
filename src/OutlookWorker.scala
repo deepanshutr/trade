@@ -66,27 +66,21 @@ final class OutlookWorker(
 
   def start(): Unit = synchronized {
     if !closed.get() && started.compareAndSet(false, true) then
-      val worker = new Thread(
-        () => {
-          try
-            while !closed.get() do
-              try refresh()
-              catch
-                case _: InterruptedException => throw new InterruptedException()
-                case _: Exception            =>
-                  val failed = Outlook.empty(snapshot().coin)
-                  publish(
-                    failed.copy(
-                      calculatedAt = wall(),
-                      columns = failed.columns.map(_.copy(status = "failed"))
-                    )
-                  )
-              Thread.sleep(1000L)
-          catch case _: InterruptedException => ()
-        },
-        "market-outlook"
-      )
-      worker.setDaemon(true)
+      val worker = Threads.daemon("market-outlook") {
+        while !closed.get() do
+          try refresh()
+          catch
+            case _: InterruptedException => throw new InterruptedException()
+            case _: Exception            =>
+              val failed = Outlook.empty(snapshot().coin)
+              publish(
+                failed.copy(
+                  calculatedAt = wall(),
+                  columns = failed.columns.map(_.copy(status = "failed"))
+                )
+              )
+          Thread.sleep(1000L)
+      }
       thread = Some(worker)
       worker.start()
   }

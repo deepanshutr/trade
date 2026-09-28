@@ -292,8 +292,6 @@ object Chart:
       if clamp then (if bid then ink.dropRight(1) + ">" else ">" + ink.drop(1)) else ink
     if bid then marked.padTo(Layout.barW, ' ') else rjust(marked, Layout.barW)
 
-  private def lowerMedian(xs: Vector[Double]): Double = xs.sorted.apply((xs.size - 1) / 2)
-
   def percentile(xs: Vector[Double], q: Double): Double =
     val sorted = xs.sorted
     sorted(((sorted.size - 1) * q).toInt.min(sorted.size - 1))
@@ -310,7 +308,7 @@ object Chart:
       case (Some(b), Some(a)) =>
         val (depth, isBid) = depthRows(spans(b, coarse), a)
         val nz = depth.toVector.filter(_ > 0)
-        val u = if nz.isEmpty then 1.0 else lowerMedian(nz)
+        val u = if nz.isEmpty then 1.0 else percentile(nz, 0.5)
         val p95 = if nz.isEmpty then 1.0 else percentile(nz, 0.95)
         val r = if p95 > u then p95 else nz.maxOption.getOrElse(1.0)
         val dec = decimals(a.hi)
