@@ -4,6 +4,23 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import scala.jdk.CollectionConverters.*
 
 class FeedSpec extends munit.FunSuite:
+  test("feed JSON preserves quoted and escaped market names as string values") {
+    val coin = "odd\"\\market"
+    val reference = "ref\"\\name"
+    val subscriptions = Feed.subscriptions(coin, Vector(reference)).map(ujson.read(_))
+    assertEquals(subscriptions.map(_("subscription")("coin").str).toSet, Set(coin, reference))
+    val removed = Feed.unsubscriptions(coin, Vector(reference)).map(ujson.read(_))
+    assert(removed.forall(_("method").str == "unsubscribe"))
+    assertEquals(removed.map(_("subscription")), subscriptions.map(_("subscription")))
+    assertEquals(ujson.read(Feed.historyBody(coin, "1m", 1000L))("req")("coin").str, coin)
+    assertEquals(ujson.read(Feed.coarseBody(coin, 4))("coin").str, coin)
+    val rest = restAnswering()
+    val feed =
+      new Feed(new FakeConnector, rest, new ConcurrentLinkedQueue[Event](), () => 1000L, coin)
+    feed.poll()
+    assertEquals(ujson.read(rest.bodies.asScala.head)("coin").str, coin)
+  }
+
   final class FakeSocket extends Socket:
     val sent = new ConcurrentLinkedQueue[String]()
     @volatile var closed = false

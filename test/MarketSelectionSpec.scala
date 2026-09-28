@@ -60,6 +60,24 @@ class MarketSelectionSpec extends munit.FunSuite:
       workers.foreach(_.join(3000))
       assert(workers.forall(!_.isAlive), "selection test left a worker running")
 
+  test("colon market names are refused visibly before any lookup or market switch") {
+    val f = new Fixture(coin => Some(MarketSelectionSpec.bookResponse(coin)))
+    try
+      f.choose("xyz:TSLA")
+      f.drain()
+      assertEquals(
+        f.state.get().marketNotice,
+        Some("Colon markets are not supported. Press m to retry")
+      )
+      assert(Screen.stats(f.state.get(), 1000L, 100).contains("Colon markets are not supported"))
+      assertEquals(f.state.get().coin, "XMR")
+      assertEquals(f.state.get().book, f.initial.book)
+      assertEquals(f.state.get().marketPending, None)
+      assertEquals(f.requested.size(), 0)
+      assertEquals(f.selected.size(), 0)
+    finally f.close()
+  }
+
   test("an unknown market never replaces the current chart or execution market") {
     val f = new Fixture(_ => Some("null"))
     try
