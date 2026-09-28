@@ -383,10 +383,13 @@ class Playback:
     def read_receipts(self):
         path = self.state_directory / "order-results.jsonl"
         if path.exists():
-            for line in path.read_text().splitlines(keepends=True):
+            for line in path.read_text(errors="replace").splitlines(keepends=True):
                 if not line.endswith("\n"):
                     break  # A concurrent append has not completed yet.
-                value = json.loads(line)
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # A previous append may have torn before its newline.
                 key = value["id"]
                 assert key not in self.receipts or self.receipts[key] == value, "receipt changed"
                 self.receipts[key] = value

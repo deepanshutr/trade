@@ -61,6 +61,20 @@ class PlaybackSpec(unittest.TestCase):
             run.read_receipts()
             self.assertEqual(len(run.receipts), 600)
 
+    def test_receipts_skip_torn_lines_and_keep_later_records(self):
+        with tempfile.TemporaryDirectory() as root:
+            run = object.__new__(playback.Playback)
+            run.state_directory = Path(root)
+            run.receipts, run.clicks = {}, []
+            record = {"id": "saved", "kind": "order", "text": "Order pending"}
+            path = Path(root) / "order-results.jsonl"
+            path.write_bytes(b'{"id":"torn\n' + json.dumps(record).encode() + b'\n{"id":')
+            run.read_receipts()
+            self.assertEqual(list(run.receipts.values()), [record])
+            path.write_bytes(b'{"text":"\xe2\n' + json.dumps(record).encode() + b'\n')
+            run.read_receipts()
+            self.assertEqual(list(run.receipts.values()), [record])
+
     def test_settling_keeps_quotes_paced_even_when_output_is_always_ready(self):
         run = object.__new__(playback.Playback)
         clock = [0.0]
