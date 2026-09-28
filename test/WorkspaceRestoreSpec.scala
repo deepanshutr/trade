@@ -35,14 +35,98 @@ class WorkspaceRestoreSpec extends munit.FunSuite:
     assert(!cleanup.restore())
   }
 
-  test("failed terminal entry closes diagnostics through the shared cleanup") {
-    var diagnosticsClosed = false
+  test("failed terminal entry runs the real shared cleanup list including diagnostics") {
+    val closed = scala.collection.mutable.ArrayBuffer.empty[String]
+    def close(name: String): AutoCloseable = () => { closed += name; () }
     val result = WorkspaceApp.enterTerminal(
       () => throw new IllegalStateException("no terminal"),
-      () => diagnosticsClosed = true
+      () =>
+        WorkspaceApp.closeAll(
+          close("outlook"),
+          close("announcements"),
+          Some(close("recorder")),
+          close("worker"),
+          close("controller"),
+          close("history"),
+          close("diagnostics")
+        )
     )
     assert(result.isFailure)
-    assert(diagnosticsClosed, "diagnostics remained open")
+    assertEquals(
+      closed.toVector,
+      Vector(
+        "outlook",
+        "announcements",
+        "recorder",
+        "worker",
+        "controller",
+        "history",
+        "diagnostics"
+      )
+    )
+  }
+
+  for failClose <- Vector(false, true) do
+    test(s"main thread reports and exits 1 after restore, cleanup failure=$failClose") {
+      val events = scala.collection.mutable.ArrayBuffer.empty[String]
+      val cleanup = new WorkspaceApp.Restoration(
+        () => if failClose then throw new IllegalArgumentException("private close detail"),
+        () => { events += "terminal"; () }
+      )
+      val error = intercept[Exception] {
+        try throw new IllegalStateException("private render detail")
+        finally cleanup.restore()
+      }
+      val main = Thread.currentThread()
+      val handler = WorkspaceApp.failureHandler(
+        cleanup,
+        main,
+        (_, _) => { events += "record"; () },
+        message => { events += message; () },
+        status => { events += s"exit:$status"; () }
+      )
+      handler.uncaughtException(main, error)
+      assertEquals(
+        events.toVector,
+        Vector("terminal", "record", "Desk stopped: " + error.getClass.getSimpleName, "exit:1")
+      )
+    }
+
+  test("background handler records and returns quietly while restore is held") {
+    val closing = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val returned = new CountDownLatch(1)
+    val recorded = new AtomicBoolean(false)
+    val reported = new AtomicBoolean(false)
+    val exited = new AtomicBoolean(false)
+    val cleanup = new WorkspaceApp.Restoration(
+      () => { closing.countDown(); release.await() },
+      () => ()
+    )
+    val handler = WorkspaceApp.failureHandler(
+      cleanup,
+      Thread.currentThread(),
+      (_, _) => recorded.set(true),
+      _ => reported.set(true),
+      _ => exited.set(true)
+    )
+    val first = new Thread(() => { cleanup.restore(); () })
+    val second = new Thread(() => {
+      handler.uncaughtException(Thread.currentThread(), new IllegalStateException("background"))
+      returned.countDown()
+    })
+    first.start()
+    try
+      assert(closing.await(2, TimeUnit.SECONDS))
+      second.start()
+      assert(returned.await(2, TimeUnit.SECONDS), "handler waited for cleanup")
+      assert(recorded.get())
+      assert(!reported.get())
+      assert(!exited.get())
+    finally
+      release.countDown()
+      first.join(2000)
+      second.join(2000)
   }
 
   test("terminal restoration still runs when close fails") {

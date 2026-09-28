@@ -18,6 +18,39 @@ object WorkspaceApp:
         true
     }
 
+  private[desk] def failureHandler(
+      restoration: Restoration,
+      mainThread: Thread,
+      record: (Thread, Throwable) => Unit,
+      report: String => Unit,
+      exit: Int => Unit
+  ): Thread.UncaughtExceptionHandler = (thread, error) =>
+    record(thread, error)
+    def stop(): Unit =
+      report("Desk stopped: " + error.getClass.getSimpleName)
+      exit(1)
+    if thread eq mainThread then
+      try restoration.restore()
+      finally stop()
+    else if !restoration.started && restoration.restore() then stop()
+
+  private[desk] def closeAll(
+      outlook: AutoCloseable,
+      announcements: AutoCloseable,
+      recorder: Option[AutoCloseable],
+      worker: AutoCloseable,
+      controller: AutoCloseable,
+      history: AutoCloseable,
+      diagnostics: AutoCloseable
+  ): Unit =
+    outlook.close()
+    announcements.close()
+    recorder.foreach(_.close())
+    worker.close()
+    controller.close()
+    history.close()
+    diagnostics.close()
+
   private[desk] def enterTerminal(
       enter: () => String,
       closeAll: () => Unit
@@ -258,14 +291,15 @@ object WorkspaceApp:
           "data",
           "Saved public candles could not be loaded. Available exchange history will be requested"
         )
-      def closeAll(): Unit =
-        outlook.close()
-        announcements.close()
-        recorder.foreach(_.close())
-        worker.close()
-        controller.close()
-        history.close()
-        diagnostics.close()
+      def closeAll(): Unit = WorkspaceApp.closeAll(
+        outlook,
+        announcements,
+        recorder,
+        worker,
+        controller,
+        history,
+        diagnostics
+      )
       val saved = enterTerminal(() => Term.enterRaw(), () => closeAll()).getOrElse {
         System.err.println("desk needs a terminal")
         sys.exit(1)
@@ -281,12 +315,15 @@ object WorkspaceApp:
       )
       def restore(): Unit = { restoration.restore(); () }
       Runtime.getRuntime.addShutdownHook(new Thread(() => restore()))
-      Thread.setDefaultUncaughtExceptionHandler { (thread, error) =>
-        diagnostics.failure(Diagnostics.component(thread.getName), error)
-        if !restoration.started && restoration.restore() then
-          System.err.println("Desk stopped: " + error.getClass.getSimpleName)
-          sys.exit(1)
-      }
+      Thread.setDefaultUncaughtExceptionHandler(
+        failureHandler(
+          restoration,
+          Thread.currentThread(),
+          (thread, error) => diagnostics.failure(Diagnostics.component(thread.getName), error),
+          message => System.err.println(message),
+          status => sys.exit(status)
+        )
+      )
       val actualSize = new AtomicReference(Term.size())
       val pendingPrompts = new AtomicInteger(0)
       val inputLock = new Object
