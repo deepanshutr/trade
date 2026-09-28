@@ -195,8 +195,9 @@ object Onchain:
         (interval, candle)
       }
 
-/** Polls the shown on-chain market. Its books and candles mark that market fresh in the snapshot's
-  * health field, which Screen and Alerts read. Its own connection state supplies its status line.
+/** Polls the shown on-chain market. Its books, trades and candles mark that market fresh in the
+  * snapshot's health field, which Screen and Alerts read. Its own connection state supplies its
+  * status line.
   */
 final class OnchainFeed(
     markets: Vector[OnchainMarket],

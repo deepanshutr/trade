@@ -142,8 +142,18 @@ class OutlookSpec extends munit.FunSuite:
   test(
     "anchors stay on calendar boundaries instead of restarting from the first observation"
   ) {
-    val result = measured(candles(offset = 11 * shortStep))
+    val cs = candles(offset = 11 * shortStep)
+    val result = measured(cs)
     assertEquals(result.base.samples, 99)
+    // The first complete outcome opens at 72 bars and the last closes at 1260.
+    // Isolated touches on either side pin the boundaries even if the count agrees.
+    val quiet = cs.map(c => c.copy(h = c.c)).updated(cs.size - 1, cs.last.copy(h = 100000))
+    for (open, hits) <- Vector(71 -> 0, 72 -> 1, 1259 -> 1, 1260 -> 0) do
+      val index = open - 11
+      val touched = quiet.updated(index, quiet(index).copy(h = 100000))
+      val counted = measured(touched).base
+      assertEquals(counted.samples, 99)
+      assertEquals(counted.hits, hits, s"touch at bar $open")
   }
 
   test("an unfinished last outcome is not counted") {
