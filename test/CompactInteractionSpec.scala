@@ -100,5 +100,11 @@ class CompactInteractionSpec extends munit.FunSuite:
     for f <- Vector(escape, button) do
       f.key(Command.Mode("LIVE"))
       assertEquals(f.controller.panel.modeReview, None)
-      assert(!f.draw().buttons.exists(_.action == DeskAction.ConfirmMode("LIVE")))
+      val frame = f.draw()
+      assert(!frame.buttons.exists(_.action == DeskAction.ConfirmMode("LIVE")))
+      val live = frame.buttons.find(_.action == DeskAction.Mode("LIVE")).get
+      f.key(Command.Cancel)
+      f.key(Command.PointerPress(live.x, live.y, 0))
+      f.key(Command.Pointer(live.x, live.y, 0))
+      assertEquals(f.controller.panel.modeReview, None, "Escape must refuse an old frame click")
   }
