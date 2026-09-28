@@ -1,23 +1,12 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicInteger
 
-class StartupReadinessSpec extends munit.FunSuite:
+class StartupReadinessSpec extends TempDirectorySuite:
   private val at = 1800000000000L
-  private val temporaryDirectories = scala.collection.mutable.ArrayBuffer.empty[java.nio.file.Path]
   private def temporary(prefix: String): java.nio.file.Path =
-    val path = Files.createTempDirectory("desk-startup-" + prefix)
-    temporaryDirectories += path
-    path
-  override def afterAll(): Unit =
-    import scala.jdk.CollectionConverters.*
-    temporaryDirectories.foreach { directory =>
-      val paths = Files.walk(directory)
-      try paths.iterator().asScala.toVector.reverse.foreach(path => Files.delete(path))
-      finally paths.close()
-    }
+    tempDirectory("desk-startup-" + prefix)
 
   test("a transient first metadata miss retries promptly while usable prices are present") {
     val calls = new AtomicInteger(0)

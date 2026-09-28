@@ -1,9 +1,8 @@
 package desk
 
 import java.nio.file.{Files, Path}
-import scala.jdk.CollectionConverters.*
 
-class PaperWalletRecoverySpec extends munit.FunSuite:
+class PaperWalletRecoverySpec extends TempDirectorySuite:
   private def savedWallet(directory: Path): Path =
     val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     val plan = OrderPlan("XMR", 0, Side.Buy, OrderKind.Hard, 1, 100, 100, 1, 100, Some(100), 1)
@@ -12,12 +11,8 @@ class PaperWalletRecoverySpec extends munit.FunSuite:
     directory.resolve("wallet-mainnet.json")
 
   private def withDirectory(run: Path => Unit): Unit =
-    val directory = Files.createTempDirectory("desk-wallet-recovery-")
-    try run(directory)
-    finally
-      val paths = Files.walk(directory)
-      try paths.iterator().asScala.toVector.reverse.foreach(path => Files.delete(path))
-      finally paths.close()
+    val directory = tempDirectory("desk-wallet-recovery-")
+    run(directory)
 
   test("a held legacy account lock leaves the separate wallet usable and single-writer") {
     withDirectory { directory =>

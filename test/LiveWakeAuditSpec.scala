@@ -1,11 +1,9 @@
 package desk
 
-import java.nio.file.Files
-import scala.jdk.CollectionConverters.*
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicInteger
 
-class LiveWakeAuditSpec extends munit.FunSuite:
+class LiveWakeAuditSpec extends TempDirectorySuite:
   test("a burst of account wakes coalesces behind one held account read") {
     val key = Array.fill[Byte](32)(1)
     val owner = "0x" + "2" * 40
@@ -16,7 +14,7 @@ class LiveWakeAuditSpec extends munit.FunSuite:
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)
     val second = new CountDownLatch(1)
-    val directory = Files.createTempDirectory("desk-live-wake-audit-")
+    val directory = tempDirectory("desk-live-wake-audit-")
     val exchange = new Exchange:
       def watch(
           coin: String,
@@ -100,9 +98,5 @@ class LiveWakeAuditSpec extends munit.FunSuite:
       assertEquals(maximumActiveReads.get(), 1, "account reads overlapped")
     finally
       release.countDown()
-      try worker.close()
-      finally
-        val paths = Files.walk(directory)
-        try paths.iterator().asScala.toVector.reverse.foreach(Files.deleteIfExists(_))
-        finally paths.close()
+      worker.close()
   }

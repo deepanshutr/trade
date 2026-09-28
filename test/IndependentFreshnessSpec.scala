@@ -23,7 +23,7 @@ object FreshnessProcessProbe:
         require(Files.exists(root.resolve("release")), "held request was not released")
     }
 
-class IndependentFreshnessSpec extends munit.FunSuite:
+class IndependentFreshnessSpec extends TempDirectorySuite:
   override val munitTimeout = 60.seconds
   private val at = 1800000000000L
   private val metadata =
@@ -218,7 +218,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
   private class PaperFixture(held: BigDecimal = BigDecimal(0)):
     val now = new AtomicLong(at)
     val config = TradingConfig()
-    val root = Files.createTempDirectory("review-paper-")
+    val root = tempDirectory("review-paper-")
     if held > 0 then
       LocalFiles.write(
         root.resolve("wallet-mainnet.json"),
@@ -412,7 +412,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
           Some(at - (count - 1L) * State.intervalMs(interval))
         )
         assertEquals(PublicRequestBudget.cost(body), expected)
-    val root = Files.createTempDirectory("review-dispatch-")
+    val root = tempDirectory("review-dispatch-")
     val now = new AtomicLong(at)
     val budget = new PublicRequestBudget(root, () => now.get())
     for weight <- Vector(1, 2, 3, 20, 21, 103, 104) do
@@ -440,7 +440,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
   test(
     "interrupting an expensive gate waiter cannot reserve credit or release another owner's gate"
   ) {
-    val root = Files.createTempDirectory("review-gate-interrupt-")
+    val root = tempDirectory("review-gate-interrupt-")
     val now = new AtomicLong(at)
     val budget = new PublicRequestBudget(root, () => now.get())
     val errors = new ConcurrentLinkedQueue[Throwable]()
@@ -484,7 +484,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
   }
 
   test("separate processes hold expensive transport exclusively while selected depth passes") {
-    val root = Files.createTempDirectory("review-expensive-processes-")
+    val root = tempDirectory("review-expensive-processes-")
     val children = scala.collection.mutable.ArrayBuffer.empty[(String, Process)]
     def child(role: String): Process =
       val process = new ProcessBuilder(

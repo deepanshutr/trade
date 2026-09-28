@@ -1,9 +1,8 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 
-class PaperReviewSpec extends munit.FunSuite:
+class PaperReviewSpec extends TempDirectorySuite:
   test("paper review lifetime is bounded without timestamp overflow") {
     val now = 1800000000000L
     val rest = new Rest:
@@ -11,7 +10,7 @@ class PaperReviewSpec extends munit.FunSuite:
         assertEquals(ujson.read(body), ujson.Obj("type" -> "meta"))
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("desk-paper-review-expiry"),
+      tempDirectory("desk-paper-review-expiry"),
       "mainnet",
       BigDecimal(10000),
       BigDecimal(0)

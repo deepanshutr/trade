@@ -1,10 +1,9 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 
-class MetadataReadinessSpec extends munit.FunSuite:
+class MetadataReadinessSpec extends TempDirectorySuite:
   private val at = 1800000000000L
   private val valid =
     """{"universe":[{"name":"XMR","szDecimals":3,"maxLeverage":5},{"name":"BTC","szDecimals":4,"maxLeverage":10}]}"""
@@ -17,7 +16,7 @@ class MetadataReadinessSpec extends munit.FunSuite:
         calls.incrementAndGet()
         respond()
     val config = TradingConfig()
-    val path = Files.createTempDirectory("desk-metadata-readiness-")
+    val path = tempDirectory("desk-metadata-readiness-")
     val ledger = PaperLedger.open(path, "mainnet", config.paperBalance, config.paperFee)
     val worker =
       new PaperWorker(config, "XMR", ledger, rest, () => time.get(), () => time.get(), initial)
@@ -33,9 +32,6 @@ class MetadataReadinessSpec extends munit.FunSuite:
     quote()
     def close(): Unit =
       worker.close()
-      val files = Files.walk(path)
-      try files.sorted(java.util.Comparator.reverseOrder()).forEach(p => Files.delete(p))
-      finally files.close()
 
   test("a syntactically valid but malformed first response does not suppress retries") {
     val count = new AtomicInteger(0)

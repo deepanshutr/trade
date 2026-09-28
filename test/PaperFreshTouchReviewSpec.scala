@@ -1,17 +1,16 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-class PaperFreshTouchReviewSpec extends munit.FunSuite:
+class PaperFreshTouchReviewSpec extends TempDirectorySuite:
   private val start = 1800000000000L
 
   private class Fixture(side: Side):
     val buy = side == Side.Buy
     val clock = new AtomicLong(start)
     val config = TradingConfig()
-    val directory = Files.createTempDirectory("touch-")
+    val directory = tempDirectory("touch-")
     val held = if buy then BigDecimal(0) else BigDecimal(10)
     if held > 0 then
       LocalFiles.write(

@@ -1,15 +1,14 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-class PaperBoundaryReviewSpec extends munit.FunSuite:
+class PaperBoundaryReviewSpec extends TempDirectorySuite:
   private val start = 1800000000000L
 
   private class Fixture(val held: BigDecimal = BigDecimal(0)):
     val clock = new AtomicLong(start)
-    val directory = Files.createTempDirectory("boundary-")
+    val directory = tempDirectory("boundary-")
     val config = TradingConfig()
     if held > 0 then
       LocalFiles.write(

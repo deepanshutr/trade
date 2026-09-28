@@ -2,14 +2,14 @@ package desk
 
 import java.nio.file.Files
 
-class PaperSpec extends munit.FunSuite:
+class PaperSpec extends TempDirectorySuite:
   private def plan(side: Side, quantity: String, price: String): OrderPlan =
     val q = BigDecimal(quantity)
     val p = BigDecimal(price)
     OrderPlan("XMR", 0, side, OrderKind.Hard, q, p, p, q, q * p, Some(p), BigDecimal(0))
 
   test("paper fills charge fees and persist cash, average entry and realized outcome") {
-    val directory = Files.createTempDirectory("desk-paper-test")
+    val directory = tempDirectory("desk-paper-test")
     val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
       assert(ledger.fill(plan(Side.Buy, "2", "100"), 1000L).isRight)
@@ -30,7 +30,7 @@ class PaperSpec extends munit.FunSuite:
 
   test("partial fills use actual depth quantity and reject excess exposure without mutation") {
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("desk-paper-test"),
+      tempDirectory("desk-paper-test"),
       "testnet",
       BigDecimal(1000),
       BigDecimal("0.001")
@@ -61,7 +61,7 @@ class PaperSpec extends munit.FunSuite:
   }
 
   test("paper account refuses a second writer and corruption never resets a balance") {
-    val directory = Files.createTempDirectory("desk-paper-test")
+    val directory = tempDirectory("desk-paper-test")
     val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
       intercept[Exception](

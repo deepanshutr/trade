@@ -6,15 +6,11 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.TimeUnit
 
-class AccountGateSpec extends munit.FunSuite:
+class AccountGateSpec extends TempDirectorySuite:
   private val owner = "0x" + "1" * 40
   private def fixture(body: Path => Unit): Unit =
-    val root = Files.createTempDirectory("desk-account-gate-")
-    try body(root)
-    finally
-      val paths = Files.walk(root)
-      try paths.sorted(java.util.Comparator.reverseOrder()).forEach(Files.deleteIfExists(_))
-      finally paths.close()
+    val root = tempDirectory("desk-account-gate-")
+    body(root)
 
   test("a paused owner never enters the order callback and another owner can trade") {
     fixture { root =>

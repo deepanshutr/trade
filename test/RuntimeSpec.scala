@@ -1,9 +1,8 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 
-class RuntimeSpec extends munit.FunSuite:
+class RuntimeSpec extends TempDirectorySuite:
 
   test("paper execution uses public data, requires reviewed plan and refuses stale books") {
     var time = 1800000000000L
@@ -13,7 +12,7 @@ class RuntimeSpec extends munit.FunSuite:
         requested.add(ujson.read(body)("type").str)
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("desk-paper-execution"),
+      tempDirectory("desk-paper-execution"),
       "mainnet",
       BigDecimal(10000),
       BigDecimal("0.0005")
@@ -46,7 +45,7 @@ class RuntimeSpec extends munit.FunSuite:
   }
 
   test("background recorder saves queued public events and a restart can load its checkpoint") {
-    val directory = Files.createTempDirectory("desk-recorder-worker")
+    val directory = tempDirectory("desk-recorder-worker")
     val time = 1800000000000L
     val recorder = new PublicRecorder(MarketArchive.open(directory), () => time)
     recorder.start()

@@ -14,17 +14,12 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
     val clock = new AtomicLong(epoch)
     val writes = new AtomicInteger()
     val closedLeases = new AtomicInteger()
-    val constructor =
-      classOf[PaperLedger].getDeclaredConstructors.find(_.getParameterCount == 4).get
-    constructor.setAccessible(true)
-    val ledger = constructor
-      .newInstance(
-        initial,
-        BigDecimal("0.001"),
-        ((next: PaperAccount) => { persist(next); val _ = writes.incrementAndGet(); () }),
-        new AutoCloseable { def close(): Unit = { val _ = closedLeases.incrementAndGet(); () } }
-      )
-      .asInstanceOf[PaperLedger]
+    val ledger = new PaperLedger(
+      initial,
+      BigDecimal("0.001"),
+      ((next: PaperAccount) => { persist(next); val _ = writes.incrementAndGet(); () }),
+      new AutoCloseable { def close(): Unit = { val _ = closedLeases.incrementAndGet(); () } }
+    )
     val rest = new Rest:
       def post(body: String): Option[String] =
         require(ujson.read(body) == ujson.Obj("type" -> "meta"))
@@ -158,9 +153,6 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
         }
         f.settled()
         assertEquals(f.ledger.account.count, 1L)
-        println(
-          s"newest visible quantity=0.01 side=$side queued=$queued moved=$moved receipt=${f.worker.view.outcome}"
-        )
         assertEquals(
           f.ledger.account.positions("XMR").quantity,
           if side == Side.Buy then BigDecimal("0.01") else BigDecimal("9.99"),
@@ -186,7 +178,6 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
         f.publish(epoch + 1L)
         assert(f.worker.submitReviewed(f.review(side)))
         f.settled()
-        println(s"delayed full book side=$side receipt=${f.worker.view.outcome}")
         assertEquals(
           f.ledger.account.positions("XMR").quantity,
           if side == Side.Buy then BigDecimal("10.01") else BigDecimal("9.99")

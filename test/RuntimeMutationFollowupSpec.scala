@@ -5,13 +5,13 @@ import java.util.concurrent.{ArrayBlockingQueue, CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicInteger
 import scala.jdk.CollectionConverters.*
 
-class RuntimeMutationFollowupSpec extends munit.FunSuite:
+class RuntimeMutationFollowupSpec extends TempDirectorySuite:
   private def await(latch: CountDownLatch, label: String): Unit =
     val ready = latch.await(5, TimeUnit.SECONDS)
     assert(ready, label)
 
   test("close saves a dropped marker published after the consumer drained its last queued event") {
-    val directory = Files.createTempDirectory("desk-recorder-final-gap-mutation")
+    val directory = tempDirectory("desk-recorder-final-gap-mutation")
     val startupEntered = new CountDownLatch(1)
     val releaseStartup = new CountDownLatch(1)
     val failedOfferEntered = new CountDownLatch(1)

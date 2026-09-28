@@ -11,12 +11,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
       fee: BigDecimal,
       save: PaperAccount => Unit
   ): PaperLedger =
-    val constructor =
-      classOf[PaperLedger].getDeclaredConstructors.find(_.getParameterCount == 4).get
-    constructor.setAccessible(true)
-    constructor
-      .newInstance(initial, fee, save, new AutoCloseable { def close(): Unit = () })
-      .asInstanceOf[PaperLedger]
+    new PaperLedger(initial, fee, save, new AutoCloseable { def close(): Unit = () })
 
   private class Fixture(
       initial: PaperAccount,

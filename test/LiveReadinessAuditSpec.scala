@@ -1,11 +1,10 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
-class LiveReadinessAuditSpec extends munit.FunSuite:
-  private val root = Files.createTempDirectory("desk-live-readiness-")
+class LiveReadinessAuditSpec extends TempDirectorySuite:
+  private val root = suiteDirectory("desk-live-readiness-")
   private val metadata = ujson.Obj(
     "universe" -> ujson.Arr(
       ujson.Obj("name" -> "XMR", "szDecimals" -> 3, "maxLeverage" -> 5)
@@ -30,7 +29,7 @@ class LiveReadinessAuditSpec extends munit.FunSuite:
     val reads = new AtomicInteger()
     val posts = new AtomicInteger()
     val secondRead = new CountDownLatch(1)
-    val directory = Files.createTempDirectory(root, "case-")
+    val directory = tempDirectory("case-", parent = Some(root))
     private var activeReceive: Option[ujson.Value] => Unit = _ => ()
     def renewActive(): Unit = activeReceive(
       Some(
@@ -149,9 +148,6 @@ class LiveReadinessAuditSpec extends munit.FunSuite:
       val view = f.worker.view
       assertEquals(f.reads.get(), 1)
       assertEquals(view.position, Some(BigDecimal(0)))
-      println(
-        s"FIRST_SNAPSHOT ready=${view.ready} block=${view.block} clock=${f.clock.get()}"
-      )
       assert(
         view.ready,
         "key preparation time was incorrectly counted as account snapshot age"
@@ -226,9 +222,6 @@ class LiveReadinessAuditSpec extends munit.FunSuite:
       )
       reader.start()
       val responsive = readerReturned.await(1, TimeUnit.SECONDS)
-      println(
-        s"MODE_SWITCH screenReturnedWithin1s=$responsive readerState=${reader.getState}"
-      )
       assert(
         responsive,
         "the real worker join held the router monitor and prevented drawing"
@@ -251,9 +244,6 @@ class LiveReadinessAuditSpec extends munit.FunSuite:
       assert(f.worker.submit(OrderIntent(Side.Buy, OrderKind.Hard), "XMR"))
       Wait.until("fake order did not complete")(f.worker.view.outcome.nonEmpty)
       val began = f.secondRead.await(300, TimeUnit.MILLISECONDS)
-      println(
-        s"POST_RESULT accountReadWithin300ms=$began reads=${f.reads.get()} posts=${f.posts.get()}"
-      )
       assert(began, "completed order waited for the fixed account poll sleep")
     finally f.worker.close()
   }

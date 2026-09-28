@@ -3,7 +3,7 @@ package desk
 import java.io.IOException
 import java.nio.file.Files
 
-class OrderJournalSpec extends munit.FunSuite:
+class OrderJournalSpec extends TempDirectorySuite:
   private val identity = "mainnet-" + "1" * 40
   private def plan: OrderPlan =
     val b = Book(Vector(Level("99", "50", 1)), Vector(Level("100", "50", 1)), 1L)
@@ -21,7 +21,7 @@ class OrderJournalSpec extends munit.FunSuite:
       .get
 
   test("an unresolved press survives restart and blocks replacement") {
-    val dir = Files.createTempDirectory("desk-journal")
+    val dir = tempDirectory("desk-journal")
     val first = OrderJournal.open(dir, identity)
     val saved = first.reserve(plan, 1000L)
     assertEquals(saved.nonce, 1000L)
@@ -42,7 +42,7 @@ class OrderJournalSpec extends munit.FunSuite:
   }
 
   test("only one process owner can hold a signing state") {
-    val dir = Files.createTempDirectory("desk-lock")
+    val dir = tempDirectory("desk-lock")
     val first = OrderJournal.open(dir, identity)
     try intercept[Exception](OrderJournal.open(dir, identity))
     finally first.close()
@@ -50,7 +50,7 @@ class OrderJournalSpec extends munit.FunSuite:
   }
 
   test("a failed reservation writes no request and consumes no nonce") {
-    val dir = Files.createTempDirectory("desk-write")
+    val dir = tempDirectory("desk-write")
     val journal = OrderJournal.open(dir, identity, () => throw new IOException("held"))
     try
       intercept[IOException](journal.reserve(plan, 1000L))
@@ -62,7 +62,7 @@ class OrderJournalSpec extends munit.FunSuite:
   }
 
   test("a failed completion keeps the previous unresolved record") {
-    val dir = Files.createTempDirectory("desk-finish")
+    val dir = tempDirectory("desk-finish")
     var fail = false
     val journal = OrderJournal.open(dir, identity, () => if fail then throw new IOException("held"))
     val saved = journal.reserve(plan, 1000L)
@@ -76,7 +76,7 @@ class OrderJournalSpec extends munit.FunSuite:
   }
 
   test("failure after replacement can leave disk ahead of memory") {
-    val dir = Files.createTempDirectory("desk-replaced")
+    val dir = tempDirectory("desk-replaced")
     val journal =
       OrderJournal.open(dir, identity, afterReplace = () => throw new IOException("held"))
     try
@@ -91,7 +91,7 @@ class OrderJournalSpec extends munit.FunSuite:
   }
 
   test("leverage nonces persist without replacing an unresolved order") {
-    val dir = Files.createTempDirectory("desk-nonce")
+    val dir = tempDirectory("desk-nonce")
     val journal = OrderJournal.open(dir, identity)
     assertEquals(journal.nextNonce(1000L), 1000L)
     journal.close()
@@ -105,7 +105,7 @@ class OrderJournalSpec extends munit.FunSuite:
   }
 
   test("malformed saved state cannot be overwritten as a clean start") {
-    val dir = Files.createTempDirectory("desk-corrupt")
+    val dir = tempDirectory("desk-corrupt")
     val file = dir.resolve(identity + ".json")
     Files.writeString(file, "broken")
     Files.setPosixFilePermissions(

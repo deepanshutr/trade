@@ -5,7 +5,7 @@ import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 import scala.collection.mutable.ArrayBuffer
 
-class RefineDiagnosticsSpec extends munit.FunSuite:
+class RefineDiagnosticsSpec extends TempDirectorySuite:
   private class Memory extends Diagnostics.Sink:
     private val saved = ArrayBuffer.empty[String]
     def append(line: String): Unit = synchronized { saved += line }
@@ -94,26 +94,21 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
   test(
     "linked files are rejected before opening and before rotation without changing their targets"
   ) {
-    val directory = Files.createTempDirectory("desk-diagnostic-links-")
+    val directory = tempDirectory("desk-diagnostic-links-")
     val target = directory.resolve("target")
     LocalFiles.write(target, "preserved")
     val events = directory.resolve("events-3.jsonl")
+    Files.createSymbolicLink(events, target)
+    intercept[IllegalArgumentException](new Diagnostics.FilesSink(directory, 256L))
+    assertEquals(Files.readString(target), "preserved")
+    Files.delete(events)
+    val sink = new Diagnostics.FilesSink(directory, 256L)
     try
+      sink.append("x" * 200)
       Files.createSymbolicLink(events, target)
-      intercept[IllegalArgumentException](new Diagnostics.FilesSink(directory, 256L))
+      intercept[IllegalArgumentException](sink.append("y" * 100))
       assertEquals(Files.readString(target), "preserved")
-      Files.delete(events)
-      val sink = new Diagnostics.FilesSink(directory, 256L)
-      try
-        sink.append("x" * 200)
-        Files.createSymbolicLink(events, target)
-        intercept[IllegalArgumentException](sink.append("y" * 100))
-        assertEquals(Files.readString(target), "preserved")
-      finally sink.close()
-    finally
-      val files = Files.walk(directory)
-      try files.sorted(java.util.Comparator.reverseOrder()).forEach(p => Files.delete(p))
-      finally files.close()
+    finally sink.close()
   }
 
   test("write exceptions are visible and cannot escape into the application") {
@@ -154,25 +149,18 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
   }
 
   test("rotation stays within four private complete files and preserves unrelated files") {
-    val directory = Files.createTempDirectory("desk-diagnostics-test-")
+    val directory = tempDirectory("desk-diagnostics-test-")
+    LocalFiles.write(directory.resolve("unrelated"), "preserved")
+    val sink = new Diagnostics.FilesSink(directory, 256L)
     try
-      LocalFiles.write(directory.resolve("unrelated"), "preserved")
-      val sink = new Diagnostics.FilesSink(directory, 256L)
-      try
-        (1 to 100).foreach(n =>
-          sink.append(ujson.write(ujson.Obj("event" -> "test", "count" -> n)))
-        )
-      finally sink.close()
-      val paths = (0 until 4).map(i => directory.resolve(s"events-$i.jsonl"))
-      assert(paths.forall(p => TradingConfig.privateFile(p) && Files.size(p) <= 256L))
-      paths.foreach(p =>
-        Files.readString(p).linesIterator.foreach(line => assert(ujson.read(line).obj.nonEmpty))
-      )
-      assertEquals(Files.readString(directory.resolve("unrelated")), "preserved")
-    finally
-      val files = Files.walk(directory)
-      try files.sorted(java.util.Comparator.reverseOrder()).forEach(p => Files.delete(p))
-      finally files.close()
+      (1 to 100).foreach(n => sink.append(ujson.write(ujson.Obj("event" -> "test", "count" -> n))))
+    finally sink.close()
+    val paths = (0 until 4).map(i => directory.resolve(s"events-$i.jsonl"))
+    assert(paths.forall(p => TradingConfig.privateFile(p) && Files.size(p) <= 256L))
+    paths.foreach(p =>
+      Files.readString(p).linesIterator.foreach(line => assert(ujson.read(line).obj.nonEmpty))
+    )
+    assertEquals(Files.readString(directory.resolve("unrelated")), "preserved")
   }
 
   test("shutdown is bounded even when a writer ignores interruption") {

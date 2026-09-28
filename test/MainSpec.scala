@@ -4,7 +4,7 @@ import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch, LinkedBlocki
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
 import scala.jdk.CollectionConverters.*
 
-class MainSpec extends munit.FunSuite:
+class MainSpec extends TempDirectorySuite:
   test("conflicting or repeated audio flags explain the choice") {
     for flags <- Seq(
         Seq("--chime", "--mute"),
@@ -226,7 +226,7 @@ class MainSpec extends munit.FunSuite:
   }
 
   test("a missing default settings file uses defaults but an explicit path stays explicit") {
-    val home = java.nio.file.Files.createTempDirectory("desk-home")
+    val home = tempDirectory("desk-home")
     assertEquals(Main.configPath(Main.Args("XMR", false), home), None)
     val directory = home.resolve(".config/desk")
     java.nio.file.Files.createDirectories(directory)

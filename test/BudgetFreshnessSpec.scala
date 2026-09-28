@@ -5,11 +5,11 @@ import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 import scala.jdk.CollectionConverters.*
 
-class BudgetFreshnessSpec extends munit.FunSuite:
+class BudgetFreshnessSpec extends TempDirectorySuite:
   private val at = 1800000000000L
 
   test("a depth request can pass while a cold history request earns its allowance") {
-    val directory = Files.createTempDirectory("fresh-budget-")
+    val directory = tempDirectory("fresh-budget-")
     val clock = new AtomicLong(at)
     val history = new PublicRequestBudget(directory, () => clock.get())
     val prices = new PublicRequestBudget(directory, () => clock.get())
@@ -29,7 +29,7 @@ class BudgetFreshnessSpec extends munit.FunSuite:
   }
 
   test("old large reservations remain charged rather than resetting the shared allowance") {
-    val directory = Files.createTempDirectory("fresh-legacy-")
+    val directory = tempDirectory("fresh-legacy-")
     val clock = new AtomicLong(at)
     val old = new PublicRequestBudget(directory, () => clock.get())
     val current = new PublicRequestBudget(directory, () => clock.get())
@@ -40,7 +40,7 @@ class BudgetFreshnessSpec extends munit.FunSuite:
   }
 
   test("the expensive request gate remains held through transport while prices can pass") {
-    val directory = Files.createTempDirectory("fresh-transport-")
+    val directory = tempDirectory("fresh-transport-")
     val clock = new AtomicLong(at)
     val first = new PublicRequestBudget(directory, () => clock.get())
     val second = new PublicRequestBudget(directory, () => clock.get())
@@ -81,7 +81,7 @@ class BudgetFreshnessSpec extends munit.FunSuite:
   }
 
   test("interruption keeps earned credits and releases the expensive gate") {
-    val directory = Files.createTempDirectory("fresh-interrupt-")
+    val directory = tempDirectory("fresh-interrupt-")
     val clock = new AtomicLong(at)
     val budget = new PublicRequestBudget(directory, () => clock.get())
     var sent = false

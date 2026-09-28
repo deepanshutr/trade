@@ -1,10 +1,9 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-class PaperBackupSpec extends munit.FunSuite:
+class PaperBackupSpec extends TempDirectorySuite:
 
   private final class Fixture:
     val now = new AtomicLong(1800000000000L)
@@ -12,7 +11,7 @@ class PaperBackupSpec extends munit.FunSuite:
       def post(body: String): Option[String] =
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("backup-"),
+      tempDirectory("backup-"),
       "mainnet",
       BigDecimal(10000),
       BigDecimal(0)
@@ -138,7 +137,7 @@ class PaperBackupSpec extends munit.FunSuite:
         reads += 1
         if reads == 1 then now - 1 else now
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("backup-clock-step"),
+      tempDirectory("backup-clock-step"),
       "mainnet",
       config.paperBalance,
       config.paperFee

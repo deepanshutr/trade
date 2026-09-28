@@ -44,9 +44,6 @@ class LiveMetadataRecoveryAuditSpec extends munit.FunSuite:
         val acceptedInvalid = worker.acceptedMetadata.nonEmpty
         assertEquals(worker.view.rules, None)
         refresh.invoke(worker)
-        println(
-          s"LIVE_METADATA kind=$label acceptedInvalid=$acceptedInvalid attempts=${attempts.get()} rules=${worker.view.rules}"
-        )
         assertEquals(attempts.get(), 2, "one malformed result suppressed the next metadata read")
         assertEquals(worker.view.rules, Some(MarketRules(0, 3, 5)))
         assert(!acceptedInvalid, "malformed metadata was published as an accepted snapshot")
@@ -96,7 +93,6 @@ class LiveMetadataRecoveryAuditSpec extends munit.FunSuite:
       refresh.invoke(worker)
       worker.select("BTC")
       refresh.invoke(worker)
-      println(s"LIVE_METADATA_SWITCH attempts=${attempts.get()} rules=${worker.view.rules}")
       assertEquals(attempts.get(), 2, "malformed selected limits stayed cached")
       assertEquals(worker.view.rules, Some(MarketRules(1, 5, 40)))
     finally worker.close()

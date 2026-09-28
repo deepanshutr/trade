@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import scala.jdk.CollectionConverters.*
 
-class PaperFlowReviewSpec extends munit.FunSuite:
+class PaperFlowReviewSpec extends TempDirectorySuite:
   private val start = 1800000000000L
   private val meta =
     """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5},{"name":"BTC","szDecimals":2,"maxLeverage":40}]}"""
@@ -18,7 +18,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       held: BigDecimal = BigDecimal(0)
   ):
     val clock = new AtomicLong(start)
-    val directory = Files.createTempDirectory("flow-")
+    val directory = tempDirectory("flow-")
     val syntheticKey = Array.fill[Byte](32)(1)
     val config = TradingConfig(
       owner = Option.when(configured)("0x" + "1" * 40),

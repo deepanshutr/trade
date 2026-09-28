@@ -1,25 +1,19 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.{AtomicLong, AtomicReference}
 import scala.util.control.NonFatal
 
-class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
+class PaperPersistenceBoundaryReviewSpec extends TempDirectorySuite:
 
   private class Fixture(persist: PaperAccount => Unit):
     val clock = new AtomicLong(1800000000000L)
-    val constructor =
-      classOf[PaperLedger].getDeclaredConstructors.find(_.getParameterCount == 4).get
-    constructor.setAccessible(true)
-    val ledger = constructor
-      .newInstance(
-        PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
-        BigDecimal(0),
-        persist,
-        new AutoCloseable { def close(): Unit = () }
-      )
-      .asInstanceOf[PaperLedger]
+    val ledger = new PaperLedger(
+      PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
+      BigDecimal(0),
+      persist,
+      new AutoCloseable { def close(): Unit = () }
+    )
     val rest = new Rest:
       def post(body: String): Option[String] =
         require(ujson.read(body) == ujson.Obj("type" -> "meta"))
@@ -59,7 +53,7 @@ class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
       live,
       _ => throw new IllegalStateException("unexpected live worker"),
       rest,
-      Files.createTempDirectory("persist-boundary-"),
+      tempDirectory("persist-boundary-"),
       () => clock.get(),
       () => clock.get()
     )

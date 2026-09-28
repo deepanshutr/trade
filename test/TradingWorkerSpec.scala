@@ -4,7 +4,7 @@ import java.nio.file.Files
 import java.util.concurrent.{CountDownLatch, LinkedBlockingQueue, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
-class TradingWorkerSpec extends munit.FunSuite:
+class TradingWorkerSpec extends TempDirectorySuite:
   private def workspaceText(view: TradingView): String =
     val controller = new DeskController(
       PanelView(mode = "LIVE"),
@@ -98,7 +98,7 @@ class TradingWorkerSpec extends munit.FunSuite:
         )
       )
     )
-    val directory = Files.createTempDirectory("desk-worker")
+    val directory = tempDirectory("desk-worker")
     val exchange = new Exchange:
       def watch(
           coin: String,
@@ -441,7 +441,7 @@ class TradingWorkerSpec extends munit.FunSuite:
   test(
     "a durable pause which wins before the gate prevents reservation and posting"
   ) {
-    val root = Files.createTempDirectory("desk-worker-account-")
+    val root = tempDirectory("desk-worker-account-")
     val owner = "0x" + "2" * 40
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)
@@ -473,16 +473,10 @@ class TradingWorkerSpec extends munit.FunSuite:
     finally
       release.countDown()
       f.close()
-      val paths = Files.walk(root)
-      try
-        paths
-          .sorted(java.util.Comparator.reverseOrder())
-          .forEach(Files.deleteIfExists(_))
-      finally paths.close()
   }
 
   test("the real account lock remains held until the exchange call finishes") {
-    val root = Files.createTempDirectory("desk-worker-account-")
+    val root = tempDirectory("desk-worker-account-")
     val owner = "0x" + "2" * 40
     val f =
       new Fixture(orderPermission = run => AccountGate.withOrder(root, "mainnet", owner)(run()))
@@ -507,14 +501,7 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.release.countDown()
       Wait.until("order did not finish")(f.worker.view.message.contains("filled"))
       Wait.until("account lock was not released")(probe() == 0)
-    finally
-      f.close()
-      val paths = Files.walk(root)
-      try
-        paths
-          .sorted(java.util.Comparator.reverseOrder())
-          .forEach(Files.deleteIfExists(_))
-      finally paths.close()
+    finally f.close()
   }
 
   test("a wallet change which wins the account lock stops a queued order") {

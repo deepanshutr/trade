@@ -5,13 +5,13 @@ import java.time.ZoneId
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 
-class TradeProgressSpec extends munit.FunSuite:
+class TradeProgressSpec extends TempDirectorySuite:
   private val start = 1800000000000L
 
   private class Paper(balance: BigDecimal = BigDecimal(10000), fee: BigDecimal = BigDecimal(0)):
     val clock = new AtomicLong(start)
     val ledger =
-      PaperLedger.open(Files.createTempDirectory("trade-progress-"), "mainnet", balance, fee)
+      PaperLedger.open(tempDirectory("trade-progress-"), "mainnet", balance, fee)
     val worker = new PaperWorker(
       TradingConfig(),
       "XMR",

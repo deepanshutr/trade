@@ -4,7 +4,7 @@ import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration.*
 
-class OfflinePlaybackSpec extends munit.FunSuite:
+class OfflinePlaybackSpec extends TempDirectorySuite:
   override val munitTimeout = 90.seconds
 
   test(
@@ -30,15 +30,13 @@ class OfflinePlaybackSpec extends munit.FunSuite:
     assert(second.isEmpty)
     val create = default(3)
       .asInstanceOf[(TradingConfig, Boolean, String, Path) => TradingWorker]
-    val directory = Files.createTempDirectory("desk-default-worker")
+    val directory = tempDirectory("desk-default-worker")
     val worker = create(TradingConfig(), false, "XMR", directory)
     try
       assertEquals(worker.view.coin, "XMR")
       assertEquals(worker.view.ready, false)
       assertEquals(worker.view.pending, false)
-    finally
-      worker.close()
-      Files.deleteIfExists(directory)
+    finally worker.close()
   }
 
   test(
@@ -51,7 +49,7 @@ class OfflinePlaybackSpec extends munit.FunSuite:
     val rest = new Rest:
       def post(body: String): Option[String] =
         fail("startup made a public request")
-    val directory = Files.createTempDirectory("desk-playback-config")
+    val directory = tempDirectory("desk-playback-config")
     val settings = directory.resolve("settings.json")
     Files.writeString(settings, "{}")
     Files.setPosixFilePermissions(
@@ -59,31 +57,27 @@ class OfflinePlaybackSpec extends munit.FunSuite:
       java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
     )
     var constructed = 0
-    try
-      intercept[Stop] {
-        Main.run(
-          Main.Args("ETH", true, config = Some(settings.toString)),
-          config => {
-            assertEquals(config, TradingConfig())
-            (connector, rest)
-          },
-          (config, enabled, coin, journal) => {
-            constructed += 1
-            assertEquals(config, TradingConfig())
-            assertEquals(enabled, false)
-            assertEquals(coin, "ETH")
-            assertEquals(
-              journal,
-              Path.of(System.getProperty("user.home"), ".local/state/desk")
-            )
-            throw new Stop
-          }
-        )
-      }
-      assertEquals(constructed, 1)
-    finally
-      Files.deleteIfExists(settings)
-      Files.deleteIfExists(directory)
+    intercept[Stop] {
+      Main.run(
+        Main.Args("ETH", true, config = Some(settings.toString)),
+        config => {
+          assertEquals(config, TradingConfig())
+          (connector, rest)
+        },
+        (config, enabled, coin, journal) => {
+          constructed += 1
+          assertEquals(config, TradingConfig())
+          assertEquals(enabled, false)
+          assertEquals(coin, "ETH")
+          assertEquals(
+            journal,
+            Path.of(System.getProperty("user.home"), ".local/state/desk")
+          )
+          throw new Stop
+        }
+      )
+    }
+    assertEquals(constructed, 1)
   }
 
   private def run(
@@ -128,14 +122,14 @@ class OfflinePlaybackSpec extends munit.FunSuite:
         "-p",
         "*playback_spec.py"
       ),
-      Files.createTempDirectory("desk-capture-check")
+      tempDirectory("desk-capture-check", keepOnFailure = true)
     )
   }
 
   test(
     "actual terminal input, fold and UTF-8 frames keep working while public work waits"
   ) {
-    val directory = Files.createTempDirectory("desk-playback-evidence")
+    val directory = tempDirectory("desk-playback-evidence", keepOnFailure = true)
     run(
       Vector(
         "python3",
@@ -152,7 +146,7 @@ class OfflinePlaybackSpec extends munit.FunSuite:
   }
 
   test("the outer watchdog stops a child in a separate session") {
-    val directory = Files.createTempDirectory("desk-outer-watchdog")
+    val directory = tempDirectory("desk-outer-watchdog", keepOnFailure = true)
     val identity = directory.resolve("child.pid")
     val child =
       "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); " +
@@ -187,7 +181,7 @@ class OfflinePlaybackSpec extends munit.FunSuite:
     "six hundred terminal clicks at ten per second record fills or explicit refusals"
       .tag(new munit.Tag("slow"))
   ) {
-    val directory = Files.createTempDirectory("desk-click-speed-")
+    val directory = tempDirectory("desk-click-speed-", keepOnFailure = true)
     val output = directory.resolve("capture")
     run(
       Vector(
@@ -205,6 +199,4 @@ class OfflinePlaybackSpec extends munit.FunSuite:
       directory,
       80.seconds
     )
-    val summary = ujson.read(Files.readString(output.resolve("summary.json")))
-    println("Terminal click speed: " + ujson.write(summary("runs")(0)("speed")))
   }

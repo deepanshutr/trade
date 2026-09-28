@@ -7,7 +7,7 @@ import java.nio.file.*
 import java.nio.file.attribute.*
 import java.nio.file.spi.FileSystemProvider
 
-class ArchiveListingSpec extends munit.FunSuite:
+class ArchiveListingSpec extends TempDirectorySuite:
   // Only the directory is wrapped. Resolved files use the real filesystem, so locking,
   // writes and permissions retain their normal behavior. Unexpected probe use fails.
   private class CountingDirectory(directory: Path):
@@ -80,7 +80,7 @@ class ArchiveListingSpec extends munit.FunSuite:
       .asInstanceOf[Path]
 
   test("directory listings scale with chunk rotation rather than event count") {
-    val probe = new CountingDirectory(Files.createTempDirectory("desk-archive-listings"))
+    val probe = new CountingDirectory(tempDirectory("desk-archive-listings"))
     Files.list(probe.path).close()
     assertEquals(probe.listings, 1)
     probe.listings = 0
@@ -102,7 +102,7 @@ class ArchiveListingSpec extends munit.FunSuite:
 
   private def withinBudget(checkpointFirst: Boolean): Unit =
     val archive = MarketArchive.open(
-      Files.createTempDirectory("desk-archive-budget"),
+      tempDirectory("desk-archive-budget"),
       maximumBytes = 4000L,
       chunkBytes = 500L
     )

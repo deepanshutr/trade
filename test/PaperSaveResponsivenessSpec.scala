@@ -2,10 +2,9 @@ package desk
 
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicReference
-import java.nio.file.Files
 import java.time.ZoneId
 
-class PaperSaveResponsivenessSpec extends munit.FunSuite:
+class PaperSaveResponsivenessSpec extends TempDirectorySuite:
   test("router view and controller draw stay responsive during a held paper save") {
     val at = 1800000000000L
     val saving = new CountDownLatch(1)
@@ -28,17 +27,12 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
         throw new IllegalStateException("test did not release simulated storage")
       mark("save released")
       saved.set(next)
-    val constructor =
-      classOf[PaperLedger].getDeclaredConstructors.find(_.getParameterCount == 4).get
-    constructor.setAccessible(true)
-    val ledger = constructor
-      .newInstance(
-        PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
-        BigDecimal(0),
-        persist,
-        new AutoCloseable { def close(): Unit = () }
-      )
-      .asInstanceOf[PaperLedger]
+    val ledger = new PaperLedger(
+      PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
+      BigDecimal(0),
+      persist,
+      new AutoCloseable { def close(): Unit = () }
+    )
     val rest = new Rest:
       def post(body: String): Option[String] =
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
@@ -70,7 +64,7 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
       live,
       _ => fail("paper enabled live trading"),
       rest,
-      Files.createTempDirectory("save-response-"),
+      tempDirectory("save-response-"),
       () => at,
       () => at
     )
@@ -176,7 +170,6 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
       while worker.view.pending && System.nanoTime() < completed do Thread.sleep(2)
       assert(!worker.view.pending)
       assertEquals(worker.view.position, Some(BigDecimal(5)))
-      println("Held paper save: " + trace.toString)
     finally
       release.countDown()
       sender.foreach(_.join(1000L))

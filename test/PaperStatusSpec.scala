@@ -1,17 +1,16 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-class PaperStatusSpec extends munit.FunSuite:
+class PaperStatusSpec extends TempDirectorySuite:
   test("paper status follows fresh data, expiry, disconnect and market selection") {
     val clock = new AtomicLong(1800000000000L)
     val rest = new Rest:
       def post(body: String): Option[String] =
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("desk-paper-status"),
+      tempDirectory("desk-paper-status"),
       "mainnet",
       BigDecimal(10000),
       BigDecimal(0)
@@ -65,7 +64,7 @@ class PaperStatusSpec extends munit.FunSuite:
         assertEquals(ujson.read(body), ujson.Obj("type" -> "meta"))
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("desk-paper-status-result"),
+      tempDirectory("desk-paper-status-result"),
       "mainnet",
       BigDecimal(10000),
       BigDecimal(0)
