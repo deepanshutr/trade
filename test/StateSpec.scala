@@ -351,6 +351,11 @@ class StateSpec extends munit.FunSuite:
     assertEquals(s0.refs.keySet, Set("BTC", "PAXG"))
   }
 
+  test("a crossed reference quote records no sample") {
+    val crossed = State.reduce(s0, Event.BboUpdate("BTC", lvl("101"), lvl("100"), t0), t0)
+    assertEquals(crossed.refs("BTC").samples, Vector.empty[(Long, Double)])
+  }
+
   test("a reference market's bbo in the same second replaces the sample, not appends") {
     val a = State.reduce(s0, Event.BboUpdate("BTC", lvl("100"), lvl("102"), t0 + 1), t0 + 1)
     val b = State.reduce(a, Event.BboUpdate("BTC", lvl("110"), lvl("112"), t0 + 2), t0 + 999)

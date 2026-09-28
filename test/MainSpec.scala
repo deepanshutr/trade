@@ -92,6 +92,8 @@ class MainSpec extends munit.FunSuite:
       }
       assertEquals(state.get().feed, Health.Live(time))
       awaitState("initial repair did not finish")(repairs.get() == 1)
+      assertEquals(sent.size(), 24)
+      assertEquals(bodies.size(), 18)
       sent.clear()
       bodies.clear()
       callers.clear()

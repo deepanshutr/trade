@@ -216,6 +216,7 @@ final class MarketArchive private (
     val text = write(CandleCheckpoint(lastAt, states.map((coin, s) => coin -> s.candles)))
     val size = text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length.toLong
     require(size <= maximumBytes / 2, "candle checkpoint exceeds disk budget")
+    total = bytes
     if BigInt(total) + size > maximumBytes then closeChunk()
     else output.foreach { (_, channel, _) => channel.force(true) }
     prune(lastAt, size)

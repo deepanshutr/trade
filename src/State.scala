@@ -237,8 +237,9 @@ object State:
           case None => sample(fresh.copy(book = Some(Book(Vector(bid), Vector(ask), time))), now)
       else
         s.refs.get(coin).fold(fresh) { r =>
-          val refMid = (bid.px.toDouble + ask.px.toDouble) / 2
-          fresh.copy(refs = s.refs.updated(coin, sampleRef(r, refMid, now / 1000)))
+          Book(Vector(bid), Vector(ask), time).mid.fold(fresh) { refMid =>
+            fresh.copy(refs = s.refs.updated(coin, sampleRef(r, refMid.toDouble, now / 1000)))
+          }
         }
     case Event.Trades(coin, ts) =>
       val fresh = s.copy(feed = Health.Live(now))

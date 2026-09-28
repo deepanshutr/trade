@@ -48,6 +48,31 @@ class ArchiveSpec extends munit.FunSuite:
     )
   }
 
+  test("close rescans partial writes before enforcing the disk budget") {
+    val directory = Files.createTempDirectory("desk-archive-partial")
+    val archive = MarketArchive.open(directory, maximumBytes = 8000, chunkBytes = 3000)
+    def chunks =
+      val entries = Files.list(directory)
+      try entries.iterator().asScala.filter(_.getFileName.toString.endsWith(".jsonl")).toVector
+      finally entries.close()
+    try
+      var i = 0
+      while (chunks.size < 2 || archive.bytes < 4400) && i < 100 do
+        archive.record(
+          Event.BboUpdate("XMR", Level("100", "2", 1), Level("101", "3", 1), now + i),
+          now + i
+        )
+        i += 1
+      assertEquals(chunks.size, 2)
+      val newest = chunks.maxBy(_.getFileName.toString)
+      Files.write(newest, Array.fill[Byte](4000)(0), java.nio.file.StandardOpenOption.APPEND)
+    finally archive.close()
+    val entries = Files.list(directory)
+    val total = try entries.iterator().asScala.map(Files.size(_)).sum
+    finally entries.close()
+    assert(total <= 8000, s"archive uses $total bytes against an 8000-byte budget")
+  }
+
   test("retention prunes only owned public chunks and refuses a second writer") {
     val directory = Files.createTempDirectory("desk-archive-test")
     val foreign = directory.resolve("keep.txt")

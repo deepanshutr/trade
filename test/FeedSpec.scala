@@ -368,6 +368,8 @@ class FeedSpec extends munit.FunSuite:
     try
       feed.awaitHistoryRepair()
       val socket = connector.sockets.peek()
+      assertEquals(socket.sent.size(), 24)
+      assertEquals(rest.bodies.size(), 18)
       socket.sent.clear()
       rest.bodies.clear()
       feed.setMarket("SOL")
