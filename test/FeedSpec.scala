@@ -222,7 +222,7 @@ class FeedSpec extends munit.FunSuite:
     feed2.pollCoarse()
     assert(queue2.isEmpty)
   }
-  test("connection wakes repair for every interval after the minute floor") {
+  test("connection wakes repair only for intervals with a closed bar") {
     val c = new FakeConnector
     val rest = restAnswering()
     var t = 1_000_000L
@@ -238,7 +238,9 @@ class FeedSpec extends munit.FunSuite:
     t += 1_000L
     assertEquals(cycle(), 18)
     t += 59_000L
-    assertEquals(cycle(), 36)
+    assertEquals(cycle(), 21)
+    val repaired = rest.bodies.asScala.toVector.drop(18).map(ujson.read(_)("req")("interval").str)
+    assertEquals(repaired, Vector.fill(3)("1m"))
   }
   test("backoff is 1, 2, 4 then 8 seconds forever") {
     assertEquals((1 to 6).map(Feed.backoffMs), Seq(1000L, 2000L, 4000L, 8000L, 8000L, 8000L))
