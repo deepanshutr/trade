@@ -79,13 +79,34 @@ object TradingConfig:
     !Files.isSymbolicLink(path) && Files.isRegularFile(path) &&
       Files.getPosixFilePermissions(path).asScala.intersect(forbidden).isEmpty
 
+  private def shallowJson(text: String): Boolean =
+    var depth = 0
+    var quoted = false
+    var escaped = false
+    var index = 0
+    while index < text.length do
+      val c = text.charAt(index)
+      if quoted then
+        if escaped then escaped = false
+        else if c == '\\' then escaped = true
+        else if c == '"' then quoted = false
+      else if c == '"' then quoted = true
+      else if c == '[' || c == '{' then
+        depth += 1
+        if depth > 32 then return false
+      else if c == ']' || c == '}' then depth -= 1
+      index += 1
+    true
+
   def load(path: Option[Path]): Either[String, TradingConfig] = path match
     case None    => Right(TradingConfig())
     case Some(p) =>
       Try {
         require(privateFile(p), "settings must be a private regular file")
         require(Files.size(p) <= 16384, "settings are too large")
-        val j = ujson.read(Files.readString(p))
+        val text = Files.readString(p)
+        require(shallowJson(text))
+        val j = ujson.read(text)
         require(j.obj.keySet.forall(fields.contains), "unknown setting")
         def decimal(name: String, fallback: BigDecimal): BigDecimal =
           j.obj.get(name).map(v => BigDecimal(v.str)).getOrElse(fallback)
@@ -93,12 +114,15 @@ object TradingConfig:
           j.obj.get(name).map(_.str).getOrElse(fallback)
         def address(name: String): Option[String] = j.obj.get(name).map { v =>
           val a = v.str.toLowerCase(java.util.Locale.ROOT)
-          require(a.matches("0x[0-9a-f]{40}"), "invalid address")
+          require(a.matches("0x[0-9a-f]{40}"), "invalid owner or agent address")
           a
         }
         def millis(name: String, fallback: Long): Long =
           val n = decimal(name, BigDecimal(fallback))
-          require(n.isWhole && n >= 100 && n <= 5000, "invalid age limit")
+          require(
+            n.isWhole && n >= 100 && n <= 5000,
+            "invalid quoteAgeMs or positionAgeMs age limit"
+          )
           n.toLongExact
         val defaults = TradeSizes()
         val sizes = TradeSizes(
@@ -110,7 +134,7 @@ object TradingConfig:
           Vector(sizes.small, sizes.big, sizes.target).forall(n =>
             n > 0 && n <= BigDecimal("1000000000")
           ),
-          "invalid dollar size"
+          "invalid small, big or target dollar size"
         )
         require(sizes.small <= sizes.big, "small exceeds big")
         val network = string("network", "mainnet")

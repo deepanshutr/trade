@@ -118,3 +118,54 @@ class TradingConfigSpec extends munit.FunSuite:
       assertEquals(TradingConfig.load(Some(p)), Left("invalid or unreadable trading settings"))
     finally Files.deleteIfExists(p)
   }
+
+  test("deep settings return the generic error before parsing or rendering values") {
+    val nested = "[" * 3000 + "0" + "]" * 3000
+    for text <- Vector(nested, "{\"references\":" + nested + "}") do
+      val p = setting(text)
+      try assertEquals(TradingConfig.load(Some(p)), Left("invalid or unreadable trading settings"))
+      finally Files.deleteIfExists(p)
+  }
+
+  test("nesting checks ignore escaped quotes and brackets inside strings") {
+    val bracketText = "\"\\" + "[{}]" * 1000
+    val p = setting(ujson.Obj("references" -> bracketText).render())
+    try assertEquals(TradingConfig.load(Some(p)), TradingConfig.load(None))
+    finally Files.deleteIfExists(p)
+  }
+
+  test("shared validation errors name their fields without including supplied values") {
+    val cases = Vector(
+      "owner" -> "private-address-canary",
+      "agent" -> "private-address-canary",
+      "small" -> "0",
+      "big" -> "0",
+      "target" -> "0",
+      "quoteAgeMs" -> "99999",
+      "positionAgeMs" -> "99999"
+    )
+    for (field, value) <- cases do
+      val p = setting(ujson.Obj(field -> value).render())
+      try
+        val error = TradingConfig.load(Some(p)).swap.toOption.get
+        assert(error.contains(field), error)
+        assert(!error.contains("private-address-canary"))
+      finally Files.deleteIfExists(p)
+  }
+
+  test("settings validation source rejects interpolated messages") {
+    val source = Files.readString(Path.of("src/TradingConfig.scala"))
+    val interpolation = """(?<![A-Za-z0-9_])(?:s|f|raw)["]""".r
+    def safe(text: String): Boolean = interpolation.findFirstIn(text).isEmpty
+    assert(safe(source), "settings errors must use fixed messages")
+    val mutant = source.replace("\"invalid network\"", "s\"invalid $network\"")
+    assertNotEquals(mutant, source)
+    assert(!safe(mutant), "the check must reject an interpolated require message")
+  }
+
+  test("settings nesting accepts depth thirty-two and refuses thirty-three") {
+    for (depth, accepted) <- Vector(31 -> true, 32 -> false) do
+      val p = setting("{\"references\":" + "[" * depth + "0" + "]" * depth + "}")
+      try assertEquals(TradingConfig.load(Some(p)).isRight, accepted)
+      finally Files.deleteIfExists(p)
+  }
