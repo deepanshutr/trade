@@ -63,7 +63,7 @@ class WorkspaceRestoreSpec extends munit.FunSuite:
   }
 
   for failClose <- Vector(false, true) do
-    test(s"main thread reports and exits 1 after restore, cleanup failure=$failClose") {
+    test(s"main thread stays silent after prior restore, cleanup failure=$failClose") {
       val events = scala.collection.mutable.ArrayBuffer.empty[String]
       val cleanup = new WorkspaceApp.Restoration(
         () => if failClose then throw new IllegalArgumentException("private close detail"),
@@ -84,46 +84,69 @@ class WorkspaceRestoreSpec extends munit.FunSuite:
       handler.uncaughtException(main, error)
       assertEquals(
         events.toVector,
-        Vector("terminal", "record", "Desk stopped: " + error.getClass.getSimpleName, "exit:1")
+        Vector("terminal", "record")
       )
     }
 
-  test("background handler records and returns quietly while restore is held") {
-    val closing = new CountDownLatch(1)
-    val release = new CountDownLatch(1)
-    val returned = new CountDownLatch(1)
-    val recorded = new AtomicBoolean(false)
-    val reported = new AtomicBoolean(false)
-    val exited = new AtomicBoolean(false)
+  test("first main failure restores before reporting") {
+    val events = scala.collection.mutable.ArrayBuffer.empty[String]
+    val main = Thread.currentThread()
     val cleanup = new WorkspaceApp.Restoration(
-      () => { closing.countDown(); release.await() },
-      () => ()
+      () => { events += "close"; () },
+      () => { events += "terminal"; () }
     )
     val handler = WorkspaceApp.failureHandler(
       cleanup,
-      Thread.currentThread(),
-      (_, _) => recorded.set(true),
-      _ => reported.set(true),
-      _ => exited.set(true)
+      main,
+      (_, _) => { events += "record"; () },
+      _ => { events += "report"; () },
+      status => { events += s"exit:$status"; () }
     )
-    val first = new Thread(() => { cleanup.restore(); () })
-    val second = new Thread(() => {
-      handler.uncaughtException(Thread.currentThread(), new IllegalStateException("background"))
-      returned.countDown()
-    })
-    first.start()
-    try
-      assert(closing.await(2, TimeUnit.SECONDS))
-      second.start()
-      assert(returned.await(2, TimeUnit.SECONDS), "handler waited for cleanup")
-      assert(recorded.get())
-      assert(!reported.get())
-      assert(!exited.get())
-    finally
-      release.countDown()
-      first.join(2000)
-      second.join(2000)
+    handler.uncaughtException(main, new IllegalStateException("render"))
+    assertEquals(events.toVector, Vector("record", "close", "terminal", "report", "exit:1"))
   }
+
+  for mainFailure <- Vector(false, true) do
+    test(s"handler stays silent while restore is held, main=$mainFailure") {
+      val closing = new CountDownLatch(1)
+      val release = new CountDownLatch(1)
+      val returned = new CountDownLatch(1)
+      val recorded = new AtomicBoolean(false)
+      val reported = new AtomicBoolean(false)
+      val exited = new AtomicBoolean(false)
+      val cleanup = new WorkspaceApp.Restoration(
+        () => { closing.countDown(); release.await() },
+        () => ()
+      )
+      val main = Thread.currentThread()
+      val handler = WorkspaceApp.failureHandler(
+        cleanup,
+        main,
+        (_, _) => recorded.set(true),
+        _ => reported.set(true),
+        _ => exited.set(true)
+      )
+      val first = new Thread(() => { cleanup.restore(); () })
+      val second = new Thread(() => {
+        handler.uncaughtException(
+          if mainFailure then main else Thread.currentThread(),
+          new IllegalStateException("failure")
+        )
+        returned.countDown()
+      })
+      first.start()
+      try
+        assert(closing.await(2, TimeUnit.SECONDS))
+        second.start()
+        assert(returned.await(2, TimeUnit.SECONDS), "handler waited for cleanup")
+        assert(recorded.get())
+        assert(!reported.get())
+        assert(!exited.get())
+      finally
+        release.countDown()
+        first.join(2000)
+        second.join(2000)
+    }
 
   test("terminal restoration still runs when close fails") {
     var restored = false

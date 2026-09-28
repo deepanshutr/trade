@@ -30,8 +30,9 @@ object WorkspaceApp:
       report("Desk stopped: " + error.getClass.getSimpleName)
       exit(1)
     if thread eq mainThread then
-      try restoration.restore()
-      finally stop()
+      var restored = false
+      try restored = !restoration.started && restoration.restore()
+      finally if restored || !restoration.started then stop()
     else if !restoration.started && restoration.restore() then stop()
 
   private[desk] def closeAll(
