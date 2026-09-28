@@ -1,7 +1,7 @@
 package desk
 
 class TextReadabilitySpec extends munit.FunSuite:
-  test("assistant negative results and comparison signs retain their meaning") {
+  test("order negative results and comparison signs retain their meaning") {
     assertEquals(
       Workspace.safeText("Mean net return was −0.3242%, range ±0.1%, price ≤500 or ≥600."),
       "Mean net return was -0.3242%, range +/-0.1%, price <=500 or >=600."
@@ -13,8 +13,8 @@ class TextReadabilitySpec extends munit.FunSuite:
       _ => false,
       _ => Left("unused")
     )
-    controller.addMessage("analysis", "Across nine samples, mean net return was −0.3242%.")
-    assert(controller.panel.messages.last.text.contains("-0.3242%"))
+    controller.addMessage("order", "Across nine samples, mean net return was −0.3242%.")
+    assert(controller.panel.actionNotice.get.contains("-0.3242%"))
   }
 
   test("readable punctuation never reintroduces terminal control characters") {

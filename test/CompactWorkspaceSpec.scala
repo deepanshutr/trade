@@ -8,14 +8,11 @@ class CompactWorkspaceSpec extends munit.FunSuite:
   private val view = TradingView("XMR", message = "View only")
 
   test("normal trading view shows three horizons without the transcript or running logs") {
-    val panel = PanelView(
-      messages = Vector(DeskMessage(1, now, "analysis", "verbose answer should stay hidden"))
-    )
+    val panel = PanelView()
     for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
       val frame = Workspace.draw(market, view, panel, cols, rows, now, ZoneOffset.UTC, Style.mono)
       val text = frame.lines.mkString("\n")
       assert(text.contains("LONG") && text.contains("MID") && text.contains("SHORT"), text)
-      assert(!text.contains("should stay hidden"), text)
       assertEquals(frame.lines.size, rows)
       assert(frame.lines.forall(_.length == cols))
   }

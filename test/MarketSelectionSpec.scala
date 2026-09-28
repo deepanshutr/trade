@@ -242,24 +242,22 @@ class MarketSelectionSpec extends munit.FunSuite:
       java.time.ZoneOffset.UTC,
       Style.mono
     )
-    try
-      val before = frame(normal)
-      controller.publish(before)
-      val action = before.buttons.find(_.action.isInstanceOf[DeskAction.Prepare]).get
-      controller.handle(Command.PlaceOrder(Trading.action(0)), pending, view, (100, 30), false)
-      controller.handle(
-        Command.PointerPress(action.x, action.y, 0),
-        pending,
-        view,
-        (100, 30),
-        false
-      )
-      controller.handle(Command.Pointer(action.x, action.y, 0), pending, view, (100, 30), false)
-      assertEquals((previews, sends), (0, 0))
-      assert(!frame(pending).buttons.exists(_.action.isInstanceOf[DeskAction.Prepare]))
-      assertEquals(sends, 0)
-      assert(!controller.handle(Command.CancelTarget, pending, view, (100, 30), false))
-    finally controller.close()
+    val before = frame(normal)
+    controller.publish(before)
+    val action = before.buttons.find(_.action.isInstanceOf[DeskAction.Prepare]).get
+    controller.handle(Command.PlaceOrder(Trading.action(0)), pending, view, (100, 30), false)
+    controller.handle(
+      Command.PointerPress(action.x, action.y, 0),
+      pending,
+      view,
+      (100, 30),
+      false
+    )
+    controller.handle(Command.Pointer(action.x, action.y, 0), pending, view, (100, 30), false)
+    assertEquals((previews, sends), (0, 0))
+    assert(!frame(pending).buttons.exists(_.action.isInstanceOf[DeskAction.Prepare]))
+    assertEquals(sends, 0)
+    assert(!controller.handle(Command.CancelTarget, pending, view, (100, 30), false))
   }
 
   test("Escape after Enter reaches the fold before pending selection has been published") {
@@ -270,19 +268,17 @@ class MarketSelectionSpec extends munit.FunSuite:
       _ => false,
       _ => Left("disabled")
     )
-    try
-      for prompt <- Vector(None, Some("BTC")) do
-        val snapshot = Snapshot.initial("XMR", 1000L).copy(prompt = prompt)
-        assert(
-          !controller.handle(
-            Command.CancelTarget,
-            snapshot,
-            TradingView("XMR", None, "view", false, false),
-            (100, 30),
-            true
-          )
+    for prompt <- Vector(None, Some("BTC")) do
+      val snapshot = Snapshot.initial("XMR", 1000L).copy(prompt = prompt)
+      assert(
+        !controller.handle(
+          Command.CancelTarget,
+          snapshot,
+          TradingView("XMR", None, "view", false, false),
+          (100, 30),
+          true
         )
-    finally controller.close()
+      )
   }
 
   test("pending Target and mode controls are visibly disabled") {

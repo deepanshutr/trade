@@ -6,17 +6,12 @@ final class DeskController(
     preview: OrderIntent => Either[String, OrderPlan],
     submit: OrderReview => Boolean,
     switchMode: String => Either[String, Unit],
-    persist: Vector[DeskMessage] => Unit = _ => (),
-    mute: Boolean => Unit = _ => ()
-) extends AutoCloseable:
+    mute: Boolean => Unit = _ => (),
+    result: String => Unit = _ => ()
+):
   private var current = initial
   private var shown = Option.empty[WorkspaceFrame]
   private var pressed = Option.empty[(WorkspaceFrame, DeskButton, Boolean)]
-  private var serial = initial.messages.map(_.id).maxOption.getOrElse(0L)
-  private var storageFailed = false
-  private var messagesToSave = Option.empty[Vector[DeskMessage]]
-  private var stopping = false
-  private var historyThread = Option.empty[Thread]
   private val orderUpdates = new OrderUpdates
   def panel: PanelView = synchronized(current)
   def orders(view: TradingView): Unit = synchronized {
@@ -51,66 +46,14 @@ final class DeskController(
   def outlook(value: OutlookView): Unit = synchronized {
     current = current.copy(outlook = value)
   }
-  private def saveMessages(): Unit =
-    if !storageFailed && !stopping then
-      messagesToSave = Some(current.messages)
-      notifyAll()
-
-  def start(): Unit = synchronized {
-    if historyThread.isEmpty && !stopping then
-      val thread = new Thread(() => writeMessages(), "message-history")
-      thread.setDaemon(true)
-      historyThread = Some(thread)
-      thread.start()
-  }
-
-  private def writeMessages(): Unit =
-    try
-      var done = false
-      while !done do
-        val next = synchronized {
-          while messagesToSave.isEmpty && !stopping && !storageFailed do wait()
-          val value = messagesToSave
-          messagesToSave = None
-          value
-        }
-        next match
-          case None           => done = true
-          case Some(messages) =>
-            persist(messages)
-    catch
-      case _: Exception =>
-        synchronized {
-          storageFailed = true
-          messagesToSave = None
-          serial += 1
-          val reason = "Message history save failed. Trade results remain visible for this session"
-          current = current.copy(
-            historyFailure = Some(reason),
-            messages =
-              (current.messages :+ DeskMessage(serial, wall(), "storage", reason)).takeRight(300)
-          )
-        }
-
-  def close(): Unit =
-    start()
-    val thread = synchronized {
-      stopping = true
-      notifyAll()
-      historyThread
-    }
-    thread.filterNot(_ == Thread.currentThread()).foreach(_.join())
   def addMessage(kind: String, text: String): Unit = synchronized {
-    serial += 1
+    if kind == "order" then result(Workspace.safeText(text))
     current = current.copy(
-      messages = (current.messages :+ DeskMessage(serial, wall(), kind, Workspace.safeText(text)))
-        .takeRight(300),
       actionNotice = if kind == "order" || kind == "mode" then Some(Workspace.safeText(text))
       else current.actionNotice,
       actionNumber = if kind == "order" || kind == "mode" then current.actionNumber + 1
       else current.actionNumber
     )
-    saveMessages()
   }
 
   private def cancel(): Unit =

@@ -11,60 +11,6 @@ class RuntimeSafetySpec extends munit.FunSuite:
     val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
     while !condition && System.nanoTime() < until do Thread.sleep(5)
     assert(condition, label)
-  private val valid = Vector(DeskMessage(1, now, "analysis", "saved result", Some(true)))
-
-  test("message writes preserve every invariant needed to reopen the same data") {
-    val directory = Files.createTempDirectory("desk-message-validity")
-    val history = MessageHistory.open(directory)
-    try
-      history.save(valid)
-      val invalid = Vector(
-        valid ++ valid,
-        Vector(valid.head.copy(id = -1)),
-        Vector(valid.head.copy(at = -1)),
-        Vector(valid.head.copy(kind = "unknown"))
-      )
-      invalid.foreach { next =>
-        intercept[IllegalArgumentException](history.save(next))
-        assertEquals(history.messages, valid)
-      }
-    finally history.close()
-    val again = MessageHistory.open(directory)
-    try assertEquals(again.messages, valid)
-    finally again.close()
-  }
-
-  test("encoded message byte limit is checked before replacing valid history") {
-    val directory = Files.createTempDirectory("desk-message-byte-limit")
-    val history = MessageHistory.open(directory)
-    try
-      history.save(valid)
-      val large = Vector.tabulate(300)(i => DeskMessage(i, now, "analysis", "\u6f22" * 20000))
-      intercept[IllegalArgumentException](history.save(large))
-      assertEquals(history.messages, valid)
-      assert(Files.size(directory.resolve("messages.json")) < 10000000L)
-    finally history.close()
-    val again = MessageHistory.open(directory)
-    try assertEquals(again.messages, valid)
-    finally again.close()
-  }
-
-  test("a closed message writer cannot overwrite a later holder of the lease") {
-    val directory = Files.createTempDirectory("desk-message-closed")
-    val first = MessageHistory.open(directory)
-    first.save(valid)
-    first.close()
-    val second = MessageHistory.open(directory)
-    val next = Vector(DeskMessage(2, now, "question", "new result"))
-    try
-      second.save(next)
-      intercept[Exception](first.save(Vector(DeskMessage(3, now, "analysis", "stale writer"))))
-    finally second.close()
-    val again = MessageHistory.open(directory)
-    try assertEquals(again.messages, next)
-    finally again.close()
-  }
-
   private def chunks(directory: java.nio.file.Path): String =
     val paths = Files.list(directory)
     try

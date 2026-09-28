@@ -39,16 +39,12 @@ object WorkspaceApp:
       announcements: AutoCloseable,
       recorder: Option[AutoCloseable],
       worker: AutoCloseable,
-      controller: AutoCloseable,
-      history: AutoCloseable,
       diagnostics: AutoCloseable
   ): Unit =
     outlook.close()
     announcements.close()
     recorder.foreach(_.close())
     worker.close()
-    controller.close()
-    history.close()
     diagnostics.close()
 
   private[desk] def enterTerminal(
@@ -236,16 +232,6 @@ object WorkspaceApp:
         now,
         monotonic
       )
-      val history = Try(MessageHistory.open(directory.resolve("messages"))).getOrElse {
-        worker.close()
-        diagnostics.close()
-        System.err.println(
-          "Desk message storage is unavailable or another desk owns it: " + directory.resolve(
-            "messages"
-          )
-        )
-        sys.exit(1)
-      }
       val publicDirectory = directory.resolve("public")
       val seed = Snapshot.initial(args.coin, now(), State.refCoins).copy(workspace = true)
       val (recovered, archive) = openArchive(publicDirectory, seed)
@@ -281,31 +267,25 @@ object WorkspaceApp:
         PanelView(
           mode = mode,
           sizes = config.sizes,
-          messages = history.messages,
           muted = args.audio == "mute"
         ),
         now,
         worker.preview,
         worker.submitReviewed,
         worker.switchMode,
-        history.save,
-        announcements.setMuted
+        announcements.setMuted,
+        text =>
+          Try(OrderResultLog.append(directory, now(), text)).failed.foreach(error =>
+            diagnostics.failure(DiagnosticPart.OrderResults, error)
+          )
       )
-      controller.start()
       val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
       val alerts = new AlertPolicy
-      if recovered.isFailure then
-        controller.addMessage(
-          "data",
-          "Saved public candles could not be loaded. Available exchange history will be requested"
-        )
       def closeAll(): Unit = WorkspaceApp.closeAll(
         outlook,
         announcements,
         recorder,
         worker,
-        controller,
-        history,
         diagnostics
       )
       val saved = enterTerminal(() => Term.enterRaw(), () => closeAll()).getOrElse {
@@ -432,7 +412,6 @@ object WorkspaceApp:
         measured
       }
       var sizeAt = 0L
-      var historyFailureLogged = false
       try
         while !state.get().quit do
           val time = now()
@@ -449,9 +428,6 @@ object WorkspaceApp:
             collectExecution(inputLock, controller, () => (state.get(), worker.view))
           val view = execution.forMarket(market.coin)
           diagnostics.execution(controller.panel.mode, view)
-          if !historyFailureLogged && controller.panel.historyFailure.nonEmpty then
-            diagnostics.failure(DiagnosticPart.History, new java.io.IOException())
-            historyFailureLogged = true
           val building = System.nanoTime()
           val frame =
             drawFrame(

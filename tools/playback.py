@@ -407,10 +407,13 @@ class Playback:
                     self.eof = True
 
     def read_receipts(self):
-        path = self.state_directory / "messages" / "messages.json"
+        path = self.state_directory / "order-results.jsonl"
         if path.exists():
-            for value in json.loads(path.read_text()):
-                key = int(value["id"])
+            for line in path.read_text().splitlines(keepends=True):
+                if not line.endswith("\n"):
+                    break  # A concurrent append has not completed yet.
+                value = json.loads(line)
+                key = value["id"]
                 assert key not in self.receipts or self.receipts[key] == value, "receipt changed"
                 self.receipts[key] = value
         if self.clicks:
@@ -540,15 +543,15 @@ class Playback:
                 self.read_receipts()
                 return len(self.receipts) >= 600
             self.wait(recorded, "all six hundred results saved")
-            assert set(self.receipts) == set(range(1, 601)), "missing or duplicate result"
-            results = [self.receipts[i] for i in range(1, 601)]
+            assert len(self.receipts) == 600, "missing or duplicate result"
+            results = list(self.receipts.values())
             saved = json.loads((self.state_directory / "paper" / "wallet-mainnet.json").read_text())
             fixture_book = json.loads((Path(self.args.fixtures) / "l2Book.json").read_text())["data"]
             filled, refused = validate_wallet(saved, results, fixture_book)
             results_saved_ms = (time.monotonic_ns() - clicks[-1]) / 1e6
             self.settle()
             self.read_receipts()
-            assert set(self.receipts) == set(range(1, 601)), "unexpected later result"
+            assert len(self.receipts) == 600, "unexpected later result"
             settled = json.loads((self.state_directory / "paper" / "wallet-mainnet.json").read_text())
             assert settled == saved, "a refused click executed later"
             gaps = frame_gaps([f["captured_ns"] for f in self.frames.complete], clicks[0], clicks[-1])
@@ -632,7 +635,7 @@ class Playback:
         assert status == 0, status
         if self.mode == "speed":
             self.read_receipts()
-            assert set(self.receipts) == set(range(1, 601)), "unexpected result during shutdown"
+            assert len(self.receipts) == 600, "unexpected result during shutdown"
             closed = json.loads((self.state_directory / "paper" / "wallet-mainnet.json").read_text())
             assert closed == saved, "ledger changed during shutdown"
         samples = validate_result(result, self.mode)

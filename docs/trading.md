@@ -142,7 +142,7 @@ Quoted prices and book depth normally expire after one second. Position and acti
 account data normally expire after two seconds. Optional `quoteAgeMs` and
 `positionAgeMs` accept 100 to 5,000 milliseconds. A healthy public socket
 does not establish account readiness. The blocking reason and final order outcome
-remain visible in the controls and message history.
+remain visible in the controls and latest action notice.
 
 Restart an already running Desk after installing a new build. It continues using
 its previous loaded program until restarted.

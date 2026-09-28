@@ -98,15 +98,7 @@ object CompactDisplayFixtures:
 
   def panel(coin: String = "XMR"): PanelView = PanelView(
     mode = "PAPER",
-    outlook = outlook(coin),
-    messages = Vector(
-      DeskMessage(
-        1L,
-        now,
-        "analysis",
-        "This visible analysis has both Accept and Reject actions. Inspect complete review values before submitting any order. " * 3
-      )
-    )
+    outlook = outlook(coin)
   )
 
   def trading(coin: String = "XMR"): TradingView = TradingView(
