@@ -20,16 +20,20 @@ ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 SERVICES = {"owner": "desk-owner", "agent": "desk"}
 
 
+class SetupError(RuntimeError):
+    pass
+
+
 def address(secret):
     scalar = int.from_bytes(secret, "big")
     if len(secret) != 32 or not 0 < scalar < ORDER:
-        raise ValueError("invalid private scalar")
+        raise SetupError("invalid private scalar")
     public = ec.derive_private_key(scalar, ec.SECP256K1()).public_key().public_numbers()
     digest = keccak.new(digest_bits=256)
     digest.update(public.x.to_bytes(32, "big") + public.y.to_bytes(32, "big"))
     result = "0x" + digest.hexdigest()[-40:]
     if result != Account.from_key(bytes(secret)).address.lower():
-        raise ValueError("independent public addresses differ")
+        raise SetupError("independent public addresses differ")
     return result
 
 
@@ -40,7 +44,7 @@ def generate():
 
 def create(role, store, generate, before_store=lambda public: None):
     if role not in SERVICES:
-        raise ValueError("unknown wallet role")
+        raise SetupError("unknown wallet role")
     secret = generate()
     encoded = bytearray()
     try:
@@ -73,7 +77,7 @@ def fourcc(value):
 class MacKeychain:
     def __init__(self):
         if sys.platform != "darwin":
-            raise RuntimeError("Mac key store required")
+            raise SetupError("Mac key store required")
         root = "/System/Library/Frameworks/"
         self.cf = C.CDLL(root + "CoreFoundation.framework/CoreFoundation")
         self.sec = C.CDLL(root + "Security.framework/Security")
@@ -116,7 +120,7 @@ class MacKeychain:
     @staticmethod
     def check(status):
         if status != 0:
-            raise RuntimeError("key store status " + str(status))
+            raise SetupError("key store status " + str(status))
 
     def release(self, *references):
         for reference in references:
@@ -135,7 +139,7 @@ class MacKeychain:
             for entry in self.values(entries):
                 tags = self.sec.SecACLCopyAuthorizations(entry)
                 if not tags:
-                    raise RuntimeError("access authorizations unavailable")
+                    raise SetupError("access authorizations unavailable")
                 try:
                     reads = any(self.cf.CFEqual(tag, needed)
                                 for tag in self.values(tags) for needed in self.read_tags)
@@ -148,17 +152,17 @@ class MacKeychain:
                     entry, C.byref(apps), C.byref(description), C.byref(flags)))
                 try:
                     if not apps or self.cf.CFArrayGetCount(apps) != 0:
-                        raise RuntimeError("a key reader is preauthorized")
+                        raise SetupError("a key reader is preauthorized")
                     if configure:
                         self.check(self.sec.SecACLSetContents(
                             entry, apps, description, flags.value | 1))
                     elif not flags.value & 1:
-                        raise RuntimeError("password prompt is not required")
+                        raise SetupError("password prompt is not required")
                     count += 1
                 finally:
                     self.release(apps, description)
             if count == 0:
-                raise RuntimeError("no secret read authorization found")
+                raise SetupError("no secret read authorization found")
             return count
         finally:
             self.release(entries)
@@ -169,7 +173,7 @@ class MacKeychain:
         access = C.c_void_p()
         try:
             if not title or not empty:
-                raise RuntimeError("access allocation failed")
+                raise SetupError("access allocation failed")
             self.check(self.sec.SecAccessCreate(title, empty, C.byref(access)))
             self.access_rules(access, configure=True)
             self.access_rules(access)
@@ -188,7 +192,7 @@ class MacKeychain:
             status = self.sec.SecKeychainItemCopyContent(
                 item, None, None, C.byref(size), C.byref(data))
             if not acceptable_read_status(status):
-                raise RuntimeError("new item did not refuse access without a prompt")
+                raise SetupError("new item did not refuse access without a prompt")
         finally:
             if data:
                 C.memset(data, 0, size.value)
@@ -241,7 +245,7 @@ def main():
             return 0
         directory = Path.home() / ".config/desk"
         if directory.is_symlink() or not directory.is_dir() or directory.stat().st_mode & 0o077:
-            raise RuntimeError("private Desk settings directory required")
+            raise SetupError("private Desk settings directory required")
         path = directory / ("keychain-" + args.create + ".jsonl")
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         record = os.fdopen(descriptor, "w")
@@ -259,10 +263,12 @@ def main():
         os.fsync(record.fileno())
         print(json.dumps({**public, "state": "stored", "prompt_required": True}))
         return 0
-    except Exception:
-        print(json.dumps({"state": "stopped", "item": public,
-                          "message": "Setup did not finish. Preserve any setup record and inspect the named item before retrying."}),
-              file=sys.stderr)
+    except Exception as error:
+        stopped = {"state": "stopped", "item": public,
+                   "message": "Setup did not finish. Preserve any setup record and inspect the named item before retrying."}
+        if isinstance(error, SetupError):
+            stopped["reason"] = str(error)
+        print(json.dumps(stopped), file=sys.stderr)
         return 1
     finally:
         if record:
