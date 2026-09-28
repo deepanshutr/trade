@@ -54,7 +54,8 @@ object Gauges:
       base.take(at) + mark + base.drop(at + 1)
     }
 
-  def mean(xs: Vector[Double]): Option[Double] = if xs.isEmpty then None else Some(xs.sum / xs.size)
+  private def mean(xs: Vector[Double]): Option[Double] =
+    if xs.isEmpty then None else Some(xs.sum / xs.size)
 
   def fmt(v: Option[Double], letter: Char): String = v.fold(s"$letter   --")(x => f"$letter$x%+.2f")
 

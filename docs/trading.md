@@ -134,6 +134,10 @@ account's order history.
 
 A wallet change pauses live orders for that owner and network across Desk processes
 sharing the same home directory, including ones using another state directory.
+The marker is `~/.local/state/desk/accounts/<network>-<owner-without-0x>.paused`,
+with the owner address in lowercase. Desk only reads this marker. No writer is
+provided in this repository. An external wallet-change tool must create and clear
+it as part of its account-change procedure.
 The controls show the pause and refuse new orders. The pause survives a restart.
 Finish or resolve the wallet change before using the replacement account. Do not
 remove saved pause state to bypass it.

@@ -234,7 +234,7 @@ object WorkspaceApp:
         monotonic
       )
       val publicDirectory = directory.resolve("public")
-      val seed = Snapshot.initial(args.coin, now(), State.refCoins).copy(workspace = true)
+      val seed = Snapshot.initial(args.coin, now(), State.refCoins)
       val (recovered, archive) = openArchive(publicDirectory, seed)
       val state = new AtomicReference(recovered.getOrElse(seed))
       val recorder = archive.map(new PublicRecorder(_, now))

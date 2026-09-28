@@ -18,18 +18,6 @@ final case class HistoricalRate(
   def percent: Option[Double] =
     Option.when(available && samples >= required)(100.0 * hits / samples)
 
-  // A descriptive binomial count band. Separate periods can still be dependent.
-  def band: Option[(Double, Double)] = percent.map { _ =>
-    val z = 1.959963984540054
-    val n = samples.toDouble
-    val p = hits.toDouble / n
-    val denominator = 1.0 + z * z / n
-    val center = (p + z * z / (2.0 * n)) / denominator
-    val radius =
-      z * math.sqrt(p * (1.0 - p) / n + z * z / (4.0 * n * n)) / denominator
-    (100.0 * (center - radius).max(0.0), 100.0 * (center + radius).min(1.0))
-  }
-
 final case class HorizonOutlook(
     horizon: OutlookHorizon,
     direction: OutlookDirection,
@@ -40,10 +28,7 @@ final case class HorizonOutlook(
     reference: Option[Double],
     at: Option[Long],
     base: HistoricalRate,
-    matched: HistoricalRate,
-    expected: Int,
-    from: Option[Long],
-    to: Option[Long]
+    matched: HistoricalRate
 )
 
 final case class OutlookView(
@@ -73,10 +58,7 @@ object Outlook:
       None,
       None,
       HistoricalRate(0, 0, 100, available = false),
-      HistoricalRate(0, 0, 50, available = false),
-      0,
-      None,
-      None
+      HistoricalRate(0, 0, 50, available = false)
     )
 
   def empty(coin: String): OutlookView =
@@ -209,10 +191,7 @@ object Outlook:
     directed.copy(
       status = status,
       base = base,
-      matched = matched,
-      expected = expected.toInt,
-      from = Some(firstAnchor),
-      to = Some(lastAnchor + period)
+      matched = matched
     )
 
   def compute(snapshot: Snapshot, now: Long): OutlookView =

@@ -28,10 +28,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
         Some(100),
         None,
         HistoricalRate(60, 100, 100),
-        HistoricalRate(35, 50, 50),
-        100,
-        None,
-        None
+        HistoricalRate(35, 50, 50)
       )
     }
   )

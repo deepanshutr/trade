@@ -4,7 +4,7 @@ import scala.util.Try
 
 object Events:
   def parse(text: String): Option[Event] =
-    Try(parseUnsafe(text)).getOrElse(Some(Event.Bad(Option(text).getOrElse("").take(80))))
+    Try(parseUnsafe(text)).getOrElse(Some(Event.Bad))
 
   def parseRestBook(text: String): Option[Book] =
     Try(book(ujson.read(text))).toOption
@@ -47,7 +47,7 @@ object Events:
         Some(Event.CtxUpdate(d("coin").str, ctx(d("ctx"))))
       case "pong"                 => Some(Event.Pong)
       case "subscriptionResponse" => None
-      case other                  => Some(Event.Bad(s"channel $other"))
+      case _                      => Some(Event.Bad)
 
   private def number(v: ujson.Value, zero: Boolean = false, signed: Boolean = false): String =
     val text = v.str

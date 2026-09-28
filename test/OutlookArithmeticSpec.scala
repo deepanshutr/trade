@@ -51,8 +51,6 @@ class OutlookArithmeticSpec extends munit.FunSuite:
     assertEquals(value.status, "ready")
     assertEquals(value.base, HistoricalRate(14, 100, 100))
     assertEquals(value.matched, HistoricalRate(9, 67, 50))
-    assertEquals(value.from, Some(60L * step))
-    assertEquals(value.to, Some(now))
     assertEqualsDouble(value.target.get / value.reference.get, 1.04, 1e-14)
     assertEqualsDouble(value.matched.percent.get, 900.0 / 67, 1e-10)
   }

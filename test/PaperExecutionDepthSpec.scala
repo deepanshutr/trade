@@ -338,7 +338,7 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
     )
     def snapshot: Snapshot = Snapshot
       .initial("XMR", f.clock.get())
-      .copy(book = Some(f.book()), feed = Health.Live(f.clock.get()), workspace = true)
+      .copy(book = Some(f.book()), feed = Health.Live(f.clock.get()))
     def draw(): Unit = c.publish(
       Workspace.draw(
         snapshot,

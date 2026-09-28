@@ -15,10 +15,7 @@ class OutlookNumberSpec extends munit.FunSuite:
           Some(530),
           Some(0L),
           HistoricalRate(50, 100, 100),
-          HistoricalRate(25, 50, 50),
-          100,
-          Some(0L),
-          Some(1L)
+          HistoricalRate(25, 50, 50)
         )
       })
 

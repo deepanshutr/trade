@@ -51,7 +51,7 @@ object MarketArchive:
     case Event.SocketUp          => Some(PublicRecord(at, "connected"))
     case Event.SocketDown        => Some(PublicRecord(at, "disconnected"))
     case Event.CandleHistoryFailed => Some(PublicRecord(at, "history-unavailable", "history"))
-    case Event.Bad(_)              => Some(PublicRecord(at, "invalid-or-dropped-event"))
+    case Event.Bad                 => Some(PublicRecord(at, "invalid-or-dropped-event"))
     case _                         => None
 
   private def chunks(directory: Path): Vector[(Path, Long)] =
@@ -101,8 +101,6 @@ object MarketArchive:
         .takeRight(State.marketHistoryLimit)
         .map((coin, candles) => coin -> Ref(Vector.empty, candles))
     )
-
-  def lastWrite(directory: Path): Long = load(directory).at
 
   def open(
       directory: Path,

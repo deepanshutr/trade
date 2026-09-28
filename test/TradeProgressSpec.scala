@@ -211,7 +211,7 @@ class TradeProgressSpec extends munit.FunSuite:
 
   private val rules = MarketRules(0, 2, 5)
   private val book = Book(Vector(Level("99.99", "50", 1)), Vector(Level("100", "50", 1)), start)
-  private val snapshot = Snapshot.initial("XMR", start).copy(book = Some(book), workspace = true)
+  private val snapshot = Snapshot.initial("XMR", start).copy(book = Some(book))
   private val ready = TradingView(
     "XMR",
     Some(BigDecimal(0)),

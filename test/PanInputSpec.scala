@@ -8,7 +8,7 @@ import scala.jdk.CollectionConverters.*
 
 class PanInputSpec extends munit.FunSuite:
   override val munitTimeout = 90.seconds
-  private val initial = Snapshot.initial("XMR", 0L).copy(workspace = true)
+  private val initial = Snapshot.initial("XMR", 0L)
   private def fold(start: Snapshot, queue: LinkedBlockingQueue[Event]): Snapshot =
     queue.iterator().asScala.foldLeft(start)((state, event) => State.reduce(state, event, 0L))
 

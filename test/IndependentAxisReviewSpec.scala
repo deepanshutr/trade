@@ -25,10 +25,7 @@ class IndependentAxisReviewSpec extends munit.FunSuite:
             Some(100),
             Some(now),
             HistoricalRate(60, 100, 100),
-            HistoricalRate(35, 50, 50),
-            100,
-            Some(now - 86400000),
-            Some(now)
+            HistoricalRate(35, 50, 50)
           )
         )
       )

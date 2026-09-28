@@ -32,9 +32,12 @@ class AlertsIntegrationSpec extends munit.FunSuite:
   }
 
   test("workspace announcements use the bounded sound queue") {
+    val played = new CountDownLatch(4)
+    @volatile var heard = Vector.empty[String]
     val output = new AnnouncementOutput:
       def play(text: String, voice: Boolean, canceled: () => Boolean): Unit =
-        fail("no audio expected")
+        heard :+= text
+        played.countDown()
       def close(): Unit = ()
     val sound = new Announcements(output)
     try
@@ -43,7 +46,8 @@ class AlertsIntegrationSpec extends munit.FunSuite:
           Announcement(s"Market moved $i"),
           sound
         )
-      assert(sound.status.contains("4 queued"))
-      assert(sound.status.contains("1 dropped"))
+      sound.start()
+      assert(played.await(3, TimeUnit.SECONDS))
     finally sound.close()
+    assertEquals(heard, (1 to 4).map(i => s"Market moved $i").toVector)
   }

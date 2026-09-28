@@ -194,7 +194,7 @@ class PublicInputSpec extends munit.FunSuite:
     val trades = fixture("trades.json")
     trades("data").arr.foreach(_("sz") = "1e100")
     val events = Vector(book, ctx, trades).map(j => Events.parse(j.render()).get)
-    assert(!events.exists(_.isInstanceOf[Event.Bad]))
+    assert(!events.exists(_ == Event.Bad))
     val state = events.foldLeft(Snapshot.initial("XMR", now))((s, e) => State.reduce(s, e, now))
     val columns = Chart.columns(state, 122, now)
     val axis = Chart.axis(columns, state.book, 11).get
@@ -227,11 +227,11 @@ class PublicInputSpec extends munit.FunSuite:
     val connector = new Connector:
       def connect(text: String => Unit, close: () => Unit): Socket = fail("unexpected connection")
     val queue = new ConcurrentLinkedQueue[Event]()
-    val feed = new Feed(connector, rest, queue, () => now, "XMR")
+    val feed = new Feed(connector, rest, queue, () => now, "XMR", Vector.empty)
     feed.poll()
     feed.pollCoarse()
     assert(queue.isEmpty)
-    feed.fetchHistoryFor("XMR")
+    feed.repairHistory()
     assertEquals(queue.asScala.toVector, Vector.fill(6)(Event.CandleHistoryFailed))
     assertEquals(bodies.size(), 16)
     val before = Golden.snapshot

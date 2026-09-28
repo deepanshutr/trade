@@ -140,7 +140,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       route.submitReviewed,
       route.switchMode
     )
-    var snapshot = Snapshot.initial("XMR", start).copy(workspace = true)
+    var snapshot = Snapshot.initial("XMR", start)
     var latest = Book(
       Vector(Level("99.99", "50", 1)),
       Vector(Level("100", "50", 1)),

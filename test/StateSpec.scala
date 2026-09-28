@@ -155,7 +155,7 @@ class StateSpec extends munit.FunSuite:
     assertEquals(s1.feed, Health.Live(t0 + 1))
     val s2 = State.reduce(s1, Event.Pong, t0 + 2)
     assertEquals(s2.feed, Health.Live(t0 + 2))
-    val s3 = State.reduce(s2, Event.Bad("x"), t0 + 3)
+    val s3 = State.reduce(s2, Event.Bad, t0 + 3)
     assertEquals(s3.bad, 1)
     assertEquals(s3.feed, Health.Live(t0 + 3))
   }

@@ -81,7 +81,7 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
     paperField.set(router, Some(worker))
     val book = Book(Vector(Level("99.99", "50", 1)), Vector(Level("100", "50", 1)), at)
     val snapshot =
-      Snapshot.initial("XMR", at).copy(book = Some(book), feed = Health.Live(at), workspace = true)
+      Snapshot.initial("XMR", at).copy(book = Some(book), feed = Health.Live(at))
     val controller = new DeskController(
       PanelView(mode = "PAPER"),
       () => at,

@@ -196,26 +196,15 @@ final class Announcements(
   private val started = new AtomicBoolean(false)
   private val silence = new AtomicBoolean(mutedInitially)
   private val generation = new AtomicLong(0L)
-  private val dropped = new AtomicLong(0L)
-  @volatile private var unavailable = false
   private var thread = Option.empty[Thread]
   def muted: Boolean = silence.get()
-  def status: String =
-    val state = if closed.get() then "Sound stopped"
-    else if muted then "Muted"
-    else if unavailable then "Sound unavailable"
-    else "Sound on"
-    state + (if queue.isEmpty then "" else s". ${queue.size()} queued") +
-      (if dropped.get() == 0 then "" else s". ${dropped.get()} dropped")
 
   def offer(value: Announcement): Boolean = synchronized {
     if closed.get() || muted || value.text.isEmpty then false
     else
-      val accepted = queue.offer(
+      queue.offer(
         Pending(value.copy(text = value.text.take(500)), generation.get())
       )
-      if !accepted then dropped.incrementAndGet()
-      accepted
   }
 
   def setMuted(value: Boolean): Unit = synchronized {
@@ -235,13 +224,8 @@ final class Announcements(
               if job != null then
                 val canceled = () => closed.get() || muted || generation.get() != job.generation
                 if !canceled() then
-                  try
-                    output.play(job.value.text, voice, canceled)
-                    if !canceled() then unavailable = false
-                  catch
-                    case _: InterruptedException =>
-                      if !closed.get() then unavailable = true
-                    case _: Exception => if !canceled() then unavailable = true
+                  try output.play(job.value.text, voice, canceled)
+                  catch case _: Exception => ()
           catch case _: InterruptedException => ()
         },
         "desk-announcements"
