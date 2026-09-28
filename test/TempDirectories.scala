@@ -4,6 +4,12 @@ import java.nio.file.{Files, Path}
 import scala.collection.mutable.ArrayBuffer
 
 object TempDirectories:
+  def finish(entries: IterableOnce[(Path, Boolean)], failed: Boolean): Unit =
+    entries.iterator.foreach { (path, keep) =>
+      if failed && keep then System.err.println(s"Test evidence: $path")
+      else remove(path)
+    }
+
   def remove(directory: Path): Unit =
     if Files.exists(directory) then
       val paths = Files.walk(directory)
@@ -37,11 +43,7 @@ abstract class TempDirectorySuite extends munit.FunSuite:
       "temporary directories",
       test =>
         test.withBodyMap(_.transform { result =>
-          try
-            directories.reverseIterator.foreach { (path, keep) =>
-              if result.isFailure && keep then System.err.println(s"Test evidence: $path")
-              else TempDirectories.remove(path)
-            }
+          try TempDirectories.finish(directories.reverseIterator, result.isFailure)
           finally directories.clear()
           result
         }(munitExecutionContext))
