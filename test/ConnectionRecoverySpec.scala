@@ -2,7 +2,7 @@ package desk
 
 import java.io.IOException
 import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch, TimeUnit}
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 import scala.jdk.CollectionConverters.*
 
 class ConnectionRecoverySpec extends munit.FunSuite:
@@ -20,14 +20,19 @@ class ConnectionRecoverySpec extends munit.FunSuite:
           def send(text: String): Unit = subscribed.countDown()
           def close(): Unit = { val _ = closed.incrementAndGet() }
     val events = new ConcurrentLinkedQueue[Event]()
-    val feed = new Feed(connector, rest, events, () => 1_000_000L, "XMR")
+    val clock = new AtomicLong(1000L)
+    val feed =
+      new Feed(connector, rest, events, () => 1_000_000L, "XMR", monotonic = () => clock.get())
     val thread = new Thread(() => { val _ = feed.connectOnce() })
     thread.setDaemon(true)
     thread.start()
     try
       assert(subscribed.await(3, TimeUnit.SECONDS))
       feed.heartbeat()
-      Thread.sleep(5500)
+      clock.addAndGet(Feed.replyWaitMs - 1)
+      feed.heartbeat()
+      assertEquals(closed.get(), 0, "the socket must stay open until the reply deadline")
+      clock.incrementAndGet()
       feed.heartbeat()
       assertEquals(closed.get(), 1, "successful writes must not keep an unresponsive socket open")
       assertEquals(events.asScala.count(_ == Event.SocketDown), 1)

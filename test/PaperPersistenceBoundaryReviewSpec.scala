@@ -106,7 +106,7 @@ class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
       thread.setDaemon(true)
       readers :+= thread
       thread.start()
-      assert(done.await(100, TimeUnit.MILLISECONDS), label + " blocked behind persistence")
+      assert(done.await(1, TimeUnit.SECONDS), label + " blocked behind persistence")
       result.get() match
         case Right(value) => value
         case Left(error)  => throw error

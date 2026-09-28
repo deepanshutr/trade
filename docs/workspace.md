@@ -92,7 +92,8 @@ Restart an already running Desk after installation to load the new build.
 ## Development
 
 Install Scala CLI, `python3` and `expect` to run the checks. `make test` runs the
-offline Scala suite and `make test-python`, which discovers `test/test_*.py`.
+offline Scala suite excluding `slow` tests, and `make test-python`, which discovers
+`test/test_*.py`. Scala test targets disable the build server.
 The key-helper tests skip with a reason when `cryptography`, `pycryptodome`
 (`Crypto`) or `eth-account` is missing. They use fixture keys and fake stores,
 plus native access objects on macOS, without creating or reading keychain items.

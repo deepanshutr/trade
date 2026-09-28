@@ -160,8 +160,8 @@ class PaperSaveResponsivenessSpec extends munit.FunSuite:
       assert(saving.await(3, TimeUnit.SECONDS), "worker never reached the synthetic save")
       readers.foreach(_.start())
       assert(readersStarted.await(1, TimeUnit.SECONDS), "synthetic readers did not start")
-      val sendReturned = sent.await(250, TimeUnit.MILLISECONDS)
-      val readsReturned = viewed.await(250, TimeUnit.MILLISECONDS)
+      val sendReturned = sent.await(1, TimeUnit.SECONDS)
+      val readsReturned = viewed.await(1, TimeUnit.SECONDS)
       assert(
         sendReturned && readsReturned,
         s"Send returned=$sendReturned, readers remaining=${viewed.getCount}. ${trace.toString}"

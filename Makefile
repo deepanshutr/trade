@@ -1,14 +1,17 @@
 SCALA_CLI ?= scala-cli
-.PHONY: test test-python live check build install fmt
+.PHONY: test test-python live slow check build install fmt
 
 test: test-python
-	$(SCALA_CLI) test . -- --exclude-tags=live
+	$(SCALA_CLI) --power test . --server=false -- --exclude-tags=live,slow
 
 test-python:
 	python3 -m unittest discover -s test -p 'test_*.py'
 
 live:
-	$(SCALA_CLI) test . -- --include-tags=live
+	$(SCALA_CLI) --power test . --server=false -- --include-tags=live
+
+slow:
+	$(SCALA_CLI) --power test . --server=false -- --include-tags=slow
 
 check:
 	$(SCALA_CLI) compile --test . && $(SCALA_CLI) fmt --check .
