@@ -18,14 +18,14 @@ final class OutlookWorker(
   private def key(coin: String, column: HorizonOutlook): Target =
     (coin, column.horizon.label, column.at, column.target)
 
-  private def observe(view: OutlookView): Unit =
-    val touched = view.columns.filter(_.status == "reached").map(key(view.coin, _)).toSet
+  private def observe(coin: String, columns: Vector[HorizonOutlook]): Unit =
+    val touched = columns.map(key(coin, _)).toSet
     if touched.nonEmpty then
       val _ = reached.updateAndGet(_ ++ touched)
 
   def forDisplay(value: OutlookView, market: Snapshot, now: Long): OutlookView =
     val visible = if value.coin.isEmpty then value else Outlook.visible(value, market, now)
-    observe(visible)
+    observe(visible.coin, visible.columns.filter(_.status == "reached"))
     val latched = reached.get()
     val columns = visible.columns.map { column =>
       if latched.contains(key(visible.coin, column)) && Set(
@@ -62,6 +62,8 @@ final class OutlookWorker(
       val current = raw.columns.map(key(raw.coin, _)).toSet
       val _ = reached.updateAndGet(_.intersect(current))
       previous = Some(revision)
+    if raw.coin == market.coin then
+      observe(raw.coin, raw.columns.filter(Outlook.targetTouched(_, market, now)))
     if !closed.get() then publish(raw.copy(calculatedAt = now))
 
   def start(): Unit = synchronized {
