@@ -155,20 +155,13 @@ final class Diagnostics private[desk] (
     else if view.pending then "pending"
     else if view.ready then "ready"
     else
-      view.block match
-        case Some("Paper waiting for market details" | "waiting for market data") => "market"
-        case Some("account data stale")                                           => "account"
-        case Some("Set XMR leverage to 5x")                                       => "leverage"
-        case Some("Paper storage unavailable. Restart to recover")                => "storage"
-        case Some(
-              "Reconnecting. Waiting for fresh prices" | "Paper waiting for selected-market depth" |
-              "Paper quote invalid. Waiting for prices" |
-              "Paper prices stale. Waiting for fresh depth" |
-              "Paper depth behind quote. Waiting for depth" | "connection disconnected" |
-              "waiting for selected depth" | "invalid selected quote" | "selected depth stale"
-            ) =>
-          "prices"
-        case _ => "blocked"
+      view.blockCode match
+        case BlockCode.Market                        => "market"
+        case BlockCode.Account                       => "account"
+        case BlockCode.Leverage                      => "leverage"
+        case BlockCode.Storage                       => "storage"
+        case BlockCode.Prices | BlockCode.Connection => "prices"
+        case BlockCode.Blocked                       => "blocked"
     val key = (kind, state)
     val elapsed = monotonic()
     val changed = executionSeen.forall(_._1 != key)

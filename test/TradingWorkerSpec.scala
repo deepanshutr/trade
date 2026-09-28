@@ -589,6 +589,7 @@ class TradingWorkerSpec extends munit.FunSuite:
       )
       assert(!f.worker.view.ready)
       assertEquals(f.worker.view.block, Some("selected depth stale"))
+      assertEquals(f.worker.view.blockCode, BlockCode.Prices)
       assert(!f.worker.submit(buy, "XMR"))
       assertEquals(f.posts.get(), 0)
     finally f.close()
@@ -1408,6 +1409,7 @@ class TradingWorkerSpec extends munit.FunSuite:
       waitFor("account was not observed")(f.worker.view.position.nonEmpty)
       assert(!f.worker.view.ready)
       assertEquals(f.worker.view.block, Some("Set XMR leverage to 5x"))
+      assertEquals(f.worker.view.blockCode, BlockCode.Leverage)
       Thread.sleep(1200)
       assertEquals(f.posts.get(), 0)
       assertEquals(writes.get(), 0)
@@ -1423,6 +1425,7 @@ class TradingWorkerSpec extends munit.FunSuite:
       waitFor("account was not observed")(f.worker.view.position.nonEmpty)
       assert(!f.worker.view.ready)
       assertEquals(f.worker.view.block, Some("Set XMR leverage to 5x"))
+      assertEquals(f.worker.view.blockCode, BlockCode.Leverage)
       assertEquals(f.worker.view.leverage, Some(1))
       assertEquals(f.posts.get(), 0)
       assert(f.worker.preview(buy).isRight)
@@ -1571,6 +1574,7 @@ class TradingWorkerSpec extends munit.FunSuite:
       f.sendActive()
       assert(!f.worker.view.ready)
       assertEquals(f.worker.view.block, Some("Set XMR leverage to 5x"))
+      assertEquals(f.worker.view.blockCode, BlockCode.Leverage)
       assert(!f.worker.submitReviewed(review))
       f.leverage = 5
       f.activeMode = "isolated"

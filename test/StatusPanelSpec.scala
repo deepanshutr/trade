@@ -23,13 +23,13 @@ class StatusPanelSpec extends munit.FunSuite:
     )
 
   test("current connection and account blocks replace old success immediately") {
-    for (reason, expected) <- Vector(
-        "connection disconnected" -> "Reconnecting",
-        "selected depth stale" -> "Waiting for prices",
-        "account data stale" -> "Account unavailable"
+    for (reason, code, expected) <- Vector(
+        ("connection disconnected", BlockCode.Connection, "Reconnecting"),
+        ("selected depth stale", BlockCode.Prices, "Waiting for prices"),
+        ("account data stale", BlockCode.Account, "Account unavailable")
       )
     do
-      val frame = draw(TradingView("XMR", message = reason, block = Some(reason)))
+      val frame = draw(TradingView("XMR", message = reason, block = Some(reason), blockCode = code))
       assert(frame.lines.exists(_.contains(expected)))
       assert(!frame.lines.exists(_.contains("Bought")))
       assert(!frame.buttons.exists(_.action.isInstanceOf[DeskAction.Prepare]))
@@ -88,4 +88,23 @@ class StatusPanelSpec extends munit.FunSuite:
     for coin <- Vector("XMR", "BTC"); unavailable <- Vector(false, true) do
       val frame = draw(TradingView(coin, message = "Ready"), logsUnavailable = unavailable)
       assertEquals(frame.lines.head.contains(" !logs"), unavailable)
+  }
+
+  test("the status label follows the block code when its wording changes") {
+    val text = "Selected information is catching up"
+    val frame =
+      draw(TradingView("XMR", message = text, block = Some(text), blockCode = BlockCode.Prices))
+    assert(frame.lines.exists(_.contains("Waiting for prices")), frame.lines.mkString("\n"))
+  }
+
+  test("view-only router copies do not inherit a live block label") {
+    val live = TradingView(
+      "XMR",
+      message = "waiting",
+      block = Some("selected depth stale"),
+      blockCode = BlockCode.Prices
+    )
+    val frame = draw(live.copy(block = Some("View only")), panel.copy(mode = "VIEW"))
+    assert(frame.lines.exists(_.contains("View only")))
+    assert(!frame.lines.exists(_.contains("Waiting for prices")))
   }

@@ -137,8 +137,19 @@ object Workspace:
     val raw = if view.pending then view.message
     else view.block.orElse(panel.actionNotice).getOrElse("")
     val lower = raw.toLowerCase
+    val coded = if view.block.isEmpty || panel.mode == "VIEW" then None
+    else
+      view.blockCode match
+        case BlockCode.Connection                  => Some("Reconnecting")
+        case BlockCode.Prices                      => Some("Waiting for prices")
+        case BlockCode.Account                     => Some("Account unavailable")
+        case BlockCode.Storage                     => Some("Save failed")
+        case BlockCode.Market | BlockCode.Leverage => Some(safeText(raw).takeWhile(_ != '\n'))
+        // Dynamic action notices and uncoded router blocks retain their existing labels.
+        case BlockCode.Blocked => None
     val text =
-      if view.pending then
+      if !view.pending && coded.nonEmpty then coded.get
+      else if view.pending then
         val stage = "(?i).*\\b(queued|checking|saving) (\\d+s).*".r
         raw match
           case stage(name, age)              => name.capitalize + " " + age

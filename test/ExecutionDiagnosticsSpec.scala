@@ -15,7 +15,12 @@ class ExecutionDiagnosticsSpec extends munit.FunSuite:
     val saved = new Memory
     val log = new Diagnostics(() => saved, () => 10000L, 2000L, monotonic = time.get)
     val waiting =
-      TradingView("XMR", message = "waiting", block = Some("Paper waiting for market details"))
+      TradingView(
+        "XMR",
+        message = "waiting",
+        block = Some("Paper waiting for market details"),
+        blockCode = BlockCode.Market
+      )
     log.execution("PAPER", waiting)
     for _ <- 1 to 100 do log.execution("PAPER", waiting)
     time.addAndGet(1250L)
@@ -43,12 +48,30 @@ class ExecutionDiagnosticsSpec extends munit.FunSuite:
       portfolio = PortfolioView(tokenValue = Some(BigDecimal("987654.321")))
     )
     val cases = Vector(
-      ("LIVE", base.copy(block = Some("account data stale")), "account"),
-      ("LIVE", base.copy(block = Some("Set XMR leverage to 5x")), "leverage"),
-      ("PAPER", base.copy(block = Some("Paper prices stale. Waiting for fresh depth")), "prices"),
+      (
+        "LIVE",
+        base.copy(block = Some("account data stale"), blockCode = BlockCode.Account),
+        "account"
+      ),
+      (
+        "LIVE",
+        base.copy(block = Some("Set XMR leverage to 5x"), blockCode = BlockCode.Leverage),
+        "leverage"
+      ),
       (
         "PAPER",
-        base.copy(block = Some("Paper storage unavailable. Restart to recover")),
+        base.copy(
+          block = Some("Paper prices stale. Waiting for fresh depth"),
+          blockCode = BlockCode.Prices
+        ),
+        "prices"
+      ),
+      (
+        "PAPER",
+        base.copy(
+          block = Some("Paper storage unavailable. Restart to recover"),
+          blockCode = BlockCode.Storage
+        ),
         "storage"
       ),
       ("LIVE", base.copy(pending = true), "pending"),
@@ -64,4 +87,19 @@ class ExecutionDiagnosticsSpec extends munit.FunSuite:
     assert(!text.contains(secret))
     assert(!text.contains("987654"))
     assertEquals(events.last("mode").str, "unknown")
+  }
+
+  test("wording changes cannot change a coded price block or leak its text") {
+    val saved = new Memory
+    val log = new Diagnostics(() => saved, () => 10000L, 2000L)
+    val text = "PRIVATE_REWORDED_DEPTH_REASON"
+    log.execution(
+      "LIVE",
+      TradingView("XMR", message = text, block = Some(text), blockCode = BlockCode.Prices)
+    )
+    log.start()
+    log.close()
+    val events = saved.records.filter(_("event").str == "execution")
+    assertEquals(events.map(_("state").str), Vector("prices"))
+    assert(!events.map(ujson.write(_)).mkString.contains(text))
   }
