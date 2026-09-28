@@ -37,6 +37,7 @@ object Feed:
   val unknownMarket = "Unknown market. Press m to retry"
   val ping = """{"method":"ping"}"""
   val historyEveryMs = 60_000L
+  private val historyGraceMs = 5000L
   val heartbeatEveryMs = 500L
   val pingEveryMs = 5000L
   val replyWaitMs = 5000L
@@ -209,10 +210,7 @@ final class Feed(
             accepted
           }
           synchronized {
-            if current.contains(c) then
-              val now = clock()
-              historyAt = historyAt.filter((_, at) => now - at < Feed.historyEveryMs)
-              wakeHistory()
+            if current.contains(c) then wakeHistory()
           }
           c.closed.await()
           opened
@@ -299,11 +297,15 @@ final class Feed(
     val requestedAt = clock()
     val key = (c, i)
     val accepted = synchronized {
-      val wait =
-        if historySuccess.get(key).nonEmpty && historySuccess.get(key) == historyAt.get(key) then
-          State.intervalMs(i).max(Feed.historyEveryMs)
-        else Feed.historyEveryMs
-      val due = historyAt.get(key).forall(at => requestedAt < at || requestedAt - at >= wait)
+      val floor =
+        historyAt.get(key).forall(at => requestedAt < at || requestedAt - at >= Feed.historyEveryMs)
+      // Credit only boundaries past the grace window, including on the first fetch.
+      def boundary(at: Long): Long = Math.floorDiv(at - Feed.historyGraceMs, State.intervalMs(i))
+      val due = floor && historySuccess
+        .get(key)
+        .forall(at =>
+          requestedAt < at || historyAt.get(key) != Some(at) || boundary(requestedAt) > boundary(at)
+        )
       if !relevant() || historyInFlight.contains(key) || !due then false
       else
         historyAt = historyAt.updated(key, requestedAt)

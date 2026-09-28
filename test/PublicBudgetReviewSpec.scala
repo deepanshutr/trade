@@ -64,7 +64,8 @@ class PublicBudgetReviewSpec extends munit.FunSuite:
   }
 
   test("successful history repairs ask only for recent overlap while failures retry full range") {
-    val now = new AtomicLong(at)
+    val start = at + 5000L
+    val now = new AtomicLong(start)
     val requests = new ConcurrentLinkedQueue[String]()
     var available = true
     val rest = new Rest:
@@ -86,7 +87,7 @@ class PublicBudgetReviewSpec extends munit.FunSuite:
     val recent = ujson.read(requests.asScala.toVector.last)("req")
     assertEquals(requests.size(), 7)
     assertEquals(recent("interval").str, "1m")
-    assertEquals(recent("startTime").num.toLong, at - 120000L)
+    assertEquals(recent("startTime").num.toLong, start - 120000L)
     assertEquals(PublicRequestBudget.cost(requests.asScala.toVector.last), 21)
     available = false
     requests.clear()
