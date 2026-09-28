@@ -1,6 +1,10 @@
 package desk
 
 class KeysSpec extends munit.FunSuite:
+  test("removed details feedback and scroll keys emit no command") {
+    assertEquals(feed(sequence("hyn[]"))._2, Vector.empty)
+  }
+
   private def feed(
       bytes: Seq[Int],
       prompt: Boolean = false,
@@ -149,7 +153,7 @@ class KeysSpec extends munit.FunSuite:
     )
     assertEquals(
       feed(Vector(13, 10, 3))._2,
-      Vector(Command.SubmitTarget, Command.SubmitTarget, Command.Quit)
+      Vector(Command.Confirm, Command.Confirm, Command.Quit)
     )
     assertEquals(feed(sequence("xi"))._2, Vector.empty)
   }
@@ -210,7 +214,7 @@ class KeysSpec extends munit.FunSuite:
     val pending = feed(Vector(27))
     assertEquals(pending, (Vector(27), Vector.empty))
     val cancelled = Keys.expire(pending._1, false)
-    assertEquals(cancelled._2, Some(Command.CancelTarget))
+    assertEquals(cancelled._2, Some(Command.Cancel))
     assertEquals(Keys.expire(pending._1, true)._2, Some(Command.PromptCancel))
     assertEquals(
       Keys.step(cancelled._1, 49, false)._2,

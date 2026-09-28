@@ -5,6 +5,16 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReferenc
 import scala.jdk.CollectionConverters.*
 
 class MainSpec extends munit.FunSuite:
+  test("conflicting or repeated audio flags explain the choice") {
+    for flags <- Seq(
+        Seq("--chime", "--mute"),
+        Seq("--mute", "--chime"),
+        Seq("--chime", "--chime"),
+        Seq("--mute", "--mute")
+      )
+    do assertEquals(Main.parseArgs(flags), Left("choose one of chime or mute"))
+  }
+
   private def awaitState(label: String)(ready: => Boolean): Unit =
     val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
     while !ready && System.nanoTime() < deadline do Thread.sleep(1)

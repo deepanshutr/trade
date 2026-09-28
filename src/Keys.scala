@@ -41,36 +41,19 @@ object Keys:
       pending: Vector[Int],
       byte: Int,
       promptOpen: Boolean,
-      mouseEnabled: Boolean = false,
-      textInput: Boolean = false
+      mouseEnabled: Boolean = false
   ): (Vector[Int], Option[Command]) =
     if byte == 3 then (Vector.empty, Some(Command.Quit))
     else if pending == Vector(afterEscape) then
       prefix(byte) match
         case Some(next) => (next, None)
-        case None       => step(Vector.empty, byte, promptOpen, mouseEnabled, textInput)
+        case None       => step(Vector.empty, byte, promptOpen, mouseEnabled)
     else if pending == Vector(escapeIntermediate) then
       (if byte >= 48 && byte <= 126 then Vector.empty else pending, None)
     else if pending.headOption.contains(mouseReport) then (consumeReport(pending, byte), None)
     else if pending.headOption.contains(paste) then
       val tail = pending.tail :+ byte
-      if textInput && promptOpen then
-        val ended = tail.endsWith(pasteEnd)
-        val retained = if ended then pasteEnd.size
-        else (0 until pasteEnd.size).filter(k => tail.endsWith(pasteEnd.take(k))).max
-        val text = tail
-          .dropRight(retained)
-          .flatMap { n =>
-            if n == 10 || n == 13 || n == 9 then Some(' ')
-            else if n >= 32 && n < 127 then Some(n.toChar)
-            else None
-          }
-          .mkString
-        (
-          if ended then Vector.empty else Vector(paste) ++ tail.takeRight(retained),
-          Option.when(text.nonEmpty)(Command.PromptText(text))
-        )
-      else if tail.endsWith(pasteEnd) then (Vector.empty, None)
+      if tail.endsWith(pasteEnd) then (Vector.empty, None)
       else (Vector(paste) ++ tail.takeRight(pasteEnd.size - 1), None)
     else if pending.headOption.exists(n => n == operatingString || n == controlString) then
       val state = pending.head
@@ -123,7 +106,7 @@ object Keys:
 
   def expire(pending: Vector[Int], promptOpen: Boolean): (Vector[Int], Option[Command]) =
     if pending == Vector(27) then
-      (Vector(afterEscape), Some(if promptOpen then Command.PromptCancel else Command.CancelTarget))
+      (Vector(afterEscape), Some(if promptOpen then Command.PromptCancel else Command.Cancel))
     else (pending, None)
 
   private def plain(byte: Int): Option[Command] = byte match
@@ -133,7 +116,7 @@ object Keys:
     case 113 | 3                 => Some(Command.Quit)
     case 109                     => Some(Command.StartMarketPrompt)
     case 99                      => Some(Command.ToggleCandles)
-    case 13 | 10                 => Some(Command.SubmitTarget)
+    case 13 | 10                 => Some(Command.Confirm)
     case 57                      => Some(Command.SelectTarget(Side.Buy))
     case 48                      => Some(Command.SelectTarget(Side.Sell))
     case n if n >= 49 && n <= 56 => Some(Command.PlaceOrder(Trading.action(n - 49)))

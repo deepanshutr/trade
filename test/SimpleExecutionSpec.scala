@@ -107,7 +107,7 @@ class SimpleExecutionSpec extends munit.FunSuite:
       val expected =
         if intent.kind == OrderKind.Hard && intent.big == big then Vector(intent) else Vector.empty
       assertEquals(f.sent.map(_.intent), expected)
-      f.key(Command.SubmitTarget)
+      f.key(Command.Confirm)
       assertEquals(f.sent.map(_.intent), expected)
   }
 
