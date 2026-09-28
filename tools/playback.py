@@ -128,24 +128,6 @@ def market_matches(frame, coin, midpoint):
     return matched is not None and float(matched[1]) <= 5
 
 
-def target_matches(frame, coin, side, limit, midpoint):
-    if len(frame["lines"]) < 30 or not market_matches(frame, coin, midpoint):
-        return False
-    cols = len(frame["lines"][0])
-    divider = min(cols * 3 // 5, cols - 47)
-    return frame["lines"][-6][divider:] == "|" + f"Target {side} {limit} Up/Down".ljust(cols - divider - 1)
-
-
-def idle_matches(frame, coin, midpoint):
-    if len(frame["lines"]) < 30 or not market_matches(frame, coin, midpoint):
-        return False
-    cols = len(frame["lines"][0])
-    divider = min(cols * 3 // 5, cols - 47)
-    selection_cleared = frame["lines"][-6][divider:] == "|" + " " * (cols - divider - 1)
-    actions = frame["lines"][-8][divider:]
-    return selection_cleared and "9 BUY target" in actions and "0 SELL target" in actions
-
-
 def history_matches(before, after, shift, max_seconds=10, clock_count=3):
     elapsed = after["captured_ns"] - before["captured_ns"]
     if elapsed < 0 or elapsed > max_seconds * 1_000_000_000:

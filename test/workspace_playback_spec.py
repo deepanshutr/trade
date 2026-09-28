@@ -28,14 +28,10 @@ class WorkspaceCaptureSpec(unittest.TestCase):
         lines[24] = " " * 53 + "|" + "Target buy 522.28 Up/Down".ljust(46)
         return {"lines": lines}
 
-    def test_workspace_pins_market_and_target_at_actual_panel_rows(self):
+    def test_workspace_pins_exact_market_and_midpoint(self):
         frame = self.frame()
         self.assertTrue(playback.market_matches(frame, "XMR", "522.26"))
-        self.assertTrue(playback.target_matches(frame, "XMR", "buy", "522.28", "522.26"))
-        self.assertFalse(playback.target_matches(frame, "XMR", "sell", "522.28", "522.26"))
         self.assertFalse(playback.market_matches(frame, "XMR", "522.260"))
-        frame["lines"][25], frame["lines"][24] = frame["lines"][24], frame["lines"][25]
-        self.assertFalse(playback.target_matches(frame, "XMR", "buy", "522.28", "522.26"))
 
     def test_workspace_header_requires_a_fresh_exact_market(self):
         frame = self.frame()
@@ -49,16 +45,6 @@ class WorkspaceCaptureSpec(unittest.TestCase):
             frame["lines"][0] = changed
             self.assertFalse(playback.market_matches(frame, "XMR", "522.26"))
         self.assertFalse(playback.market_matches({"lines": []}, "XMR", "522.26"))
-
-    def test_cancelled_target_requires_idle_large_controls_and_no_selected_price(self):
-        frame = self.frame()
-        frame["lines"][22] = " " * 53 + "|" + "|   9 BUY target    | |  0 SELL target    |".ljust(46)
-        self.assertFalse(playback.idle_matches(frame, "XMR", "522.26"))
-        frame["lines"][24] = " " * 53 + "|" + " " * 46
-        self.assertTrue(playback.idle_matches(frame, "XMR", "522.26"))
-        frame["lines"][22] = " " * 53 + "|" + " " * 46
-        self.assertFalse(playback.idle_matches(frame, "XMR", "522.26"))
-
 
 if __name__ == "__main__":
     unittest.main()
