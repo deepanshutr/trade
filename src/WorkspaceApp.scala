@@ -8,10 +8,13 @@ import scala.util.Try
 object WorkspaceApp:
   private[desk] final class Restoration(closeAll: () => Unit, terminal: () => Unit):
     @volatile private var restored = false
+    @volatile private var restoreOwner: Thread = null
     def started: Boolean = restored
+    def owner: Thread = restoreOwner
     def restore(): Boolean = synchronized {
       if restored then false
       else
+        restoreOwner = Thread.currentThread()
         restored = true
         try closeAll()
         finally terminal()
@@ -30,8 +33,8 @@ object WorkspaceApp:
       report("Desk stopped: " + error.getClass.getSimpleName)
       exit(1)
     if thread eq mainThread then
-      try restoration.restore()
-      finally stop()
+      try if !restoration.started then restoration.restore()
+      finally if restoration.owner eq thread then stop()
     else if !restoration.started && restoration.restore() then stop()
 
   private[desk] def closeAll(
