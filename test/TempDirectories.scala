@@ -2,12 +2,16 @@ package desk
 
 import java.nio.file.{Files, Path}
 import scala.collection.mutable.ArrayBuffer
+import scala.util.control.NonFatal
 
 object TempDirectories:
   def finish(entries: IterableOnce[(Path, Boolean)], failed: Boolean): Unit =
     entries.iterator.foreach { (path, keep) =>
       if failed && keep then System.err.println(s"Test evidence: $path")
-      else remove(path)
+      else
+        try remove(path)
+        catch
+          case NonFatal(error) => System.err.println(s"Failed to remove test folder $path: $error")
     }
 
   def remove(directory: Path): Unit =

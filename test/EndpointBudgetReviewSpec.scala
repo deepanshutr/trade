@@ -17,7 +17,7 @@ object EndpointBudgetProbe:
 
 class EndpointBudgetReviewSpec extends TempDirectorySuite:
   test("the real public adapter reserves and waits before constructing an HTTP request") {
-    val root = tempDirectory("desk-review-endpoint-budget")
+    val root = tempDirectory("desk-review-endpoint-budget", keepOnFailure = true)
     val child = new ProcessBuilder(
       Path.of(System.getProperty("java.home"), "bin/java").toString,
       "-Duser.home=" + root.toString,

@@ -64,7 +64,7 @@ class MessageHistoryRemovalSpec extends TempDirectorySuite:
   }
 
   test("workspace passes a held legacy history lock and leaves saved messages untouched") {
-    val root = tempDirectory("desk-history-removal")
+    val root = tempDirectory("desk-history-removal", keepOnFailure = true)
     val settings = root.resolve("settings.json")
     LocalFiles.write(settings, "{}")
     val saved = root.resolve("messages/messages.json")

@@ -484,7 +484,7 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
   }
 
   test("separate processes hold expensive transport exclusively while selected depth passes") {
-    val root = tempDirectory("review-expensive-processes-")
+    val root = tempDirectory("review-expensive-processes-", keepOnFailure = true)
     val children = scala.collection.mutable.ArrayBuffer.empty[(String, Process)]
     def child(role: String): Process =
       val process = new ProcessBuilder(

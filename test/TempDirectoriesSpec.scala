@@ -42,6 +42,36 @@ class TempDirectoriesSpec extends TempDirectorySuite:
     assertEquals(bytes.toString.trim, s"Test evidence: $evidence")
   }
 
+  test("cleanup reports removal failures and continues with the remaining folders") {
+    val blocked = List(tempDirectory("blocked-"), tempDirectory("also-blocked-"))
+    val nested = blocked.map(root => Files.createDirectory(root.resolve("nested")))
+    nested.foreach(path => Files.writeString(path.resolve("saved"), "temporary"))
+    val permissions = nested.map(Files.getPosixFilePermissions(_))
+    val ordinary = tempDirectory("remaining-")
+    val bytes = new java.io.ByteArrayOutputStream()
+    val output = new java.io.PrintStream(bytes)
+    val previous = System.err
+    try
+      nested.foreach(path =>
+        Files.setPosixFilePermissions(
+          path,
+          java.nio.file.attribute.PosixFilePermissions.fromString("r-x------")
+        )
+      )
+      System.setErr(output)
+      TempDirectories.finish((blocked :+ ordinary).map(_ -> false), failed = false)
+      assert(!Files.exists(ordinary))
+      blocked.foreach(path =>
+        assert(Files.exists(path.resolve("nested/saved")))
+        assert(bytes.toString.contains(s"Failed to remove test folder $path:"), bytes.toString)
+      )
+      assertEquals(bytes.toString.linesIterator.size, blocked.size)
+    finally
+      System.setErr(previous)
+      output.close()
+      nested.zip(permissions).foreach((path, saved) => Files.setPosixFilePermissions(path, saved))
+  }
+
   test("real suite test creates per-test and shared files") {
     val root = tempDirectory("real-test-", keepOnFailure = true)
     testFolder = Some(root)

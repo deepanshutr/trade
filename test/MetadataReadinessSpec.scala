@@ -50,7 +50,9 @@ class MetadataReadinessSpec extends TempDirectorySuite:
     try
       assert(!f.worker.view.ready)
       f.worker.start()
-      Wait.until("Malformed inherited metadata suppressed a valid fetch")(f.worker.view.ready)
+      Wait.until("Malformed inherited metadata suppressed a valid fetch", seconds = 0.5)(
+        f.worker.view.ready
+      )
       assert(f.calls.get() >= 1)
     finally f.close()
   }

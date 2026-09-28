@@ -17,7 +17,7 @@ object PublicBudgetProcess:
 class PublicBudgetProcessSpec extends TempDirectorySuite:
   override val munitTimeout = 90.seconds
   test("separate recorder and terminal processes cannot overwrite each other's public allowance") {
-    val root = tempDirectory("desk-two-request-processes")
+    val root = tempDirectory("desk-two-request-processes", keepOnFailure = true)
     val children = Vector("recorder", "terminal").map { name =>
       new ProcessBuilder(
         Path.of(System.getProperty("java.home"), "bin/java").toString,
