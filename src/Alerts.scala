@@ -208,21 +208,15 @@ final class Announcements(
 
   def start(): Unit = synchronized {
     if !closed.get() && started.compareAndSet(false, true) then
-      val worker = new Thread(
-        () => {
-          try
-            while !closed.get() do
-              val job = queue.poll(100L, TimeUnit.MILLISECONDS)
-              if job != null then
-                val canceled = () => closed.get() || muted || generation.get() != job.generation
-                if !canceled() then
-                  try output.play(job.value.text, voice, canceled)
-                  catch case _: Exception => ()
-          catch case _: InterruptedException => ()
-        },
-        "desk-announcements"
-      )
-      worker.setDaemon(true)
+      val worker = Threads.daemon("desk-announcements") {
+        while !closed.get() do
+          val job = queue.poll(100L, TimeUnit.MILLISECONDS)
+          if job != null then
+            val canceled = () => closed.get() || muted || generation.get() != job.generation
+            if !canceled() then
+              try output.play(job.value.text, voice, canceled)
+              catch case _: Exception => ()
+      }
       thread = Some(worker)
       worker.start()
   }

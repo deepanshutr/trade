@@ -116,8 +116,7 @@ final class Diagnostics private[desk] (
   private var frameStalled = false
   private var switchStalled = false
   private var executionSeen = Option.empty[((String, String), Long, Long)]
-  private val writer = new Thread(() => run(), "desk-diagnostics")
-  writer.setDaemon(true)
+  private val writer = Threads.daemon("desk-diagnostics")(run())
 
   private def emit(kind: String, fields: (String, ujson.Value)*): Unit =
     if !closed.get() then

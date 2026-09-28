@@ -75,26 +75,23 @@ object Workspace:
 
   def indicatorRows(s: Snapshot, now: Long, width: Int, style: Style): Vector[String] =
     val h = ((width - 24) / 2).max(1).min(20)
-    val books = Gauges.bookLenses.indices.map { i =>
-      val compact = Chart.plain(Gauges.bookRow(s, i, now, h, Style.mono, labelWidth = 3))
+    def row(compact: String, seconds: Long, ink: String): String =
       val fitted = Chart.fit(compact, width)
-      val marked = if style.colour && Gauges.bookLenses(i)._2 * 1000 > now - s.since then
-        fitted.take(5) + Screen.dim + fitted.slice(5, 8) + Screen.reset + style.book + fitted.drop(
-          8
-        )
+      val marked = if style.colour && seconds * 1000 > now - s.since then
+        fitted.take(5) + Screen.dim + fitted.slice(5, 8) + Screen.reset + ink + fitted.drop(8)
       else fitted
-      style.wrap(style.book, marked)
+      style.wrap(ink, marked)
+    val books = Gauges.bookLenses.indices.map { i =>
+      row(
+        Chart.plain(Gauges.bookRow(s, i, now, h, Style.mono, labelWidth = 3)),
+        Gauges.bookLenses(i)._2,
+        style.book
+      )
     }
     val tape = Gauges.tapeLenses.indices.map { i =>
       val original = Chart.plain(Gauges.compactTapeRow(s, i, now, h, Style.mono))
       val compact = if original.length > width then original.replace(" n", "n") else original
-      val fitted = Chart.fit(compact, width)
-      val marked = if style.colour && Gauges.tapeLenses(i)._2 * 1000 > now - s.since then
-        fitted.take(5) + Screen.dim + fitted.slice(5, 8) + Screen.reset + style.tape + fitted.drop(
-          8
-        )
-      else fitted
-      style.wrap(style.tape, marked)
+      row(compact, Gauges.tapeLenses(i)._2, style.tape)
     }
     val correlations = State.refCoins.flatMap { coin =>
       Gauges.horizons.map { (label, interval, n) =>
@@ -205,11 +202,11 @@ object Workspace:
         now = now,
         zone = zone,
         style = style,
-        portfolio = view.forMarket(s.coin).portfolio
+        portfolio = view.portfolio
       )
       val gauges = indicatorRows(s, now, (leftWidth - 1) / 2, style).map(Chart.fit(_, leftWidth))
-      val market = marketFrame.lines.padTo(tradeTop, " " * chartWidth) ++
-        Vector.fill(3)(" " * leftWidth) ++ gauges
+      val market = (marketFrame.lines.padTo(tradeTop, " " * chartWidth) ++
+        Vector.fill(3)(" " * leftWidth) ++ gauges).padTo(rows, " " * leftWidth).take(rows)
       val right = Array.fill(rows)("")
       val buttons = Vector.newBuilder[DeskButton]
       val disabled = Vector.newBuilder[DeskButton]
@@ -275,7 +272,7 @@ object Workspace:
       val big = "$" + Trading.format(panel.sizes.big) + (if panel.bigOrder then " *" else "")
       button(tradeTop + 5, 0, small, DeskAction.OrderSize(false), choosing)
       button(tradeTop + 5, small.length + 3, big, DeskAction.OrderSize(true), choosing)
-      val canTrade = choosing && view.ready && view.coin == s.coin && panel.mode != "VIEW" &&
+      val canTrade = choosing && view.ready && panel.mode != "VIEW" &&
         heading.length <= rightWidth
       Vector(Side.Buy, Side.Sell).zipWithIndex.foreach { (side, i) =>
         val intent = OrderIntent(side, OrderKind.Hard, big = panel.bigOrder)

@@ -96,14 +96,7 @@ object Main:
       case Right(args) => run(args)
 
   private def daemon(name: String)(body: => Unit): Thread =
-    val thread = new Thread(
-      () => {
-        try body
-        catch case _: InterruptedException => Thread.currentThread().interrupt()
-      },
-      name
-    )
-    thread.setDaemon(true)
+    val thread = Threads.daemon(name)(body)
     thread.start()
     thread
 
