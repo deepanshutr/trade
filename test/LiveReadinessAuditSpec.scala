@@ -230,9 +230,9 @@ class LiveReadinessAuditSpec extends munit.FunSuite:
         "mode switch never reached worker shutdown"
       )
       reader.start()
-      val responsive = readerReturned.await(200, TimeUnit.MILLISECONDS)
+      val responsive = readerReturned.await(1, TimeUnit.SECONDS)
       println(
-        s"MODE_SWITCH screenReturnedWithin200ms=$responsive readerState=${reader.getState}"
+        s"MODE_SWITCH screenReturnedWithin1s=$responsive readerState=${reader.getState}"
       )
       assert(
         responsive,

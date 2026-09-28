@@ -183,7 +183,10 @@ class OfflinePlaybackSpec extends munit.FunSuite:
           descendant.get().onExit().get(5, TimeUnit.SECONDS)
   }
 
-  test("six hundred terminal clicks at ten per second record fills or explicit refusals") {
+  test(
+    "six hundred terminal clicks at ten per second record fills or explicit refusals"
+      .tag(new munit.Tag("slow"))
+  ) {
     val directory = Files.createTempDirectory("desk-click-speed-")
     val output = directory.resolve("capture")
     run(
