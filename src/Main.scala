@@ -38,6 +38,7 @@ object Main:
           loop(tail, chosen.copy(audio = "chime"), hasCoin)
         case "--mute" :: tail if chosen.audio == "voice" =>
           loop(tail, chosen.copy(audio = "mute"), hasCoin)
+        case ("--chime" | "--mute") :: _ => Left("choose one of chime or mute")
         case "--config" :: path :: tail if !path.startsWith("--") && chosen.config.isEmpty =>
           loop(tail, chosen.copy(config = Some(path)), hasCoin)
         case "--state" :: path :: tail if !path.startsWith("--") && chosen.stateDirectory.isEmpty =>
@@ -158,7 +159,7 @@ object Main:
             else before
           case Event.Key(Command.StartMarketPrompt | Command.PromptCancel | Command.Quit) =>
             State.reduce(before, event, now()).copy(marketPending = None, marketNotice = None)
-          case Event.Key(Command.CancelTarget) if before.marketPending.nonEmpty =>
+          case Event.Key(Command.Cancel) if before.marketPending.nonEmpty =>
             before.copy(marketPending = None, marketNotice = None)
           case _ => State.reduce(before, event, now())
         if after.coin != before.coin then onMarket(after.coin)

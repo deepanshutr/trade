@@ -37,7 +37,7 @@ class CompactInteractionSpec extends munit.FunSuite:
     assert(f.draw().lines.mkString.contains("Waiting for prices"))
     f.key(Command.Mode("LIVE"))
     f.draw()
-    f.key(Command.SubmitTarget)
+    f.key(Command.Confirm)
     assert(f.draw().lines.mkString.contains("Account unavailable"))
     assertEquals(f.controller.panel.mode, "PAPER")
     assertEquals(f.sent, 0)
@@ -54,7 +54,7 @@ class CompactInteractionSpec extends munit.FunSuite:
     f.draw()
     var pending = Vector.empty[Int]
     "hv123".foreach { c =>
-      val (next, command) = Keys.step(pending, c.toInt, true, mouseEnabled = true, textInput = true)
+      val (next, command) = Keys.step(pending, c.toInt, true, mouseEnabled = true)
       pending = next
       command.foreach(f.key)
     }
@@ -93,7 +93,7 @@ class CompactInteractionSpec extends munit.FunSuite:
       f.key(Command.Mode("LIVE"))
       f.draw()
       assertEquals(f.controller.panel.modeReview, Some("LIVE"))
-    escape.key(Command.CancelTarget)
+    escape.key(Command.Cancel)
     button.click("Esc Cancel")
     assertEquals(escape.controller.panel, button.controller.panel)
     assertEquals(escape.controller.panel.modeReview, None)

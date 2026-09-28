@@ -4,24 +4,53 @@ class UiBoundarySpec extends munit.FunSuite:
   test("mouse press avoids a process but release rechecks resize before any order") {
     val f = new Fixture
     val buy = f.draw().buttons.find(_.action == DeskAction.Prepare(intent)).get
-    WorkspaceApp.dispatchInput(
+    f.emit(
       Command.PointerPress(buy.x, buy.y, 0),
-      f.controller,
       () => (snapshot, f.currentView),
-      (120, 40),
       false,
       () => fail("press measured terminal")
     )
     var checked = false
-    WorkspaceApp.dispatchInput(
+    f.emit(
       Command.Pointer(buy.x, buy.y, 0),
-      f.controller,
       () => { assert(checked); (snapshot, f.currentView) },
-      (120, 40),
       false,
       () => { checked = true; (119, 40) }
     )
     assertEquals(f.sent.size, 0)
+  }
+
+  test("typing, presses, wheel reports and display toggles do not measure the terminal") {
+    for command <- Vector(
+        Command.PromptChar('x'),
+        Command.PromptBackspace,
+        Command.PointerPress(1, 1, 0),
+        Command.Pointer(1, 1, 64),
+        Command.Pointer(1, 1, 65),
+        Command.ToggleMute,
+        Command.ToggleCandles
+      )
+    do
+      var measurements = 0
+      WorkspaceApp.measureInput(command, () => { measurements += 1; (120, 40) })
+      assertEquals(measurements, 0, command.toString)
+  }
+
+  test("viewport-dependent input measures once, so a pan after a resize uses the new size") {
+    for command <- Vector(
+        Command.ZoomIn,
+        Command.ZoomOut,
+        Command.ScrubForward,
+        Command.ScrubBack,
+        Command.Pointer(1, 1, 0),
+        Command.PlaceOrder(intent),
+        Command.Confirm,
+        Command.Mode("LIVE")
+      )
+    do
+      var measurements = 0
+      WorkspaceApp.measureInput(command, () => { measurements += 1; (120, 40) })
+      assertEquals(measurements, 1, command.toString)
   }
 
   private val now = 1800000000000L
@@ -62,6 +91,22 @@ class UiBoundarySpec extends munit.FunSuite:
       order => { sent :+= order; true },
       name => { modes :+= name; Right(()) }
     )
+    var size = (120, 40)
+    def emit(
+        command: Command,
+        context: () => (Snapshot, TradingView),
+        promptOpen: Boolean,
+        measure: () => (Int, Int)
+    ): Boolean =
+      val dimensions = new TerminalSize(
+        measure,
+        measured => {
+          if measured != size then controller.invalidate()
+          size = measured
+        }
+      )
+      WorkspaceApp.measureInput(command, () => dimensions.read())
+      WorkspaceApp.dispatchInput(command, controller, context, size, promptOpen)
     def draw(cols: Int = 120, rows: Int = 40): WorkspaceFrame =
       val frame =
         Workspace.draw(snapshot, currentView, controller.panel, cols, rows, now, zone, Style.mono)
@@ -142,22 +187,19 @@ class UiBoundarySpec extends munit.FunSuite:
     val f = new Fixture
     f.draw()
     var measured = false
-    val result = WorkspaceApp.dispatchInput(
+    val result = f.emit(
       Command.PlaceOrder(intent),
-      f.controller,
       () => { assert(measured); (snapshot, f.currentView) },
-      (120, 40),
       false,
       () => { measured = true; (119, 40) }
     )
-    assertEquals(result._2, (119, 40))
+    assert(result)
+    assertEquals(f.size, (119, 40))
     assertEquals(f.sent.size, 0)
     f.draw(119, 40)
-    WorkspaceApp.dispatchInput(
+    f.emit(
       Command.PlaceOrder(intent),
-      f.controller,
       () => (snapshot, f.currentView),
-      (119, 40),
       false,
       () => (119, 40)
     )
@@ -169,18 +211,15 @@ class UiBoundarySpec extends munit.FunSuite:
     f.draw()
     for command <- Vector(
         Command.PromptChar('1'),
-        Command.PromptText("23"),
         Command.PromptBackspace
       )
     do
-      val result = WorkspaceApp.dispatchInput(
+      val result = f.emit(
         command,
-        f.controller,
         () => (snapshot.copy(prompt = Some("X")), f.currentView),
-        (120, 40),
         true,
         () => fail("text edit requested terminal process")
       )
-      assert(!result._1)
+      assert(!result)
     assertEquals(f.sent.size, 0)
   }

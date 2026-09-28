@@ -136,7 +136,7 @@ final class DeskController(
           case DeskAction.Prepare(_) => refuse()
           case _                     => ()
     command match
-      case Command.CancelTarget
+      case Command.Cancel
           if snapshot.marketPending.nonEmpty || promptOpen || snapshot.prompt.nonEmpty =>
         false
       case Command.PointerPress(x, y, button) =>
@@ -161,10 +161,10 @@ final class DeskController(
           case Command.PlaceOrder(intent) =>
             act(DeskAction.Prepare(intent), shortcut = true)
             true
-          case Command.SubmitTarget =>
+          case Command.Confirm =>
             current.modeReview.foreach(name => act(DeskAction.ConfirmMode(name)))
             true
-          case Command.CancelTarget =>
+          case Command.Cancel =>
             cancel()
             true
           case Command.Mode(name) =>

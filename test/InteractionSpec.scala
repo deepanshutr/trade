@@ -59,7 +59,7 @@ class InteractionSpec extends munit.FunSuite:
     f.draw()
     f.key(Command.PlaceOrder(intent))
     f.key(Command.PlaceOrder(intent))
-    f.key(Command.SubmitTarget)
+    f.key(Command.Confirm)
     assertEquals(f.sent.map(_.intent), Vector(intent))
     f.view = ready.copy(outcome = Some("PAPER XMR buy filled 5"), outcomeId = OrderUpdates.nextId())
     f.key(Command.PlaceOrder(intent))
@@ -199,12 +199,12 @@ class InteractionSpec extends munit.FunSuite:
     val f = new Fixture
     f.draw()
     f.key(Command.Mode("LIVE"))
-    f.key(Command.SubmitTarget)
+    f.key(Command.Confirm)
     assertEquals(f.modes, Vector.empty)
     val confirm = f.draw()
     assert(confirm.lines.exists(_.contains("one click sends real orders")))
     assert(!confirm.buttons.exists(_.action.isInstanceOf[DeskAction.Prepare]))
-    f.key(Command.SubmitTarget)
+    f.key(Command.Confirm)
     assertEquals(f.modes, Vector("LIVE"))
     f.key(Command.PlaceOrder(intent))
     assertEquals(f.sent.size, 0)
@@ -215,7 +215,7 @@ class InteractionSpec extends munit.FunSuite:
     f.draw()
     Vector(
       Command.SelectTarget(Side.Buy),
-      Command.SubmitTarget
+      Command.Confirm
     ).foreach(command => f.key(command))
     assertEquals(f.sent.size, 0)
   }

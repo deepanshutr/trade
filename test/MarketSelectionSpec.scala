@@ -138,7 +138,7 @@ class MarketSelectionSpec extends munit.FunSuite:
     }
 
   for cancel <- Vector(
-      Command.CancelTarget,
+      Command.Cancel,
       Command.PromptCancel,
       Command.StartMarketPrompt,
       Command.Quit
@@ -182,7 +182,7 @@ class MarketSelectionSpec extends munit.FunSuite:
     try
       f.choose("BTC")
       assert(entered.head.await(3, TimeUnit.SECONDS))
-      f.queue.put(Event.Key(Command.CancelTarget))
+      f.queue.put(Event.Key(Command.Cancel))
       f.choose("BTC")
       f.drain()
       release.head.countDown()
@@ -257,7 +257,7 @@ class MarketSelectionSpec extends munit.FunSuite:
     assertEquals((previews, sends), (0, 0))
     assert(!frame(pending).buttons.exists(_.action.isInstanceOf[DeskAction.Prepare]))
     assertEquals(sends, 0)
-    assert(!controller.handle(Command.CancelTarget, pending, view, (100, 30), false))
+    assert(!controller.handle(Command.Cancel, pending, view, (100, 30), false))
   }
 
   test("Escape after Enter reaches the fold before pending selection has been published") {
@@ -272,7 +272,7 @@ class MarketSelectionSpec extends munit.FunSuite:
       val snapshot = Snapshot.initial("XMR", 1000L).copy(prompt = prompt)
       assert(
         !controller.handle(
-          Command.CancelTarget,
+          Command.Cancel,
           snapshot,
           TradingView("XMR", None, "view", false, false),
           (100, 30),

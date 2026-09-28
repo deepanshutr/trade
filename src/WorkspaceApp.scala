@@ -119,17 +119,18 @@ object WorkspaceApp:
       controller: DeskController,
       context: () => (Snapshot, TradingView),
       size: (Int, Int),
-      promptOpen: Boolean,
-      measure: () => (Int, Int)
-  ): (Boolean, (Int, Int)) =
-    val measured = command match
-      case Command.PromptChar(_) | Command.PromptText(_) | Command.PromptBackspace |
-          Command.PointerPress(_, _, _) =>
-        size
-      case _ => measure()
-    if measured != size then controller.invalidate()
+      promptOpen: Boolean
+  ): Boolean =
     val (snapshot, view) = context()
-    (controller.handle(command, snapshot, view, measured, promptOpen), measured)
+    controller.handle(command, snapshot, view, size, promptOpen)
+
+  private[desk] def measureInput(command: Command, measure: () => (Int, Int)): Unit =
+    command match
+      case Command.PromptChar(_) | Command.PromptBackspace | Command.PointerPress(_, _, _) |
+          Command.ToggleMute | Command.ToggleCandles =>
+        ()
+      case Command.Pointer(_, _, button) if button != 0 => ()
+      case _                                            => { val _ = measure() }
 
   private def background(name: String)(body: => Unit): Thread =
     val thread = new Thread(
@@ -362,19 +363,15 @@ object WorkspaceApp:
         var quitting = false
         def emit(command: Command): Unit =
           val began = System.nanoTime()
-          command match
-            case Command.PromptChar(_) | Command.PromptText(_) | Command.PromptBackspace |
-                Command.PointerPress(_, _, _) =>
-              ()
-            case _ => { val _ = dimensions.read() }
+          measureInput(command, () => dimensions.read())
           inputLock.synchronized {
-            val (handled, measured) = dispatchInput(
+            val measured = actualSize.get()
+            val handled = dispatchInput(
               command,
               controller,
               () => (state.get(), worker.view),
-              actualSize.get(),
-              marketPrompt || pendingPrompts.get() > 0,
-              () => actualSize.get()
+              measured,
+              marketPrompt || pendingPrompts.get() > 0
             )
             if !handled then
               marketPrompt = Main.nextPromptOpen(marketPrompt, command)

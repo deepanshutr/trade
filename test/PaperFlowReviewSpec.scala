@@ -249,7 +249,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       f.draw()
       f.key(Command.Mode("PAPER"))
       f.draw()
-      f.key(Command.SubmitTarget)
+      f.key(Command.Confirm)
       assertEquals(f.controller.panel.mode, "PAPER")
       assert(!f.route.view.ready)
       f.clock.incrementAndGet()

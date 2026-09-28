@@ -30,7 +30,6 @@ enum Health:
 enum Command:
   case Quit, StartMarketPrompt, PromptBackspace, PromptCancel, PromptSubmit
   case PromptChar(c: Char)
-  case PromptText(text: String)
   case Pointer(x: Int, y: Int, button: Int)
   case PointerPress(x: Int, y: Int, button: Int)
   case ToggleMute
@@ -38,7 +37,7 @@ enum Command:
   case ZoomIn, ZoomOut, ScrubBack, ScrubForward
   case PlaceOrder(intent: OrderIntent)
   case SelectTarget(side: Side)
-  case SubmitTarget, CancelTarget, ToggleCandles
+  case Confirm, Cancel, ToggleCandles
 
 enum Event:
   case BookUpdate(coin: String, book: Book, fromSocket: Boolean)
@@ -298,9 +297,9 @@ object State:
       if coin == s.coin then s.copy(marketNotice = Some(reason)) else s
 
   private def key(s: Snapshot, cmd: Command, now: Long): Snapshot = cmd match
-    case Command.PlaceOrder(_) | Command.SelectTarget(_) | Command.SubmitTarget |
-        Command.CancelTarget | Command.Pointer(_, _, _) | Command.PointerPress(_, _, _) |
-        Command.ToggleMute | Command.Mode(_) | Command.PromptText(_) =>
+    case Command.PlaceOrder(_) | Command.SelectTarget(_) | Command.Confirm | Command.Cancel |
+        Command.Pointer(_, _, _) | Command.PointerPress(_, _, _) | Command.ToggleMute |
+        Command.Mode(_) =>
       s
     case Command.Quit              => s.copy(quit = true)
     case Command.StartMarketPrompt => s.copy(prompt = Some(""))
