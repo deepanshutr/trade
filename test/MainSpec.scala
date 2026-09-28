@@ -151,14 +151,17 @@ class MainSpec extends munit.FunSuite:
       awaitState("queued markets held up the fold")(f.state.get().cols == 121)
       awaitState("verified return selection did not arrive")(f.state.get().coin == "XMR")
       awaitState("history held up subscription changes")(
-        f.feed.coin == "XMR" && f.sent.size() == 144
+        f.feed.coin == "XMR" && f.sent.size() == 60
       )
       assertEquals(f.bodies.size(), 1)
       f.release.countDown()
       awaitState("latest repair wake was lost")(f.repairs.get() >= 3)
       val expectedSends = Vector("XMR", "ETH", "SOL", "XMR")
         .sliding(2)
-        .flatMap(pair => Feed.unsubscriptions(pair.head) ++ Feed.subscriptions(pair.last))
+        .flatMap(pair =>
+          Feed.unsubscriptions(pair.head, Vector.empty) ++ Feed
+            .subscriptions(pair.last, Vector.empty)
+        )
         .toVector
       assertEquals(f.sent.asScala.toVector, expectedSends)
       val requests = f.bodies.asScala.toVector.map { body =>

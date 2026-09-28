@@ -62,8 +62,7 @@ final class OutlookWorker(
       val current = raw.columns.map(key(raw.coin, _)).toSet
       val _ = reached.updateAndGet(_.intersect(current))
       previous = Some(revision)
-    val visible = forDisplay(raw.copy(calculatedAt = now), market, now)
-    if !closed.get() then publish(visible)
+    if !closed.get() then publish(raw.copy(calculatedAt = now))
 
   def start(): Unit = synchronized {
     if !closed.get() && started.compareAndSet(false, true) then

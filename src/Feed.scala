@@ -369,8 +369,14 @@ final class Feed(
           historySuccess = historySuccess.filterNot(_._1._1 == newCoin)
         }
         synchronized(current).foreach { c =>
-          Feed.unsubscriptions(old, references).foreach(transmit(c, _))
-          Feed.subscriptions(newCoin, references).foreach(transmit(c, _))
+          Feed
+            .unsubscriptions(old, references)
+            .diff(Feed.unsubscriptions(newCoin, references))
+            .foreach(transmit(c, _))
+          Feed
+            .subscriptions(newCoin, references)
+            .diff(Feed.subscriptions(old, references))
+            .foreach(transmit(c, _))
         }
         true
     }

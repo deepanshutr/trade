@@ -43,7 +43,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
       style: Style = Style.mono,
       panel: PanelView = PanelView()
   ): WorkspaceFrame =
-    Workspace.draw(
+    WorkspaceApp.drawFrame(
       s,
       view.copy(coin = s.coin),
       panel.copy(outlook = o),
@@ -51,7 +51,8 @@ class AlignedOutlookSpec extends munit.FunSuite:
       rows,
       now,
       ZoneOffset.UTC,
-      style
+      style,
+      new OutlookWorker(() => s, () => now, _ => ())
     )
   private def cells(frame: WorkspaceFrame, row: Int): Vector[String] =
     Chart

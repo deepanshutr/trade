@@ -88,7 +88,9 @@ object MarketArchive:
       .getOrElse(CandleCheckpoint(0L, Map.empty))
 
   def restore(directory: Path, initial: Snapshot): Snapshot =
-    val saved = load(directory)
+    restore(load(directory), initial)
+
+  private def restore(saved: CandleCheckpoint, initial: Snapshot): Snapshot =
     initial.copy(
       candles = saved.markets.getOrElse(initial.coin, Map.empty),
       refs = initial.refs.map { (coin, ref) =>
@@ -134,6 +136,8 @@ final class MarketArchive private (
   private var lastAt = initial.at
   private var closed = false
   private var total = bytes
+
+  private[desk] def restore(snapshot: Snapshot): Snapshot = MarketArchive.restore(initial, snapshot)
 
   def bytes: Long = synchronized {
     val listed = Files.list(directory)
