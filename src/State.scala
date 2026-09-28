@@ -241,11 +241,16 @@ object State:
       if coin != s.coin then fresh
       else
         val seen = scala.collection.mutable.HashSet.empty[(Long, Long)]
-        val tape = (s.tape ++ ts)
+        def sorted(batch: Vector[Trade]): Vector[Trade] = batch
           .filter(_.time >= now - tapeMs)
           .filter(t => t.id.forall(id => seen.add((t.time, id))))
           .sortBy(-_.time)
           .take(tapeCap)
+        val tape =
+          if s.tape.headOption.forall(head => ts.forall(_.time > head.time)) then
+            val expired = s.tape.reverseIterator.takeWhile(_.time < now - tapeMs).size
+            (sorted(ts) ++ s.tape.dropRight(expired)).take(tapeCap)
+          else sorted(s.tape ++ ts)
         fresh.copy(tape = tape)
     case Event.CandleUpdate(coin, interval, c) =>
       val key = (coin, interval)

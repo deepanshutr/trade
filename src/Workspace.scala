@@ -239,7 +239,7 @@ object Workspace:
           val b = DeskButton(label, action, leftWidth + 2 + column, tradeTop + 8, width, 5)
           if enabled then buttons += b else disabled += b
       val outlook = if panel.outlook.coin.isEmpty then Outlook.empty(s.coin)
-      else Outlook.visible(panel.outlook, s, now)
+      else panel.outlook
       OutlookScreen
         .rows(outlook, Layout.outlookWidth, marketFrame.axis, marketFrame.priceRows, s.chartMode)
         .zipWithIndex

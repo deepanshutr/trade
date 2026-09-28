@@ -55,16 +55,20 @@ class OutlookWorkerSpec extends munit.FunSuite:
     val worker = new OutlookWorker(() => market, () => now, value => shown = value)
     try
       worker.refresh()
+      shown = worker.forDisplay(shown, market, now)
       assert(short(shown).base.percent.nonEmpty)
       market = quote(market, bars.last.h, now)
       worker.refresh()
+      shown = worker.forDisplay(shown, market, now)
       assertEquals(short(shown).status, "reached")
       market = quote(market, bars.last.c, now)
       worker.refresh()
+      shown = worker.forDisplay(shown, market, now)
       assertEquals(short(shown).status, "reached")
       assertEquals(short(shown).matched.percent, None)
       market = market.copy(coin = "BTC")
       worker.refresh()
+      shown = worker.forDisplay(shown, market, now)
       assertEquals(shown.coin, "BTC")
       assertNotEquals(short(shown).status, "reached")
     finally worker.close()
@@ -77,9 +81,11 @@ class OutlookWorkerSpec extends munit.FunSuite:
     val worker = new OutlookWorker(() => market, () => time, value => shown = value)
     try
       worker.refresh()
+      shown = worker.forDisplay(shown, market, time)
       time += step
       market = quote(market, bars.last.c, time)
       worker.refresh()
+      shown = worker.forDisplay(shown, market, time)
       assertEquals(short(shown).status, "stale")
       assertEquals(short(shown).base.percent, None)
     finally worker.close()
@@ -91,6 +97,7 @@ class OutlookWorkerSpec extends munit.FunSuite:
     val worker = new OutlookWorker(() => market, () => now, value => shown = value)
     try
       worker.refresh()
+      shown = worker.forDisplay(shown, market, now)
       val touched = quote(market, bars.last.h, now)
       val frame = WorkspaceApp.drawFrame(
         touched,
@@ -106,6 +113,7 @@ class OutlookWorkerSpec extends munit.FunSuite:
       assertEquals(short(frame.outlook.get).status, "reached")
       market = quote(market, bars.last.c, now)
       worker.refresh()
+      shown = worker.forDisplay(shown, market, now)
       assertEquals(short(shown).status, "reached")
       assertEquals(short(shown).base.percent, None)
     finally worker.close()
@@ -161,4 +169,28 @@ class OutlookWorkerSpec extends munit.FunSuite:
     finally
       release.countDown()
       worker.close()
+  }
+
+  test("a fresh draw recovers rates after refresh sampled a stale quote") {
+    val market = quote(initial, bars.last.c, now - 6000)
+    var shown = Outlook.empty("XMR")
+    val worker = new OutlookWorker(() => market, () => now, value => shown = value)
+    try
+      worker.refresh()
+      val frame = WorkspaceApp.drawFrame(
+        initial,
+        TradingView("XMR", message = "View only"),
+        PanelView(outlook = shown),
+        120,
+        40,
+        now,
+        java.time.ZoneOffset.UTC,
+        Style.mono,
+        worker
+      )
+      val column = short(frame.outlook.get)
+      assertNotEquals(column.status, "stale price")
+      assert(column.base.percent.nonEmpty, "fresh quote did not recover computed rates")
+      assertEquals(column.direction, short(Outlook.compute(initial, now)).direction)
+    finally worker.close()
   }

@@ -66,3 +66,27 @@ class ArchiveSpec extends munit.FunSuite:
       assertEquals(Files.readString(foreign), "keep")
     finally archive.close()
   }
+
+  test("an open archive restores from its initial checkpoint without reading the file again") {
+    val directory = Files.createTempDirectory("desk-archive-reuse")
+    val writer = MarketArchive.open(directory)
+    writer.record(Event.CandleHistory("XMR", "1m", Vector(candle)), now)
+    writer.close()
+    val opened = MarketArchive.open(directory)
+    try
+      LocalFiles.write(directory.resolve("candles.json"), "invalid after opening")
+      assertEquals(opened.restore(Snapshot.initial("XMR", now)).candles("1m"), Vector(candle))
+    finally opened.close()
+  }
+
+  test("workspace restores candles even when another recorder holds the archive lock") {
+    val directory = Files.createTempDirectory("desk-archive-held")
+    val owner = MarketArchive.open(directory)
+    try
+      owner.record(Event.CandleHistory("XMR", "1m", Vector(candle)), now)
+      owner.checkpoint()
+      val (recovered, recorder) = WorkspaceApp.openArchive(directory, Snapshot.initial("XMR", now))
+      assertEquals(recorder, None)
+      assertEquals(recovered.get.candles("1m"), Vector(candle))
+    finally owner.close()
+  }

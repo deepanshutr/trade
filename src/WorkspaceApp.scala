@@ -27,6 +27,14 @@ object WorkspaceApp:
       scala.util.Failure(error)
     }
 
+  private[desk] def openArchive(
+      directory: Path,
+      seed: Snapshot
+  ): (Try[Snapshot], Option[MarketArchive]) =
+    val archive = Try(MarketArchive.open(directory)).toOption
+    val recovered = Try(archive.fold(MarketArchive.restore(directory, seed))(_.restore(seed)))
+    (recovered, archive)
+
   private[desk] def collectExecution(
       inputLock: Object,
       controller: DeskController,
@@ -207,9 +215,9 @@ object WorkspaceApp:
       }
       val publicDirectory = directory.resolve("public")
       val seed = Snapshot.initial(args.coin, now(), State.refCoins).copy(workspace = true)
-      val recovered = Try(MarketArchive.restore(publicDirectory, seed))
+      val (recovered, archive) = openArchive(publicDirectory, seed)
       val state = new AtomicReference(recovered.getOrElse(seed))
-      val recorder = Try(new PublicRecorder(MarketArchive.open(publicDirectory), now)).toOption
+      val recorder = archive.map(new PublicRecorder(_, now))
       val observe: Event => Unit = event => {
         worker.observe(event)
         recorder.foreach(_.observe(event))

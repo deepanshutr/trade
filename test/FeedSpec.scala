@@ -294,10 +294,10 @@ class FeedSpec extends munit.FunSuite:
     feed.awaitHistoryRepair()
     assertEquals(feed.coin, "ETH")
     val sent = s.sent.asScala.toVector
-    assertEquals(sent.size, 48)
-    assertEquals(sent.take(24), Feed.unsubscriptions("XMR"))
-    assertEquals(sent.drop(24), Feed.subscriptions("ETH"))
-    assert(sent.take(24).forall(m => m.contains("\"method\":\"unsubscribe\"")), sent.take(24))
+    assertEquals(sent.size, 20)
+    assertEquals(sent.take(10), Feed.unsubscriptions("XMR", Vector.empty))
+    assertEquals(sent.drop(10), Feed.subscriptions("ETH", Vector.empty))
+    assert(sent.take(10).forall(m => m.contains("\"method\":\"unsubscribe\"")), sent.take(10))
     val bodies = rest.bodies.asScala.toVector
     assertEquals(bodies.size, 6)
     assert(
@@ -374,9 +374,28 @@ class FeedSpec extends munit.FunSuite:
       feed.awaitHistoryRepair()
       assertEquals(
         socket.sent.asScala.toVector,
-        Feed.unsubscriptions("XMR", refs) ++ Feed.subscriptions("SOL", refs)
+        Feed.unsubscriptions("XMR", Vector.empty) ++ Feed.subscriptions("SOL", Vector.empty)
       )
       assertEquals(rest.bodies.size, 6)
+      socket.sent.clear()
+      feed.setMarket("BTC")
+      val switched = socket.sent.asScala.toVector.map(ujson.read(_))
+      val subscribed = switched.filter(_("method").str == "subscribe")
+      assertEquals(
+        subscribed.map(_("subscription")("type").str).toSet,
+        Set("l2Book", "trades", "activeAssetCtx")
+      )
+      assert(subscribed.forall(_("subscription")("coin").str == "BTC"))
+      socket.sent.clear()
+      feed.setMarket("SOL")
+      val removed = socket.sent.asScala.toVector
+        .map(ujson.read(_))
+        .filter(_("method").str == "unsubscribe")
+      assertEquals(
+        removed.map(_("subscription")("type").str).toSet,
+        Set("l2Book", "trades", "activeAssetCtx")
+      )
+      assert(removed.forall(_("subscription")("coin").str == "BTC"))
     finally
       connector.onClose()
       thread.join(1000)
