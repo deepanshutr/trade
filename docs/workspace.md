@@ -73,7 +73,7 @@ short status row, with a separate action number for each result.
 
 Local state defaults to `~/.local/state/desk`. Change it with `--state /absolute/path`.
 Message history is no longer kept. Existing message files are left untouched.
-The order result log keeps every result until deleted.
+The order result log keeps the most recent 1000 paper and live results.
 Order outcomes alone are appended to `order-results.jsonl` for replay, with a separate
 `order-results.lock` held during each append. Two view-only desks may run at once. Account files, public data, diagnostics and
 live recovery state use separate locks. Unreadable saved state is preserved.

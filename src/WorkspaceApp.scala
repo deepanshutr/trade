@@ -260,6 +260,13 @@ object WorkspaceApp:
       val routed: MarketFeed =
         onchain.fold[MarketFeed](feed)(o => new CompositeFeed(feed, o, () => state.get().coin))
       val announcements = Main.announcements(args, NativeAnnouncementOutput.create())
+      val results = new OrderResultLog.Writer(
+        text =>
+          Try(OrderResultLog.append(directory, now(), text)).failed.foreach(error =>
+            diagnostics.failure(DiagnosticPart.OrderResults, error)
+          ),
+        error => diagnostics.failure(DiagnosticPart.OrderResults, error)
+      )
       val controller = new DeskController(
         PanelView(
           mode = mode,
@@ -271,20 +278,19 @@ object WorkspaceApp:
         worker.submitReviewed,
         worker.switchMode,
         announcements.setMuted,
-        text =>
-          Try(OrderResultLog.append(directory, now(), text)).failed.foreach(error =>
-            diagnostics.failure(DiagnosticPart.OrderResults, error)
-          )
+        results.append
       )
       val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
       val alerts = new AlertPolicy
-      def closeAll(): Unit = WorkspaceApp.closeAll(
-        outlook,
-        announcements,
-        recorder,
-        worker,
-        diagnostics
-      )
+      def closeAll(): Unit =
+        results.close()
+        WorkspaceApp.closeAll(
+          outlook,
+          announcements,
+          recorder,
+          worker,
+          diagnostics
+        )
       val saved = enterTerminal(() => Term.enterRaw(), () => closeAll()).getOrElse {
         System.err.println("desk needs a terminal")
         sys.exit(1)
