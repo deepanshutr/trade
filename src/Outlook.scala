@@ -227,6 +227,30 @@ object Outlook:
         mid.toRight("invalid price")
     }
 
+  private[desk] def targetTouched(
+      value: HorizonOutlook,
+      snapshot: Snapshot,
+      now: Long
+  ): Boolean =
+    val step = State.intervalMs(value.horizon.interval)
+    val current = snapshot.candles
+      .get(value.horizon.interval)
+      .flatMap(_.lastOption)
+      .filter(c => value.at.contains(c.t))
+    !value.at.exists(_ != now / step * step) && !current.exists(c => !c.valid) &&
+    freshPrice(snapshot, now).exists(targetTouched(value, _, current))
+
+  private def targetTouched(
+      value: HorizonOutlook,
+      price: Double,
+      current: Option[Candle]
+  ): Boolean = value.target.exists { target =>
+    value.direction match
+      case OutlookDirection.Up    => price >= target || current.exists(_.h >= target)
+      case OutlookDirection.Down  => price <= target || current.exists(_.l <= target)
+      case OutlookDirection.Mixed => false
+  }
+
   // This is safe to call while drawing. It reads at most one live candle per column.
   def visible(view: OutlookView, snapshot: Snapshot, now: Long): OutlookView =
     if view.coin != snapshot.coin then
@@ -249,14 +273,6 @@ object Outlook:
               .flatMap(_.lastOption)
               .filter(c => value.at.contains(c.t))
             if current.exists(c => !c.valid) then disabled(value, "invalid data")
-            else
-              val reached = value.target.exists { target =>
-                value.direction match
-                  case OutlookDirection.Up =>
-                    price >= target || current.exists(_.h >= target)
-                  case OutlookDirection.Down =>
-                    price <= target || current.exists(_.l <= target)
-                  case OutlookDirection.Mixed => false
-              }
-              if reached then disabled(value, "reached") else value
+            else if targetTouched(value, price, current) then disabled(value, "reached")
+            else value
         })

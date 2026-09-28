@@ -74,6 +74,59 @@ class OutlookWorkerSpec extends munit.FunSuite:
     finally worker.close()
   }
 
+  test("a target touched only at refresh remains reached on the next draw") {
+    var market = initial
+    var shown = Outlook.empty("XMR")
+    var calculations = 0
+    val worker = new OutlookWorker(
+      () => market,
+      () => now,
+      value => shown = value,
+      (snapshot, at) => { calculations += 1; Outlook.compute(snapshot, at) }
+    )
+    try
+      worker.refresh()
+      assertNotEquals(short(worker.forDisplay(shown, market, now)).status, "reached")
+      market = quote(market, bars.last.h, now)
+      worker.refresh()
+      assertNotEquals(short(shown).status, "reached", "refresh filtered the published outlook")
+      assert(short(shown).base.percent.nonEmpty)
+      market = quote(market, bars.last.c, now)
+      val displayed = worker.forDisplay(shown, market, now)
+      assertEquals(short(displayed).status, "reached")
+      assertEquals(short(displayed).base.percent, None)
+      assertEquals(calculations, 1)
+    finally worker.close()
+  }
+
+  test("refresh does not latch a touch from a stale quote") {
+    var market = quote(initial, bars.last.h, now - 6000)
+    var shown = Outlook.empty("XMR")
+    val worker = new OutlookWorker(() => market, () => now, value => shown = value)
+    try
+      worker.refresh()
+      market = initial
+      assertNotEquals(short(worker.forDisplay(shown, market, now)).status, "reached")
+    finally worker.close()
+  }
+
+  for age <- Vector(0L, 11000L) do
+    test(s"an empty switched column says market changed before refresh, outlook age=$age") {
+      val market = Snapshot.initial("BTC", now)
+      val worker = new OutlookWorker(() => market, () => now, _ => ())
+      try
+        val shown = worker.forDisplay(Outlook.compute(initial, now - age), market, now)
+        assertEquals(shown.coin, "BTC")
+        assert(shown.columns.forall(_.status == "market changed"))
+        assert(
+          OutlookScreen
+            .rows(shown, 120, None, 8, ChartMode.Line)
+            .exists(_.contains("Market changed"))
+        )
+        assert(shown.columns.forall(c => c.base.percent.isEmpty && c.target.isEmpty))
+      finally worker.close()
+    }
+
   test("a new closed-bar boundary invalidates the cached outlook") {
     var time = now
     var market = initial
