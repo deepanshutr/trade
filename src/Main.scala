@@ -128,6 +128,12 @@ object Main:
         val after = event match
           case Event.Key(Command.PromptSubmit) =>
             before.prompt match
+              case Some(name) if name.contains(":") =>
+                before.copy(
+                  prompt = None,
+                  marketPending = None,
+                  marketNotice = Some("Colon markets are not supported. Press m to retry")
+                )
               case Some(name) if State.validMarket(name) && name != before.coin =>
                 requestId += 1
                 before.copy(

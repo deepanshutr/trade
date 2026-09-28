@@ -60,33 +60,53 @@ object Feed:
     case 3 => 4000L
     case _ => 8000L
 
-  private def sub(kind: String, c: String, extra: String = ""): String =
-    s"""{"method":"subscribe","subscription":{"type":"$kind","coin":"$c"$extra}}"""
+  private def sub(kind: String, c: String, extra: (String, ujson.Value)*): String =
+    ujson.write(
+      ujson.Obj(
+        "method" -> "subscribe",
+        "subscription" -> ujson.Obj.from(
+          Seq("type" -> ujson.Str(kind), "coin" -> ujson.Str(c)) ++ extra
+        )
+      )
+    )
 
   def subscriptions(c: String, referenceCoins: Vector[String] = State.refCoins): Vector[String] =
     val main =
       Vector(
-        sub("l2Book", c, ""","fast":true"""),
+        sub("l2Book", c, "fast" -> ujson.Bool(true)),
         sub("bbo", c),
         sub("trades", c),
         sub("activeAssetCtx", c)
       ) ++
-        State.intervals.map(i => sub("candle", c, s""","interval":"$i""""))
+        State.intervals.map(i => sub("candle", c, "interval" -> ujson.Str(i)))
     val refs = referenceCoins.distinct.flatMap(r =>
-      sub("bbo", r) +: State.intervals.map(i => sub("candle", r, s""","interval":"$i""""))
+      sub("bbo", r) +: State.intervals.map(i => sub("candle", r, "interval" -> ujson.Str(i)))
     )
     (main ++ refs).distinct
 
   def unsubscriptions(c: String, referenceCoins: Vector[String] = State.refCoins): Vector[String] =
-    subscriptions(c, referenceCoins)
-      .map(_.replace("\"method\":\"subscribe\"", "\"method\":\"unsubscribe\""))
+    subscriptions(c, referenceCoins).map { text =>
+      val message = ujson.read(text)
+      message("method") = "unsubscribe"
+      ujson.write(message)
+    }
 
   def historyBody(coin: String, interval: String, now: Long, since: Option[Long] = None): String =
     val start = (now - 5000L * State.intervalMs(interval)).max(since.getOrElse(Long.MinValue))
-    s"""{"type":"candleSnapshot","req":{"coin":"$coin","interval":"$interval","startTime":$start,"endTime":$now}}"""
+    ujson.write(
+      ujson.Obj(
+        "type" -> "candleSnapshot",
+        "req" -> ujson.Obj(
+          "coin" -> coin,
+          "interval" -> interval,
+          "startTime" -> ujson.Num(start.toDouble),
+          "endTime" -> ujson.Num(now.toDouble)
+        )
+      )
+    )
 
   def coarseBody(coin: String, k: Int): String =
-    s"""{"type":"l2Book","coin":"$coin","nSigFigs":$k}"""
+    ujson.write(ujson.Obj("type" -> "l2Book", "coin" -> coin, "nSigFigs" -> k))
 
 final class Feed(
     connector: Connector,
@@ -264,7 +284,7 @@ final class Feed(
   def poll(): Unit =
     val c = coin
     rest
-      .post(s"""{"type":"l2Book","coin":"$c"}""")
+      .post(ujson.write(ujson.Obj("type" -> "l2Book", "coin" -> c)))
       .flatMap(Events.parseRestBook)
       .foreach(b => push(Event.BookUpdate(c, b, fromSocket = false)))
 
