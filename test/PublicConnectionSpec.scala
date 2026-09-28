@@ -6,10 +6,6 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 import scala.jdk.CollectionConverters.*
 
 class PublicConnectionSpec extends munit.FunSuite:
-  private def await(label: String)(ready: => Boolean): Unit =
-    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-    while !ready && System.nanoTime() < deadline do Thread.sleep(1)
-    assert(ready, label)
 
   private final class Probe extends Connector:
     final class Link extends Socket:
@@ -120,7 +116,7 @@ class PublicConnectionSpec extends munit.FunSuite:
       val (feed, queue, history) = make(probe)
       val first = new Running(feed)
       feed.awaitHistoryRepair()
-      await("the initial history did not finish")(history.size() == 18)
+      Wait.until("the initial history did not finish")(history.size() == 18)
       val old = probe.links.peek()
       old.failSend.set(true)
       try
@@ -134,7 +130,7 @@ class PublicConnectionSpec extends munit.FunSuite:
           assertEquals(history.size(), 24)
           assert(history.asScala.toVector.takeRight(6).forall(_.contains("\"coin\":\"ETH\"")))
         val second = new Running(feed)
-        await("the replacement did not subscribe")(
+        Wait.until("the replacement did not subscribe")(
           probe.links.size() == 2 && probe.links.asScala.last.sent.size() == 24
         )
         val replacement = probe.links.asScala.last
@@ -152,14 +148,14 @@ class PublicConnectionSpec extends munit.FunSuite:
     val (feed, queue, history) = make(probe)
     val first = new Running(feed)
     feed.awaitHistoryRepair()
-    await("the first connection did not finish startup")(history.size() == 18)
+    Wait.until("the first connection did not finish startup")(history.size() == 18)
     val oldText = probe.messages.peek()
     val oldClose = probe.closures.peek()
     oldClose()
     first.finish()
     val second = new Running(feed)
     try
-      await("the replacement did not open")(
+      Wait.until("the replacement did not open")(
         probe.links.size() == 2 && queue.asScala.count(_ == Event.SocketUp) == 2
       )
       queue.clear()
@@ -183,7 +179,7 @@ class PublicConnectionSpec extends munit.FunSuite:
     val state = new AtomicReference(Snapshot.initial("XMR", 1_000_000L))
     val first = new Running(feed)
     feed.awaitHistoryRepair()
-    await("the first connection did not finish startup")(history.size() == 18)
+    Wait.until("the first connection did not finish startup")(history.size() == 18)
     val old = probe.links.peek()
     old.hold = true
     val workers = Main.startFold(queue, state, feed, () => 1_000_000L)
@@ -197,7 +193,7 @@ class PublicConnectionSpec extends munit.FunSuite:
       queue.put(Event.Resize(120, 40))
       queue.put(Event.Key(Command.ZoomOut))
       queue.put(Event.Key(Command.Quit))
-      await("the fold stalled behind a public send")(state.get().quit)
+      Wait.until("the fold stalled behind a public send")(state.get().quit)
       assertEquals(state.get().book.get.bids.head.px, "20")
       assertEquals((state.get().cols, state.get().rows, state.get().zoom), (120, 40, 1))
       assertEquals(old.release.getCount, 1L)
@@ -205,17 +201,17 @@ class PublicConnectionSpec extends munit.FunSuite:
       disconnect()
       first.finish()
       second = Some(new Running(feed))
-      await("the replacement dial did not start")(probe.links.size() == 2)
-      await("the replacement did not wait or start sending")(
+      Wait.until("the replacement dial did not start")(probe.links.size() == 2)
+      Wait.until("the replacement did not wait or start sending")(
         second.exists(_.thread.getState == Thread.State.BLOCKED) ||
           !probe.links.asScala.last.sent.isEmpty
       )
       assert(probe.links.asScala.last.sent.isEmpty)
       old.release.countDown()
-      await("the replacement did not subscribe")(probe.links.asScala.last.sent.size() == 24)
+      Wait.until("the replacement did not subscribe")(probe.links.asScala.last.sent.size() == 24)
       assertEquals(probe.links.asScala.last.sent.asScala.toVector, Feed.subscriptions("ETH"))
       feed.awaitHistoryRepair()
-      await("the explicit switch did not fetch all six histories")(history.size() == 24)
+      Wait.until("the explicit switch did not fetch all six histories")(history.size() == 24)
       assert(history.asScala.toVector.takeRight(6).forall(_.contains("\"coin\":\"ETH\"")))
       assertEquals(old.closes, 1)
     finally
@@ -243,7 +239,7 @@ class PublicConnectionSpec extends munit.FunSuite:
     )
     val running = new Running(feed)
     try
-      await("the connection did not become ready")(queue.contains(Event.SocketUp))
+      Wait.until("the connection did not become ready")(queue.contains(Event.SocketUp))
       intercept[Stop](probe.messages.peek()(pong))
       assert(!queue.contains(Event.SocketDown))
     finally
@@ -257,7 +253,7 @@ class PublicConnectionSpec extends munit.FunSuite:
     val (feed, queue, history) = make(probe)
     val first = new Running(feed)
     feed.awaitHistoryRepair()
-    await("the first history did not finish")(history.size() == 18)
+    Wait.until("the first history did not finish")(history.size() == 18)
     val closeFirst = probe.closures.peek()
     closeFirst()
     first.finish()
@@ -270,7 +266,7 @@ class PublicConnectionSpec extends munit.FunSuite:
       assertEquals(history.size(), 24)
       assert(probe.links.asScala.last.sent.isEmpty)
       probe.openRelease.countDown()
-      await("the replacement did not finish subscription")(
+      Wait.until("the replacement did not finish subscription")(
         queue.asScala.count(_ == Event.SocketUp) == 2 && probe.links.asScala.last.sent.size() == 24
       )
       assertEquals(probe.links.asScala.last.sent.asScala.toVector, Feed.subscriptions("ETH"))

@@ -4,10 +4,6 @@ import java.nio.file.Files
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 
 class RuntimeSpec extends munit.FunSuite:
-  private def awaitReady(condition: => Boolean): Unit =
-    val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-    while !condition && System.nanoTime() < until do Thread.sleep(10)
-    assert(condition)
 
   test("paper execution uses public data, requires reviewed plan and refuses stale books") {
     var time = 1800000000000L
@@ -33,14 +29,14 @@ class RuntimeSpec extends munit.FunSuite:
           true
         )
       )
-      awaitReady(worker.view.ready)
+      Wait.until("RuntimeSpec condition")(worker.view.ready)
       val intent = OrderIntent(Side.Buy, OrderKind.Hard)
       val plan = worker.preview(intent).toOption.get
       val review = OrderReview(intent, plan, time, time + 30000)
       assert(!worker.submitReviewed(review.copy(plan = plan.copy(quantity = plan.quantity + 1))))
       assertEquals(ledger.account.count, 0L)
       assert(worker.submitReviewed(review))
-      awaitReady(ledger.account.count == 1)
+      Wait.until("RuntimeSpec condition")(ledger.account.count == 1)
       assertEquals(ledger.account.positions("XMR").quantity, plan.estimatedQuantity)
       time += 1001
       assert(!worker.view.ready)

@@ -6,10 +6,6 @@ import java.util.concurrent.atomic.AtomicLong
 import scala.collection.mutable.ArrayBuffer
 
 class RefineDiagnosticsSpec extends munit.FunSuite:
-  private def await(check: => Boolean): Unit =
-    val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-    while !check && System.nanoTime() < end do Thread.sleep(5L)
-    assert(check)
   private class Memory extends Diagnostics.Sink:
     private val saved = ArrayBuffer.empty[String]
     def append(line: String): Unit = synchronized { saved += line }
@@ -28,19 +24,19 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
       observe(Event.BboUpdate("BTC", Level("10", "1", 1), Level("11", "1", 1), clock.get()))
       observe(Event.Pong)
       log.tick()
-      await(saved.lines.exists(_.contains("missing")))
+      Wait.until("DiagnosticsSpec condition")(saved.lines.exists(_.contains("missing")))
       assert(!saved.lines.exists(_.contains("fresh")))
       observe(Event.BboUpdate("XMR", Level("10", "1", 1), Level("11", "1", 1), clock.get()))
       log.tick()
-      await(saved.lines.exists(_.contains("fresh")))
+      Wait.until("DiagnosticsSpec condition")(saved.lines.exists(_.contains("fresh")))
       clock.addAndGet(3000L)
       observe(Event.BboUpdate("XMR", Level("10", "1", 1), Level("11", "1", 1), 10000L))
       observe(Event.Pong)
       log.tick()
-      await(saved.lines.exists(_.contains("stale")))
+      Wait.until("DiagnosticsSpec condition")(saved.lines.exists(_.contains("stale")))
       log.presented(snapshot, 100, 30)
       log.tick()
-      await(saved.lines.exists(_.contains("recovered")))
+      Wait.until("DiagnosticsSpec condition")(saved.lines.exists(_.contains("recovered")))
     finally log.close()
   }
 
@@ -62,8 +58,8 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
       assert(log.droppedCount > 0)
       assert(log.unavailable)
       release.countDown()
-      await(sink.lines.exists(_.contains("dropped")))
-      await(log.status.isEmpty)
+      Wait.until("DiagnosticsSpec condition")(sink.lines.exists(_.contains("dropped")))
+      Wait.until("DiagnosticsSpec condition")(log.status.isEmpty)
     finally
       release.countDown()
       log.close()
@@ -87,8 +83,8 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
       elapsed.set(13800L)
       wall.set(1L)
       log.tick()
-      await(saved.lines.exists(_.contains("stale")))
-      await(saved.lines.exists(_.contains("stalled")))
+      Wait.until("DiagnosticsSpec condition")(saved.lines.exists(_.contains("stale")))
+      Wait.until("DiagnosticsSpec condition")(saved.lines.exists(_.contains("stalled")))
       val records =
         saved.lines.map(line => ujson.read(line)).filter(_("event").str == "quote_health")
       assertEquals(records.last("age_ms").num.toLong, 3800L)
@@ -131,7 +127,7 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
       2000L
     )
     log.start()
-    try await(log.unavailable)
+    try Wait.until("DiagnosticsSpec condition")(log.unavailable)
     finally log.close()
   }
 
@@ -231,7 +227,7 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
       assert(inDrop.await(2, TimeUnit.SECONDS))
       assert(log.unavailable)
       releaseDrop.countDown()
-      await(log.status.isEmpty)
+      Wait.until("DiagnosticsSpec condition")(log.status.isEmpty)
     finally
       release.countDown()
       releaseDrop.countDown()

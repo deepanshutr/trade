@@ -79,15 +79,11 @@ class PaperStatusSpec extends munit.FunSuite:
         true
       )
     )
-    def waitFor(condition: => Boolean): Unit =
-      val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-      while !condition && System.nanoTime() < deadline do Thread.sleep(5)
-      assert(condition)
     try
       worker.start()
       worker.observe(Event.SocketUp)
       publish()
-      waitFor(worker.view.ready)
+      Wait.until("PaperStatusSpec condition")(worker.view.ready)
       val intent = OrderIntent(Side.Buy, OrderKind.Hard)
       val review = OrderReview(
         intent,
@@ -103,7 +99,7 @@ class PaperStatusSpec extends munit.FunSuite:
         assertEquals(pending.message, "PAPER queued 0s | XMR")
         assertEquals(pending.outcome, None)
       }
-      waitFor(!worker.view.pending)
+      Wait.until("PaperStatusSpec condition")(!worker.view.pending)
       assertEquals(ledger.account.count, 1L)
       val result = Some(ledger.account.orders.last)
       def completed(ready: Boolean): Unit =

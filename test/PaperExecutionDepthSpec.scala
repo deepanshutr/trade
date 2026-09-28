@@ -6,10 +6,6 @@ import java.time.ZoneId
 
 class PaperExecutionDepthSpec extends munit.FunSuite:
   private val epoch = 1800000000000L
-  private def await(label: String)(condition: => Boolean): Unit =
-    val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-    while !condition && System.nanoTime() < until do Thread.sleep(2)
-    assert(condition, label)
 
   private final class Fixture(
       initial: PaperAccount = PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
@@ -75,7 +71,7 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
     def start(): Unit =
       worker.start()
       worker.observe(Event.SocketUp)
-      await("metadata never loaded")(worker.view.rules.nonEmpty)
+      Wait.until("metadata never loaded")(worker.view.rules.nonEmpty)
     def open(): Unit =
       start()
       publish()
@@ -86,7 +82,7 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
       assert(plan.isRight, plan.toString)
       OrderReview(intent, plan.toOption.get, clock.get(), clock.get() + 30000)
     def settled(): Unit =
-      await("order did not settle")(!worker.view.pending && worker.view.outcome.nonEmpty)
+      Wait.until("order did not settle")(!worker.view.pending && worker.view.outcome.nonEmpty)
     def close(): Unit = worker.close()
 
   for offset <- Vector(-60000L, 60000L) do

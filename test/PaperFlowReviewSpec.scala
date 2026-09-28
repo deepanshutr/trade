@@ -11,11 +11,6 @@ class PaperFlowReviewSpec extends munit.FunSuite:
   private val meta =
     """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5},{"name":"BTC","szDecimals":2,"maxLeverage":40}]}"""
 
-  private def waitFor(label: String)(condition: => Boolean): Unit =
-    val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-    while !condition && System.nanoTime() < end do Thread.sleep(2)
-    assert(condition, label)
-
   private class Fixture(
       initialMode: String = "PAPER",
       configured: Boolean = false,
@@ -201,7 +196,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       route.start()
       route.observe(Event.SocketUp)
       publish()
-      if initialMode == "PAPER" then waitFor("paper did not become ready")(route.view.ready)
+      if initialMode == "PAPER" then Wait.until("paper did not become ready")(route.view.ready)
     def saved: ujson.Value =
       ujson.read(
         Files.readString(directory.resolve("paper/wallet-mainnet.json"))
@@ -219,7 +214,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
           f.open()
           val review = f.prepare(Trading.action(index), cols, rows)
           f.send(cols, rows, mouse = index % 2 == 1)
-          waitFor("paper did not finish")(f.route.view.outcome.nonEmpty)
+          Wait.until("paper did not finish")(f.route.view.outcome.nonEmpty)
           assert(
             f.route.view.outcome.exists(_.contains("filled")),
             f.route.view.outcome.toString
@@ -254,10 +249,10 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       assert(!f.route.view.ready)
       f.clock.incrementAndGet()
       f.publish()
-      waitFor("selected paper did not become ready")(f.route.view.ready)
+      Wait.until("selected paper did not become ready")(f.route.view.ready)
       f.prepare(Trading.action(0))
       f.send()
-      waitFor("selected paper did not finish")(f.route.view.outcome.nonEmpty)
+      Wait.until("selected paper did not finish")(f.route.view.outcome.nonEmpty)
       assert(f.route.view.outcome.exists(_.contains("filled")))
       assertEquals(f.saved("count").num.toLong, 1L)
     finally f.close()
@@ -272,7 +267,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       f.open()
       expected = Some(f.prepare(Trading.action(0)).plan)
       f.send()
-      waitFor("fill did not finish")(f.route.view.outcome.nonEmpty)
+      Wait.until("fill did not finish")(f.route.view.outcome.nonEmpty)
       assertEquals(f.saved("count").num.toLong, 1L)
     finally f.close()
     val plan = expected.get
@@ -304,7 +299,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       val saved = f.directory.resolve("paper/wallet-mainnet.json")
       Files.createDirectory(saved)
       f.send()
-      waitFor("storage failure not surfaced")(f.route.view.outcome.nonEmpty)
+      Wait.until("storage failure not surfaced")(f.route.view.outcome.nonEmpty)
       assertEquals(
         f.route.view.outcome,
         Some("Paper storage failed. Restart to recover")
@@ -357,7 +352,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       assert(f.route.view.ready)
       f.send()
       assertEquals(f.controller.panel.actionNotice, Some("Sending"))
-      waitFor("changed estimate was not filled")(
+      Wait.until("changed estimate was not filled")(
         f.route.view.outcome.exists(_.contains("filled"))
       )
       assertEquals(f.saved("count").num.toLong, 1L)
@@ -385,11 +380,11 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       new Fixture(initialMode = "VIEW", configured = true, allowLive = true)
     try
       f.open()
-      waitFor("view did not start configured account polling")(
+      Wait.until("view did not start configured account polling")(
         f.infoTypes.asScala.contains("clearinghouseState")
       )
       assert(f.route.switchMode("PAPER").isRight)
-      waitFor("previous live worker did not retire")(f.closed.get() == 1)
+      Wait.until("previous live worker did not retire")(f.closed.get() == 1)
       val readsAtPaper = f.infoTypes.size()
       val watchesAtPaper = f.watched.get()
       Thread.sleep(1100)
@@ -397,21 +392,21 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       assertEquals(f.watched.get(), watchesAtPaper)
       assertEquals(f.keysRead.get(), 0)
       assert(f.route.switchMode("LIVE").isRight)
-      waitFor("new live worker was not created")(f.recreated.get() == 1)
+      Wait.until("new live worker was not created")(f.recreated.get() == 1)
       f.clock.incrementAndGet()
       f.publish()
-      waitFor("new live worker did not become ready with fake account data")(
+      Wait.until("new live worker did not become ready with fake account data")(
         f.route.view.ready
       )
       assertEquals(f.keysRead.get(), 1)
       assert(f.infoTypes.asScala.contains("userRole"))
       assert(f.route.switchMode("PAPER").isRight)
-      waitFor("second live worker did not retire")(f.closed.get() == 2)
+      Wait.until("second live worker did not retire")(f.closed.get() == 2)
       assert(f.route.switchMode("LIVE").isRight)
-      waitFor("second live worker was not created")(f.recreated.get() == 2)
+      Wait.until("second live worker was not created")(f.recreated.get() == 2)
       f.clock.incrementAndGet()
       f.publish()
-      waitFor("second live worker did not become ready")(f.route.view.ready)
+      Wait.until("second live worker did not become ready")(f.route.view.ready)
       assertEquals(f.keysRead.get(), 2)
     finally f.close()
   }
@@ -420,7 +415,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
     val f = new Fixture(initialMode = "VIEW", configured = true)
     try
       f.open()
-      waitFor("view did not start account polling")(
+      Wait.until("view did not start account polling")(
         f.infoTypes.asScala.contains("clearinghouseState")
       )
       val paper = f.directory.resolve("paper")
@@ -430,7 +425,7 @@ class PaperFlowReviewSpec extends munit.FunSuite:
       assertEquals(f.route.mode, "VIEW")
       assertEquals(f.closed.get(), 0)
       val readsBefore = f.infoTypes.size()
-      waitFor("existing worker stopped on failed paper selection")(
+      Wait.until("existing worker stopped on failed paper selection")(
         f.infoTypes.size() > readsBefore
       )
       assertEquals(

@@ -5,10 +5,6 @@ import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
 class PaperUxIndependentSpec extends munit.FunSuite:
   private val epoch = 1800000000000L
-  private def waitFor(label: String)(condition: => Boolean): Unit =
-    val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-    while !condition && System.nanoTime() < end do Thread.sleep(2)
-    assert(condition, label)
 
   private def openLedger(
       initial: PaperAccount,
@@ -67,7 +63,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
       worker.start()
       worker.observe(Event.SocketUp)
       depth(bid, ask)
-      waitFor("synthetic metadata did not arrive")(worker.view.ready)
+      Wait.until("synthetic metadata did not arrive")(worker.view.ready)
     def review(side: Side): OrderReview =
       val intent = OrderIntent(side, OrderKind.Hard)
       val candidate = worker.preview(intent)
@@ -75,7 +71,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
       OrderReview(intent, candidate.toOption.get, clock.get(), clock.get() + 30000L)
     def send(review: OrderReview): Unit =
       assert(worker.submitReviewed(review))
-      waitFor("synthetic order did not finish")(
+      Wait.until("synthetic order did not finish")(
         !worker.view.pending && worker.view.outcome.nonEmpty
       )
     def orderThread: Thread =
@@ -306,7 +302,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
       )
       f.ledger.synchronized {
         assert(f.worker.submitReviewed(review))
-        waitFor("order did not reach the ledger writer lock")(
+        Wait.until("order did not reach the ledger writer lock")(
           f.orderThread.getState == Thread.State.BLOCKED &&
             f.orderThread.getStackTrace.exists(e =>
               e.getClassName == "desk.PaperLedger" && e.getMethodName == "fill"
@@ -314,7 +310,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
         )
         assert(f.ledger.fill(one, epoch).isRight)
       }
-      waitFor("revision outcome missing")(!f.worker.view.pending)
+      Wait.until("revision outcome missing")(!f.worker.view.pending)
       assertEquals(f.ledger.account.count, 1L)
       assertEquals(f.ledger.account.positions("XMR").quantity, BigDecimal(1))
       assert(f.worker.view.outcome.exists(_.contains("account changed")))
@@ -375,7 +371,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
         assert(observed.get().message.contains("saving"))
         assertEquals(f.ledger.account.count, 0L)
         release.countDown()
-        waitFor("save result missing")(!f.worker.view.pending)
+        Wait.until("save result missing")(!f.worker.view.pending)
         if fail then
           assertEquals(f.ledger.account, PaperAccount(BigDecimal(1000), deposit = BigDecimal(1000)))
           assert(f.worker.view.outcome.exists(_.contains("storage failed")))

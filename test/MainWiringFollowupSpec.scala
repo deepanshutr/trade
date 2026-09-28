@@ -5,10 +5,6 @@ import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import scala.jdk.CollectionConverters.*
 
 class MainWiringFollowupSpec extends munit.FunSuite:
-  private def awaitCondition(label: String)(ready: => Boolean): Unit =
-    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-    while !ready && System.nanoTime() < deadline do Thread.sleep(1)
-    assert(ready, label)
 
   test("the application fold helper acknowledges each prompt after its state is published") {
     val now = 1000L
@@ -53,13 +49,13 @@ class MainWiringFollowupSpec extends munit.FunSuite:
         Vector(("ETH", "XMR", 0))
       )
       releaseSecond.countDown()
-      awaitCondition("the verified selection was not published")(state.get().coin == "ETH")
+      Wait.until("the verified selection was not published")(state.get().coin == "ETH")
       assertEquals(pending.get(), 0)
       assertEquals(state.get().coin, "ETH")
       assertEquals(state.get().prompt, None)
       Main.queueInput(Command.StartMarketPrompt, queue, pending)
       Main.queueInput(Command.PromptCancel, queue, pending)
-      awaitCondition("the cancel was not acknowledged")(pending.get() == 0)
+      Wait.until("the cancel was not acknowledged")(pending.get() == 0)
       assertEquals(state.get().prompt, None)
       assertEquals(callbacks.size(), 1)
     finally

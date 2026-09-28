@@ -12,11 +12,6 @@ class LiveReadinessAuditSpec extends munit.FunSuite:
     )
   )
 
-  private def waitFor(label: String)(condition: => Boolean): Unit =
-    val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-    while !condition && System.nanoTime() < until do Thread.sleep(2)
-    assert(condition, label)
-
   private final class Fixture(
       keyDelayMs: Long = 0L,
       accountDelayMs: Long = 0L,
@@ -250,11 +245,11 @@ class LiveReadinessAuditSpec extends munit.FunSuite:
     val f = new Fixture()
     try
       f.worker.start()
-      waitFor("initial state did not become ready")(f.worker.view.ready)
+      Wait.until("initial state did not become ready")(f.worker.view.ready)
       assertEquals(f.reads.get(), 1)
       Thread.sleep(20)
       assert(f.worker.submit(OrderIntent(Side.Buy, OrderKind.Hard), "XMR"))
-      waitFor("fake order did not complete")(f.worker.view.outcome.nonEmpty)
+      Wait.until("fake order did not complete")(f.worker.view.outcome.nonEmpty)
       val began = f.secondRead.await(300, TimeUnit.MILLISECONDS)
       println(
         s"POST_RESULT accountReadWithin300ms=$began reads=${f.reads.get()} posts=${f.posts.get()}"
@@ -339,7 +334,7 @@ class LiveReadinessAuditSpec extends munit.FunSuite:
       assertEquals(replacements.get(), 0)
       warmRelease.countDown()
       closeRelease.countDown()
-      waitFor("replacement did not start after retirement")(
+      Wait.until("replacement did not start after retirement")(
         replacements.get() == 1
       )
       assertEquals(route.mode, "LIVE")
@@ -396,7 +391,7 @@ class LiveReadinessAuditSpec extends munit.FunSuite:
       assertEquals(replacements.get(), 0)
       intercept[Exception](OrderJournal.open(f.directory, f.config.identity))
       release.countDown()
-      waitFor(
+      Wait.until(
         "finished worker did not release its journal and permit replacement"
       )(
         replacements.get() == 1

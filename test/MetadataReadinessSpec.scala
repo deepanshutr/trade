@@ -8,10 +8,6 @@ class MetadataReadinessSpec extends munit.FunSuite:
   private val at = 1800000000000L
   private val valid =
     """{"universe":[{"name":"XMR","szDecimals":3,"maxLeverage":5},{"name":"BTC","szDecimals":4,"maxLeverage":10}]}"""
-  private def waitFor(label: String, ms: Long = 2500L)(condition: => Boolean): Unit =
-    val end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(ms)
-    while !condition && System.nanoTime() < end do Thread.sleep(5L)
-    assert(condition, label)
 
   private final class Fixture(initial: Option[(ujson.Value, Long)], respond: () => Option[String]):
     val time = new AtomicLong(at)
@@ -46,7 +42,7 @@ class MetadataReadinessSpec extends munit.FunSuite:
     val f = new Fixture(None, () => Some(if count.incrementAndGet() == 1 then "null" else valid))
     try
       f.worker.start()
-      waitFor(s"No recovery from malformed first response, calls=${f.calls.get()}")(
+      Wait.until(s"No recovery from malformed first response, calls=${f.calls.get()}")(
         f.worker.view.ready
       )
       assert(f.calls.get() >= 2)
@@ -58,7 +54,7 @@ class MetadataReadinessSpec extends munit.FunSuite:
     try
       assert(!f.worker.view.ready)
       f.worker.start()
-      waitFor("Malformed inherited metadata suppressed a valid fetch", 500L)(f.worker.view.ready)
+      Wait.until("Malformed inherited metadata suppressed a valid fetch")(f.worker.view.ready)
       assert(f.calls.get() >= 1)
     finally f.close()
   }
@@ -87,7 +83,7 @@ class MetadataReadinessSpec extends munit.FunSuite:
     val f = new Fixture(Some(ujson.read(valid) -> originalAt), () => None)
     try
       f.worker.start()
-      waitFor("Refresh not attempted")(f.calls.get() >= 1)
+      Wait.until("Refresh not attempted")(f.calls.get() >= 1)
       assert(f.worker.view.ready)
       f.time.set(originalAt + 60000L)
       f.quote()
@@ -135,7 +131,7 @@ class MetadataReadinessSpec extends munit.FunSuite:
       f.quote("BTC")
       assert(!f.worker.view.ready, "Pending refresh kept expired metadata tradable")
       release.countDown()
-      waitFor("Successful delayed refresh never enabled current market")(f.worker.view.ready)
+      Wait.until("Successful delayed refresh never enabled current market")(f.worker.view.ready)
       assertEquals(f.worker.view.coin, "BTC")
       assertEquals(f.worker.view.rules.map(_.szDecimals), Some(4))
     finally
@@ -153,7 +149,7 @@ class MetadataReadinessSpec extends munit.FunSuite:
       try
         assert(f.worker.view.ready)
         f.worker.start()
-        waitFor("Removal or delisting left stale rules tradable")(!f.worker.view.ready)
+        Wait.until("Removal or delisting left stale rules tradable")(!f.worker.view.ready)
         assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard)).isLeft)
       finally f.close()
   }
@@ -168,7 +164,7 @@ class MetadataReadinessSpec extends munit.FunSuite:
       f.quote("BTC")
       assert(!f.worker.view.ready)
       f.worker.start()
-      waitFor("Malformed newly selected metadata suppressed refetch")(f.worker.view.ready)
+      Wait.until("Malformed newly selected metadata suppressed refetch")(f.worker.view.ready)
       assertEquals(f.worker.view.rules.map(_.szDecimals), Some(4))
     finally f.close()
   }

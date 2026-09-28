@@ -7,10 +7,6 @@ import scala.jdk.CollectionConverters.*
 
 class RuntimeSafetySpec extends munit.FunSuite:
   private val now = 1800000000000L
-  private def waitFor(label: String)(condition: => Boolean): Unit =
-    val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-    while !condition && System.nanoTime() < until do Thread.sleep(5)
-    assert(condition, label)
   private def chunks(directory: java.nio.file.Path): String =
     val paths = Files.list(directory)
     try
@@ -130,7 +126,7 @@ class RuntimeSafetySpec extends munit.FunSuite:
           true
         )
       )
-      waitFor("paper never became ready")(worker.view.ready)
+      Wait.until("paper never became ready")(worker.view.ready)
       val intent = OrderIntent(Side.Buy, OrderKind.Hard)
       val review = OrderReview(intent, worker.preview(intent).toOption.get, now, now + 30000)
       worker.synchronized {
@@ -139,7 +135,7 @@ class RuntimeSafetySpec extends munit.FunSuite:
           Event.BboUpdate("XMR", Level("100", "50", 1), Level("101", "50", 1), now + 1)
         )
       }
-      waitFor("paper order outside the newer quote did not report no fill")(
+      Wait.until("paper order outside the newer quote did not report no fill")(
         worker.view.outcome.exists(_.contains("no fill"))
       )
       assertEquals(ledger.account.count, 0L)

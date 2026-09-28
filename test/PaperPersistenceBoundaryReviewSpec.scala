@@ -6,10 +6,6 @@ import java.util.concurrent.atomic.{AtomicLong, AtomicReference}
 import scala.util.control.NonFatal
 
 class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
-  private def waitFor(label: String)(condition: => Boolean): Unit =
-    val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-    while !condition && System.nanoTime() < until do Thread.sleep(2)
-    assert(condition, label)
 
   private class Fixture(persist: PaperAccount => Unit):
     val clock = new AtomicLong(1800000000000L)
@@ -88,7 +84,7 @@ class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
       router.start()
       router.observe(Event.SocketUp)
       book("XMR")
-      waitFor("paper did not become ready")(router.view.ready)
+      Wait.until("paper did not become ready")(router.view.ready)
     def review(): OrderReview =
       val intent = Trading.action(0)
       OrderReview(intent, router.preview(intent).toOption.get, clock.get(), clock.get() + 30000)
@@ -115,7 +111,9 @@ class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
       field.setAccessible(true)
       field.get(worker).asInstanceOf[Vector[Thread]].find(_.getName == "paper-orders").get
     def complete(): Unit =
-      waitFor("paper order remained pending")(!router.view.pending && router.view.outcome.nonEmpty)
+      Wait.until("paper order remained pending")(
+        !router.view.pending && router.view.outcome.nonEmpty
+      )
     def close(): Unit =
       readers.foreach(_.join(1000L))
       router.close()

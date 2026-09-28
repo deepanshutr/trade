@@ -28,10 +28,6 @@ class IndependentFreshnessSpec extends munit.FunSuite:
   private val at = 1800000000000L
   private val metadata =
     """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}"""
-  private def waitFor(label: String, seconds: Long = 5L)(condition: => Boolean): Unit =
-    val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
-    while !condition && System.nanoTime() < until do Thread.sleep(2)
-    assert(condition, label)
   private def launch(errors: ConcurrentLinkedQueue[Throwable])(body: => Unit): Thread =
     val thread = new Thread(() =>
       try body
@@ -137,7 +133,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
       completed.incrementAndGet()
     }
     try
-      waitFor("first history wake did not run")(completed.get() >= 1)
+      Wait.until("first history wake did not run")(completed.get() >= 1)
       Thread.sleep(100L)
       assertEquals(completed.get(), 1)
       assertEquals(
@@ -271,7 +267,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
       )
     def start(): Unit =
       worker.start()
-      waitFor("metadata fixture did not load")(worker.view.rules.nonEmpty)
+      Wait.until("metadata fixture did not load")(worker.view.rules.nonEmpty)
     def receive(text: String): Unit = Events.parse(text).foreach(worker.observe)
     def close(): Unit = worker.close()
 
@@ -312,7 +308,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
         assertEquals(plan.estimatedValue, value)
         val review = OrderReview(intent, plan, at, at + 30000L)
         assert(f.worker.submitReviewed(review))
-        waitFor("simulated order did not settle")(
+        Wait.until("simulated order did not settle")(
           !f.worker.view.pending && f.worker.view.outcome.nonEmpty
         )
         assertEquals(f.ledger.account.count, 1L)
@@ -385,7 +381,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
         f.receive(f.event(f.book.copy(time = f.now.get())))
         assert(f.worker.view.ready)
         assert(f.worker.submitReviewed(review))
-        waitFor("simulated order did not settle after depth shrank")(
+        Wait.until("simulated order did not settle after depth shrank")(
           !f.worker.view.pending && f.worker.view.outcome.nonEmpty
         )
         assertEquals(f.ledger.account.count, 1L)
@@ -467,7 +463,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
         catch case _: InterruptedException => interrupted.countDown()
       })
       assert(waiting.await(3, TimeUnit.SECONDS))
-      waitFor("waiter did not park at the expensive gate")(
+      Wait.until("waiter did not park at the expensive gate")(
         waiter.get.getState == Thread.State.WAITING
       )
       waiter.get.interrupt()
@@ -503,12 +499,14 @@ class IndependentFreshnessSpec extends munit.FunSuite:
       process
     try
       child("first")
-      waitFor("first process did not enter transport")(Files.exists(root.resolve("first.entered")))
+      Wait.until("first process did not enter transport")(
+        Files.exists(root.resolve("first.entered"))
+      )
       val heldDeadline = Files.readString(root.resolve("budget/schedule.txt")).toLong
       child("second")
-      waitFor("second process did not start")(Files.exists(root.resolve("second.started")))
+      Wait.until("second process did not start")(Files.exists(root.resolve("second.started")))
       child("price")
-      waitFor("selected depth was blocked behind expensive transport")(
+      Wait.until("selected depth was blocked behind expensive transport")(
         Files.exists(root.resolve("price.entered"))
       )
       Thread.sleep(100L)

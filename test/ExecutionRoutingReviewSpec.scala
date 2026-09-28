@@ -5,10 +5,6 @@ import java.util.concurrent.{CountDownLatch, LinkedBlockingQueue, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
 class ExecutionRoutingReviewSpec extends munit.FunSuite:
-  private def waitFor(label: String)(condition: => Boolean): Unit =
-    val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-    while !condition && System.nanoTime() < end do Thread.sleep(2)
-    assert(condition, label)
 
   private final class Fixture(
       enabled: Boolean = true,
@@ -197,7 +193,7 @@ class ExecutionRoutingReviewSpec extends munit.FunSuite:
     val worker = create()
     if autoStart then worker.start()
     fresh(worker)
-    def ready(): Unit = waitFor("worker never became ready")(worker.view.ready)
+    def ready(): Unit = Wait.until("worker never became ready")(worker.view.ready)
     def review(intent: OrderIntent = buy, lifetime: Long = 1000L): OrderReview =
       val current = worker.view
       OrderReview(

@@ -6,10 +6,6 @@ import java.util.concurrent.atomic.AtomicLong
 
 class PaperBoundaryReviewSpec extends munit.FunSuite:
   private val start = 1800000000000L
-  private def waitFor(label: String)(condition: => Boolean): Unit =
-    val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-    while !condition && System.nanoTime() < end do Thread.sleep(2)
-    assert(condition, label)
 
   private class Fixture(val held: BigDecimal = BigDecimal(0)):
     val clock = new AtomicLong(start)
@@ -36,12 +32,14 @@ class PaperBoundaryReviewSpec extends munit.FunSuite:
       worker.start()
       worker.observe(Event.SocketUp)
       publish()
-      waitFor("paper did not become ready")(worker.view.ready)
+      Wait.until("paper did not become ready")(worker.view.ready)
     def review(intent: OrderIntent = Trading.action(0)): OrderReview =
       val plan = worker.preview(intent).toOption.get
       OrderReview(intent, plan, clock.get(), clock.get() + 30000)
     def settle(): Unit =
-      waitFor("paper order remained pending")(!worker.view.pending && worker.view.outcome.nonEmpty)
+      Wait.until("paper order remained pending")(
+        !worker.view.pending && worker.view.outcome.nonEmpty
+      )
     def alterRules(rules: MarketRules): Unit = worker.synchronized {
       // Simulate only the periodic metadata result. This avoids a minute-long
       // sleep and adds no production hook. All submission uses the public API.

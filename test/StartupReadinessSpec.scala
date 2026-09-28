@@ -6,10 +6,6 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class StartupReadinessSpec extends munit.FunSuite:
   private val at = 1800000000000L
-  private def waitFor(condition: => Boolean): Unit =
-    val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(1L)
-    while !condition && System.nanoTime() < until do Thread.sleep(2L)
-    assert(condition)
   private val temporaryDirectories = scala.collection.mutable.ArrayBuffer.empty[java.nio.file.Path]
   private def temporary(prefix: String): java.nio.file.Path =
     val path = Files.createTempDirectory("desk-startup-" + prefix)
@@ -157,7 +153,7 @@ class StartupReadinessSpec extends munit.FunSuite:
       assert(held.opened.await(1500L, TimeUnit.MILLISECONDS), "socket fallback did not open")
       held.release.countDown()
       assert(held.closed.await(1L, TimeUnit.SECONDS), "unknown market kept its connection")
-      waitFor(held.events.asScala.exists {
+      Wait.until("StartupReadinessSpec condition")(held.events.asScala.exists {
         case Event.MarketUnavailable("XMR", reason) => reason == Feed.unknownMarket
         case _                                      => false
       })
@@ -195,7 +191,9 @@ class StartupReadinessSpec extends munit.FunSuite:
       held.feed.reloadHistory()
       held.release.countDown()
       assert(held.closed.await(1L, TimeUnit.SECONDS), "reload hid the unknown-market result")
-      waitFor(held.events.asScala.exists(_.isInstanceOf[Event.MarketUnavailable]))
+      Wait.until("StartupReadinessSpec condition")(
+        held.events.asScala.exists(_.isInstanceOf[Event.MarketUnavailable])
+      )
     finally held.stop()
   }
 
