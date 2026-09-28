@@ -14,10 +14,6 @@ object MarketSelectionSpec:
   )
 
 class MarketSelectionSpec extends munit.FunSuite:
-  private def await(label: String)(ready: => Boolean): Unit =
-    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-    while !ready && System.nanoTime() < deadline do Thread.sleep(1)
-    assert(ready, label)
 
   private final class Fixture(reply: String => Option[String]):
     val returned = new CountDownLatch(1)
@@ -54,7 +50,7 @@ class MarketSelectionSpec extends munit.FunSuite:
     def drain(): Unit =
       columns += 1
       queue.put(Event.Resize(columns, 45))
-      await("input stopped advancing")(state.get().cols == columns)
+      Wait.until("input stopped advancing")(state.get().cols == columns)
     def close(): Unit =
       workers.foreach(_.interrupt())
       workers.foreach(_.join(3000))
@@ -91,8 +87,8 @@ class MarketSelectionSpec extends munit.FunSuite:
       assertEquals(f.state.get().coin, "XMR")
       assertEquals(f.state.get().book, f.initial.book)
       assertEquals(f.state.get().samples, f.initial.samples)
-      await("unknown market was not checked")(f.requested.size() == 1)
-      await("missing visible rejection") {
+      Wait.until("unknown market was not checked")(f.requested.size() == 1)
+      Wait.until("missing visible rejection") {
         Screen.stats(f.state.get(), 1000L, 100).contains("Unknown market")
       }
       assertEquals(f.selected.asScala.toVector, Vector.empty)
@@ -118,7 +114,7 @@ class MarketSelectionSpec extends munit.FunSuite:
       val fresh = f.book.copy(time = 1001L)
       f.queue.put(Event.BookUpdate("XMR", fresh, true))
       f.queue.put(Event.Key(Command.Quit))
-      await("quit blocked behind a public request")(f.state.get().quit)
+      Wait.until("quit blocked behind a public request")(f.state.get().quit)
       assertEquals(f.state.get().book, Some(fresh))
       assertEquals(release.getCount, 1L)
     finally
@@ -130,8 +126,8 @@ class MarketSelectionSpec extends munit.FunSuite:
     val f = new Fixture(coin => Some(MarketSelectionSpec.bookResponse(coin)))
     try
       f.choose("BTC")
-      await("verified selection did not arrive")(f.state.get().coin == "BTC")
-      await("verified selection did not reach feed")(f.feed.coin == "BTC")
+      Wait.until("verified selection did not arrive")(f.state.get().coin == "BTC")
+      Wait.until("verified selection did not reach feed")(f.feed.coin == "BTC")
       assertEquals(f.selected.asScala.toVector, Vector("BTC"))
       assertEquals(f.state.get().book, None)
       assertEquals(f.state.get().samples, Vector.empty)
@@ -215,7 +211,7 @@ class MarketSelectionSpec extends munit.FunSuite:
       assertEquals(f.selected.size(), 0)
       assert(f.state.get().marketPending.nonEmpty)
       release.last.countDown()
-      await("latest selection was not accepted")(f.state.get().coin == "BTC")
+      Wait.until("latest selection was not accepted")(f.state.get().coin == "BTC")
       assertEquals(f.selected.asScala.toVector, Vector("BTC"))
     finally
       release.foreach(_.countDown())

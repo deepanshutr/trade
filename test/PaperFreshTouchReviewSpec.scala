@@ -1,21 +1,16 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-class PaperFreshTouchReviewSpec extends munit.FunSuite:
+class PaperFreshTouchReviewSpec extends TempDirectorySuite:
   private val start = 1800000000000L
-  private def waitFor(label: String)(condition: => Boolean): Unit =
-    val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-    while !condition && System.nanoTime() < end do Thread.sleep(2)
-    assert(condition, label)
 
   private class Fixture(side: Side):
     val buy = side == Side.Buy
     val clock = new AtomicLong(start)
     val config = TradingConfig()
-    val directory = Files.createTempDirectory("touch-")
+    val directory = tempDirectory("touch-")
     val held = if buy then BigDecimal(0) else BigDecimal(10)
     if held > 0 then
       LocalFiles.write(
@@ -53,7 +48,7 @@ class PaperFreshTouchReviewSpec extends munit.FunSuite:
       worker.start()
       worker.observe(Event.SocketUp)
       worker.observe(Event.BookUpdate("XMR", book, true))
-      waitFor("paper did not become ready")(worker.view.ready)
+      Wait.until("paper did not become ready")(worker.view.ready)
     def review(): OrderReview =
       val intent = OrderIntent(side, OrderKind.Hard)
       val plan = worker.preview(intent).toOption.get
@@ -73,7 +68,7 @@ class PaperFreshTouchReviewSpec extends munit.FunSuite:
         )
       )
     def settle(): Unit =
-      waitFor("order remained pending")(!worker.view.pending && worker.view.outcome.nonEmpty)
+      Wait.until("order remained pending")(!worker.view.pending && worker.view.outcome.nonEmpty)
     def filled(quantity: BigDecimal, value: BigDecimal): Unit =
       assertEquals(ledger.account.count, 1L)
       assertEquals(

@@ -5,11 +5,7 @@ import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 import scala.collection.mutable.ArrayBuffer
 
-class RefineDiagnosticsSpec extends munit.FunSuite:
-  private def await(check: => Boolean): Unit =
-    val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-    while !check && System.nanoTime() < end do Thread.sleep(5L)
-    assert(check)
+class RefineDiagnosticsSpec extends TempDirectorySuite:
   private class Memory extends Diagnostics.Sink:
     private val saved = ArrayBuffer.empty[String]
     def append(line: String): Unit = synchronized { saved += line }
@@ -28,19 +24,19 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
       observe(Event.BboUpdate("BTC", Level("10", "1", 1), Level("11", "1", 1), clock.get()))
       observe(Event.Pong)
       log.tick()
-      await(saved.lines.exists(_.contains("missing")))
+      Wait.until("DiagnosticsSpec condition")(saved.lines.exists(_.contains("missing")))
       assert(!saved.lines.exists(_.contains("fresh")))
       observe(Event.BboUpdate("XMR", Level("10", "1", 1), Level("11", "1", 1), clock.get()))
       log.tick()
-      await(saved.lines.exists(_.contains("fresh")))
+      Wait.until("DiagnosticsSpec condition")(saved.lines.exists(_.contains("fresh")))
       clock.addAndGet(3000L)
       observe(Event.BboUpdate("XMR", Level("10", "1", 1), Level("11", "1", 1), 10000L))
       observe(Event.Pong)
       log.tick()
-      await(saved.lines.exists(_.contains("stale")))
+      Wait.until("DiagnosticsSpec condition")(saved.lines.exists(_.contains("stale")))
       log.presented(snapshot, 100, 30)
       log.tick()
-      await(saved.lines.exists(_.contains("recovered")))
+      Wait.until("DiagnosticsSpec condition")(saved.lines.exists(_.contains("recovered")))
     finally log.close()
   }
 
@@ -62,8 +58,8 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
       assert(log.droppedCount > 0)
       assert(log.unavailable)
       release.countDown()
-      await(sink.lines.exists(_.contains("dropped")))
-      await(log.status.isEmpty)
+      Wait.until("DiagnosticsSpec condition")(sink.lines.exists(_.contains("dropped")))
+      Wait.until("DiagnosticsSpec condition")(log.status.isEmpty)
     finally
       release.countDown()
       log.close()
@@ -87,8 +83,8 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
       elapsed.set(13800L)
       wall.set(1L)
       log.tick()
-      await(saved.lines.exists(_.contains("stale")))
-      await(saved.lines.exists(_.contains("stalled")))
+      Wait.until("DiagnosticsSpec condition")(saved.lines.exists(_.contains("stale")))
+      Wait.until("DiagnosticsSpec condition")(saved.lines.exists(_.contains("stalled")))
       val records =
         saved.lines.map(line => ujson.read(line)).filter(_("event").str == "quote_health")
       assertEquals(records.last("age_ms").num.toLong, 3800L)
@@ -98,26 +94,21 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
   test(
     "linked files are rejected before opening and before rotation without changing their targets"
   ) {
-    val directory = Files.createTempDirectory("desk-diagnostic-links-")
+    val directory = tempDirectory("desk-diagnostic-links-")
     val target = directory.resolve("target")
     LocalFiles.write(target, "preserved")
     val events = directory.resolve("events-3.jsonl")
+    Files.createSymbolicLink(events, target)
+    intercept[IllegalArgumentException](new Diagnostics.FilesSink(directory, 256L))
+    assertEquals(Files.readString(target), "preserved")
+    Files.delete(events)
+    val sink = new Diagnostics.FilesSink(directory, 256L)
     try
+      sink.append("x" * 200)
       Files.createSymbolicLink(events, target)
-      intercept[IllegalArgumentException](new Diagnostics.FilesSink(directory, 256L))
+      intercept[IllegalArgumentException](sink.append("y" * 100))
       assertEquals(Files.readString(target), "preserved")
-      Files.delete(events)
-      val sink = new Diagnostics.FilesSink(directory, 256L)
-      try
-        sink.append("x" * 200)
-        Files.createSymbolicLink(events, target)
-        intercept[IllegalArgumentException](sink.append("y" * 100))
-        assertEquals(Files.readString(target), "preserved")
-      finally sink.close()
-    finally
-      val files = Files.walk(directory)
-      try files.sorted(java.util.Comparator.reverseOrder()).forEach(p => Files.delete(p))
-      finally files.close()
+    finally sink.close()
   }
 
   test("write exceptions are visible and cannot escape into the application") {
@@ -131,7 +122,7 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
       2000L
     )
     log.start()
-    try await(log.unavailable)
+    try Wait.until("DiagnosticsSpec condition")(log.unavailable)
     finally log.close()
   }
 
@@ -158,25 +149,18 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
   }
 
   test("rotation stays within four private complete files and preserves unrelated files") {
-    val directory = Files.createTempDirectory("desk-diagnostics-test-")
+    val directory = tempDirectory("desk-diagnostics-test-")
+    LocalFiles.write(directory.resolve("unrelated"), "preserved")
+    val sink = new Diagnostics.FilesSink(directory, 256L)
     try
-      LocalFiles.write(directory.resolve("unrelated"), "preserved")
-      val sink = new Diagnostics.FilesSink(directory, 256L)
-      try
-        (1 to 100).foreach(n =>
-          sink.append(ujson.write(ujson.Obj("event" -> "test", "count" -> n)))
-        )
-      finally sink.close()
-      val paths = (0 until 4).map(i => directory.resolve(s"events-$i.jsonl"))
-      assert(paths.forall(p => TradingConfig.privateFile(p) && Files.size(p) <= 256L))
-      paths.foreach(p =>
-        Files.readString(p).linesIterator.foreach(line => assert(ujson.read(line).obj.nonEmpty))
-      )
-      assertEquals(Files.readString(directory.resolve("unrelated")), "preserved")
-    finally
-      val files = Files.walk(directory)
-      try files.sorted(java.util.Comparator.reverseOrder()).forEach(p => Files.delete(p))
-      finally files.close()
+      (1 to 100).foreach(n => sink.append(ujson.write(ujson.Obj("event" -> "test", "count" -> n))))
+    finally sink.close()
+    val paths = (0 until 4).map(i => directory.resolve(s"events-$i.jsonl"))
+    assert(paths.forall(p => TradingConfig.privateFile(p) && Files.size(p) <= 256L))
+    paths.foreach(p =>
+      Files.readString(p).linesIterator.foreach(line => assert(ujson.read(line).obj.nonEmpty))
+    )
+    assertEquals(Files.readString(directory.resolve("unrelated")), "preserved")
   }
 
   test("shutdown is bounded even when a writer ignores interruption") {
@@ -231,7 +215,7 @@ class RefineDiagnosticsSpec extends munit.FunSuite:
       assert(inDrop.await(2, TimeUnit.SECONDS))
       assert(log.unavailable)
       releaseDrop.countDown()
-      await(log.status.isEmpty)
+      Wait.until("DiagnosticsSpec condition")(log.status.isEmpty)
     finally
       release.countDown()
       releaseDrop.countDown()

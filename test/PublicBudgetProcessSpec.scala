@@ -14,10 +14,10 @@ object PublicBudgetProcess:
     val budget = new PublicRequestBudget(root.resolve("budget"), () => 1800000000000L)
     for _ <- 0 until 20 do budget.reserve(1)
 
-class PublicBudgetProcessSpec extends munit.FunSuite:
+class PublicBudgetProcessSpec extends TempDirectorySuite:
   override val munitTimeout = 90.seconds
   test("separate recorder and terminal processes cannot overwrite each other's public allowance") {
-    val root = Files.createTempDirectory("desk-two-request-processes")
+    val root = tempDirectory("desk-two-request-processes", keepOnFailure = true)
     val children = Vector("recorder", "terminal").map { name =>
       new ProcessBuilder(
         Path.of(System.getProperty("java.home"), "bin/java").toString,

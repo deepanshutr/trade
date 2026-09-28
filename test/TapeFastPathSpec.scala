@@ -57,6 +57,5 @@ class TapeFastPathSpec extends munit.FunSuite:
       events.foldLeft(start)((s, batch) => State.reduce(s, Event.Trades("XMR", batch), now))
     val fastNanos = System.nanoTime() - fastBegan
     assertEquals(actual.tape, expected)
-    println(s"full tape: reference=${referenceNanos / 1000000}ms fold=${fastNanos / 1000000}ms")
     assert(fastNanos * 2 < referenceNanos, "newer events still pay the full-tape cost")
   }

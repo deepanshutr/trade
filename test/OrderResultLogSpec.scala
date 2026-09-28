@@ -2,7 +2,7 @@ package desk
 
 import java.nio.file.Files
 
-class OrderResultLogSpec extends munit.FunSuite:
+class OrderResultLogSpec extends TempDirectorySuite:
   private def appendExpired(directory: java.nio.file.Path): Unit =
     val method = OrderResultLog.getClass.getDeclaredMethods.find(_.getName == "appendLocked").get
     method.setAccessible(true)
@@ -17,7 +17,7 @@ class OrderResultLogSpec extends munit.FunSuite:
     catch case error: java.lang.reflect.InvocationTargetException => throw error.getCause
 
   test("an expired append budget still attempts an uncontended lock") {
-    val directory = Files.createTempDirectory("desk-order-expired")
+    val directory = tempDirectory("desk-order-expired")
     appendExpired(directory)
     val lines = Files.readAllLines(directory.resolve("order-results.jsonl"))
     assertEquals(lines.size(), 1)
@@ -25,7 +25,7 @@ class OrderResultLogSpec extends munit.FunSuite:
   }
 
   test("an interrupted trim leaves the old log readable and the temporary file private") {
-    val directory = Files.createTempDirectory("desk-order-interrupted")
+    val directory = tempDirectory("desk-order-interrupted")
     OrderResultLog.append(directory, 1L, "first")
     val path = directory.resolve("order-results.jsonl")
     val line = Files.readString(path)
@@ -100,7 +100,7 @@ class OrderResultLogSpec extends munit.FunSuite:
   }
 
   test("retention repairs a truncated UTF-8 character before subsequent appends") {
-    val directory = Files.createTempDirectory("desk-order-torn-utf8")
+    val directory = tempDirectory("desk-order-torn-utf8")
     OrderResultLog.append(directory, 1L, "first")
     val path = directory.resolve("order-results.jsonl")
     val good = (Files.readString(path) * 1000).getBytes(java.nio.charset.StandardCharsets.UTF_8)
@@ -114,7 +114,7 @@ class OrderResultLogSpec extends munit.FunSuite:
   }
 
   test("retention excludes torn lines and keeps repaired appends readable") {
-    val directory = Files.createTempDirectory("desk-order-torn-trim")
+    val directory = tempDirectory("desk-order-torn-trim")
     OrderResultLog.append(directory, 1L, "first")
     val path = directory.resolve("order-results.jsonl")
     Files.writeString(path, Files.readString(path) * 1000 + "{\"id\":\"torn")
@@ -126,7 +126,7 @@ class OrderResultLogSpec extends munit.FunSuite:
   }
 
   test("appending 1100 results keeps the newest 1000 in order and private") {
-    val directory = Files.createTempDirectory("desk-order-retention")
+    val directory = tempDirectory("desk-order-retention")
     for i <- 1 to 1100 do OrderResultLog.append(directory, i.toLong, s"result $i")
     import scala.jdk.CollectionConverters.*
     val path = directory.resolve("order-results.jsonl")
@@ -140,7 +140,7 @@ class OrderResultLogSpec extends munit.FunSuite:
   }
 
   test("two controllers append all 600 order results without keeping general messages") {
-    val directory = Files.createTempDirectory("desk-order-results")
+    val directory = tempDirectory("desk-order-results")
     def controller = new DeskController(
       PanelView(),
       () => 123L,
@@ -151,33 +151,28 @@ class OrderResultLogSpec extends munit.FunSuite:
     )
     val first = controller
     val second = controller
-    try
-      val writers = Vector(first, second).map { c =>
-        new Thread(() => {
-          for i <- 1 to 300 do
-            c.addMessage("analysis", "ignored")
-            c.addMessage("order", s"Order pending $i")
-        })
-      }
-      writers.foreach(_.start())
-      writers.foreach(_.join())
-      val lines = Files.readAllLines(directory.resolve("order-results.jsonl"))
-      import scala.jdk.CollectionConverters.*
-      val records = lines.asScala.map(ujson.read(_)).toVector
-      assertEquals(records.size, 600)
-      assertEquals(records.map(_("id").str).distinct.size, 600)
-      assert(records.forall(_("kind").str == "order"))
-      assertEquals(first.panel.actionNumber, 300L)
-      assertEquals(second.panel.actionNumber, 300L)
-      assert(!Files.exists(directory.resolve("messages")))
-    finally
-      val paths = Files.walk(directory)
-      try paths.sorted(java.util.Comparator.reverseOrder()).forEach(p => Files.delete(p))
-      finally paths.close()
+    val writers = Vector(first, second).map { c =>
+      new Thread(() => {
+        for i <- 1 to 300 do
+          c.addMessage("analysis", "ignored")
+          c.addMessage("order", s"Order pending $i")
+      })
+    }
+    writers.foreach(_.start())
+    writers.foreach(_.join())
+    val lines = Files.readAllLines(directory.resolve("order-results.jsonl"))
+    import scala.jdk.CollectionConverters.*
+    val records = lines.asScala.map(ujson.read(_)).toVector
+    assertEquals(records.size, 600)
+    assertEquals(records.map(_("id").str).distinct.size, 600)
+    assert(records.forall(_("kind").str == "order"))
+    assertEquals(first.panel.actionNumber, 300L)
+    assertEquals(second.panel.actionNumber, 300L)
+    assert(!Files.exists(directory.resolve("messages")))
   }
 
   test("an append starts a new line after a torn record") {
-    val directory = Files.createTempDirectory("desk-order-torn")
+    val directory = tempDirectory("desk-order-torn")
     OrderResultLog.append(directory, 1L, "first")
     val path = directory.resolve("order-results.jsonl")
     Files.writeString(path, "{\"id\":\"torn", java.nio.file.StandardOpenOption.APPEND)
@@ -190,7 +185,7 @@ class OrderResultLogSpec extends munit.FunSuite:
   }
 
   test("a lock held by another process times out promptly") {
-    val directory = Files.createTempDirectory("desk-order-locked")
+    val directory = tempDirectory("desk-order-locked")
     OrderResultLog.append(directory, 1L, "first")
     val child = new ProcessBuilder(
       "python3",

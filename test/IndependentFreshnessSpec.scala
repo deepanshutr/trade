@@ -23,15 +23,11 @@ object FreshnessProcessProbe:
         require(Files.exists(root.resolve("release")), "held request was not released")
     }
 
-class IndependentFreshnessSpec extends munit.FunSuite:
+class IndependentFreshnessSpec extends TempDirectorySuite:
   override val munitTimeout = 60.seconds
   private val at = 1800000000000L
   private val metadata =
     """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}"""
-  private def waitFor(label: String, seconds: Long = 5L)(condition: => Boolean): Unit =
-    val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds)
-    while !condition && System.nanoTime() < until do Thread.sleep(2)
-    assert(condition, label)
   private def launch(errors: ConcurrentLinkedQueue[Throwable])(body: => Unit): Thread =
     val thread = new Thread(() =>
       try body
@@ -137,7 +133,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
       completed.incrementAndGet()
     }
     try
-      waitFor("first history wake did not run")(completed.get() >= 1)
+      Wait.until("first history wake did not run")(completed.get() >= 1)
       Thread.sleep(100L)
       assertEquals(completed.get(), 1)
       assertEquals(
@@ -222,7 +218,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
   private class PaperFixture(held: BigDecimal = BigDecimal(0)):
     val now = new AtomicLong(at)
     val config = TradingConfig()
-    val root = Files.createTempDirectory("review-paper-")
+    val root = tempDirectory("review-paper-")
     if held > 0 then
       LocalFiles.write(
         root.resolve("wallet-mainnet.json"),
@@ -271,7 +267,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
       )
     def start(): Unit =
       worker.start()
-      waitFor("metadata fixture did not load")(worker.view.rules.nonEmpty)
+      Wait.until("metadata fixture did not load")(worker.view.rules.nonEmpty)
     def receive(text: String): Unit = Events.parse(text).foreach(worker.observe)
     def close(): Unit = worker.close()
 
@@ -312,7 +308,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
         assertEquals(plan.estimatedValue, value)
         val review = OrderReview(intent, plan, at, at + 30000L)
         assert(f.worker.submitReviewed(review))
-        waitFor("simulated order did not settle")(
+        Wait.until("simulated order did not settle")(
           !f.worker.view.pending && f.worker.view.outcome.nonEmpty
         )
         assertEquals(f.ledger.account.count, 1L)
@@ -385,7 +381,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
         f.receive(f.event(f.book.copy(time = f.now.get())))
         assert(f.worker.view.ready)
         assert(f.worker.submitReviewed(review))
-        waitFor("simulated order did not settle after depth shrank")(
+        Wait.until("simulated order did not settle after depth shrank")(
           !f.worker.view.pending && f.worker.view.outcome.nonEmpty
         )
         assertEquals(f.ledger.account.count, 1L)
@@ -416,7 +412,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
           Some(at - (count - 1L) * State.intervalMs(interval))
         )
         assertEquals(PublicRequestBudget.cost(body), expected)
-    val root = Files.createTempDirectory("review-dispatch-")
+    val root = tempDirectory("review-dispatch-")
     val now = new AtomicLong(at)
     val budget = new PublicRequestBudget(root, () => now.get())
     for weight <- Vector(1, 2, 3, 20, 21, 103, 104) do
@@ -444,7 +440,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
   test(
     "interrupting an expensive gate waiter cannot reserve credit or release another owner's gate"
   ) {
-    val root = Files.createTempDirectory("review-gate-interrupt-")
+    val root = tempDirectory("review-gate-interrupt-")
     val now = new AtomicLong(at)
     val budget = new PublicRequestBudget(root, () => now.get())
     val errors = new ConcurrentLinkedQueue[Throwable]()
@@ -467,7 +463,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
         catch case _: InterruptedException => interrupted.countDown()
       })
       assert(waiting.await(3, TimeUnit.SECONDS))
-      waitFor("waiter did not park at the expensive gate")(
+      Wait.until("waiter did not park at the expensive gate")(
         waiter.get.getState == Thread.State.WAITING
       )
       waiter.get.interrupt()
@@ -488,7 +484,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
   }
 
   test("separate processes hold expensive transport exclusively while selected depth passes") {
-    val root = Files.createTempDirectory("review-expensive-processes-")
+    val root = tempDirectory("review-expensive-processes-", keepOnFailure = true)
     val children = scala.collection.mutable.ArrayBuffer.empty[(String, Process)]
     def child(role: String): Process =
       val process = new ProcessBuilder(
@@ -503,12 +499,14 @@ class IndependentFreshnessSpec extends munit.FunSuite:
       process
     try
       child("first")
-      waitFor("first process did not enter transport")(Files.exists(root.resolve("first.entered")))
+      Wait.until("first process did not enter transport")(
+        Files.exists(root.resolve("first.entered"))
+      )
       val heldDeadline = Files.readString(root.resolve("budget/schedule.txt")).toLong
       child("second")
-      waitFor("second process did not start")(Files.exists(root.resolve("second.started")))
+      Wait.until("second process did not start")(Files.exists(root.resolve("second.started")))
       child("price")
-      waitFor("selected depth was blocked behind expensive transport")(
+      Wait.until("selected depth was blocked behind expensive transport")(
         Files.exists(root.resolve("price.entered"))
       )
       Thread.sleep(100L)

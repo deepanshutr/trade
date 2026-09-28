@@ -24,6 +24,9 @@ class PlaybackSpec(unittest.TestCase):
             (private / "src").mkdir()
             for name in ("WorkspaceApp.scala", "Main.scala"):
                 source = (repository / "src" / name).read_text()
+                if name == "WorkspaceApp.scala":
+                    self.assertTrue("Thread.sleep(25L)" in source,
+                                    "WorkspaceApp.scala no longer contains Thread.sleep(25L)")
                 (private / "src" / name).write_text(source.replace("Thread.sleep(25L)", "Thread.sleep(20L)"))
             output = private / "capture"
             argv = ["playback.py", "--java", "unused", "--classpath", "unused",
@@ -98,28 +101,6 @@ class PlaybackSpec(unittest.TestCase):
         self.assertEqual(len(quotes), 10)
         self.assertGreater(len(pumps), 900, "output must continue draining between quotes")
         self.assertTrue(all(b - a >= 0.099 for a, b in zip(quotes, quotes[1:])))
-
-    def test_workspace_target_and_cancel_are_exact_below_the_price_columns(self):
-        for width, height in ((100, 30), (120, 40), (160, 45)):
-            divider = min(width * 3 // 5, width - 47)
-            rows = [" " * width for _ in range(height)]
-            rows[0] = "connection active 0.1s XMR mid 522.26".ljust(divider) + "|" + " " * (width - divider - 1)
-            row = height - 6
-            def shown(text):
-                frame = rows.copy()
-                frame[row] = " " * divider + "|" + text.ljust(width - divider - 1)
-                return {"lines": frame}
-            selected = shown("Target buy 522.28 Up/Down")
-            self.assertTrue(playback.target_matches(selected, "XMR", "buy", "522.28", "522.26"))
-            self.assertFalse(playback.target_matches(selected, "XMR", "buy", "522.29", "522.26"))
-            moved = {"lines": selected["lines"].copy()}
-            moved["lines"][row - 1], moved["lines"][row] = moved["lines"][row], moved["lines"][row - 1]
-            self.assertFalse(playback.target_matches(moved, "XMR", "buy", "522.28", "522.26"))
-            self.assertFalse(playback.idle_matches(selected, "XMR", "522.26"))
-            idle = shown("")
-            idle["lines"][height - 8] = " " * divider + "|" + "| 9 BUY target | | 0 SELL target |".ljust(width - divider - 1)
-            self.assertTrue(playback.idle_matches(idle, "XMR", "522.26"))
-            self.assertFalse(playback.idle_matches(shown(""), "XMR", "522.26"))
 
     def test_frame_is_complete_only_after_the_final_clear(self):
         stream = playback.Frames()

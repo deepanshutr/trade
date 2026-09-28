@@ -19,7 +19,7 @@ object HistorylessWorkspaceProcess:
         )
     )
 
-class MessageHistoryRemovalSpec extends munit.FunSuite:
+class MessageHistoryRemovalSpec extends TempDirectorySuite:
   test("order notices survive ignored prose and remain responsive to keyboard input") {
     val now = 1800000000000L
     val controller = new DeskController(
@@ -53,22 +53,18 @@ class MessageHistoryRemovalSpec extends munit.FunSuite:
   }
 
   test("a second diagnostic writer cannot modify the first writer's files") {
-    val root = Files.createTempDirectory("desk-diagnostic-lease")
+    val root = tempDirectory("desk-diagnostic-lease")
     val first = new Diagnostics.FilesSink(root)
     try
       first.append("first")
       intercept[Exception](new Diagnostics.FilesSink(root))
       first.append("second")
       assertEquals(Files.readString(root.resolve("events-0.jsonl")), "first\nsecond\n")
-    finally
-      first.close()
-      val paths = Files.walk(root)
-      try paths.sorted(java.util.Comparator.reverseOrder()).forEach(p => Files.delete(p))
-      finally paths.close()
+    finally first.close()
   }
 
   test("workspace passes a held legacy history lock and leaves saved messages untouched") {
-    val root = Files.createTempDirectory("desk-history-removal")
+    val root = tempDirectory("desk-history-removal", keepOnFailure = true)
     val settings = root.resolve("settings.json")
     LocalFiles.write(settings, "{}")
     val saved = root.resolve("messages/messages.json")
@@ -96,7 +92,4 @@ class MessageHistoryRemovalSpec extends munit.FunSuite:
         child.destroyForcibly()
         child.waitFor(5, TimeUnit.SECONDS)
       lease.close()
-      val paths = Files.walk(root)
-      try paths.sorted(java.util.Comparator.reverseOrder()).forEach(p => Files.delete(p))
-      finally paths.close()
   }

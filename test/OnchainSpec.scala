@@ -4,7 +4,7 @@ import java.nio.file.{Files, Paths}
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.LinkedBlockingQueue
 
-class OnchainSpec extends munit.FunSuite:
+class OnchainSpec extends TempDirectorySuite:
   // Made-up values in BNB Chain's shape: the token/quote pair reserves and the USDT/quote pool price.
   private val reserveToken = BigInt("20000000000000000000000000")
   private val reserveQuote = BigInt("5000000000000000000000")
@@ -354,7 +354,7 @@ class OnchainSpec extends munit.FunSuite:
   }
 
   test("settings list on-chain markets and refuse bad names, addresses, endpoints and references") {
-    val directory = Files.createTempDirectory("desk-onchain-")
+    val directory = tempDirectory("desk-onchain-")
     val path = directory.resolve("config.json")
     def load(text: String) =
       Files.writeString(path, text)
@@ -382,6 +382,4 @@ class OnchainSpec extends munit.FunSuite:
     assert(load(good.replace("https://rpc-bsc.48.club", "http://rpc-bsc.48.club")).isLeft)
     assert(load(good.replace("DEMO", "BTC")).isLeft)
     assert(load(good.replace("]}]}", "]}, " + good.drop(12))).isLeft)
-    Files.deleteIfExists(path)
-    Files.deleteIfExists(directory)
   }

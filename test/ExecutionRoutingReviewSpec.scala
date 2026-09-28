@@ -4,11 +4,7 @@ import java.nio.file.Files
 import java.util.concurrent.{CountDownLatch, LinkedBlockingQueue, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
-class ExecutionRoutingReviewSpec extends munit.FunSuite:
-  private def waitFor(label: String)(condition: => Boolean): Unit =
-    val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-    while !condition && System.nanoTime() < end do Thread.sleep(2)
-    assert(condition, label)
+class ExecutionRoutingReviewSpec extends TempDirectorySuite:
 
   private final class Fixture(
       enabled: Boolean = true,
@@ -65,7 +61,7 @@ class ExecutionRoutingReviewSpec extends munit.FunSuite:
         )
       )
     )
-    val directory = Files.createTempDirectory("desk-worker")
+    val directory = tempDirectory("desk-worker")
     val exchange = new Exchange:
       def watch(
           coin: String,
@@ -197,7 +193,7 @@ class ExecutionRoutingReviewSpec extends munit.FunSuite:
     val worker = create()
     if autoStart then worker.start()
     fresh(worker)
-    def ready(): Unit = waitFor("worker never became ready")(worker.view.ready)
+    def ready(): Unit = Wait.until("worker never became ready")(worker.view.ready)
     def review(intent: OrderIntent = buy, lifetime: Long = 1000L): OrderReview =
       val current = worker.view
       OrderReview(
@@ -275,7 +271,7 @@ class ExecutionRoutingReviewSpec extends munit.FunSuite:
   }
 
   test("recorder startup reaches public storage without constructing an account worker") {
-    val directory = Files.createTempDirectory("desk-record-routing")
+    val directory = tempDirectory("desk-record-routing")
     val config = directory.resolve("settings.json")
     Files.writeString(config, "{}")
     Files.setPosixFilePermissions(

@@ -3,12 +3,12 @@ package desk
 import java.nio.file.Files
 import scala.jdk.CollectionConverters.*
 
-class ArchiveSpec extends munit.FunSuite:
+class ArchiveSpec extends TempDirectorySuite:
   private val now = 1_800_000_000_000L
   private val candle = Candle(now - 60000L, 100, 102, 98, 101, 12)
 
   test("recorded candles restore after restart while quotes remain disconnected") {
-    val directory = Files.createTempDirectory("desk-archive-test")
+    val directory = tempDirectory("desk-archive-test")
     val archive = MarketArchive.open(directory)
     try
       archive.record(Event.CandleHistory("XMR", "1m", Vector(candle)), now)
@@ -32,7 +32,7 @@ class ArchiveSpec extends munit.FunSuite:
   }
 
   test("a partial event write cannot erase the completed candle checkpoint") {
-    val directory = Files.createTempDirectory("desk-archive-test")
+    val directory = tempDirectory("desk-archive-test")
     val archive = MarketArchive.open(directory)
     try
       archive.record(Event.CandleHistory("XMR", "1m", Vector(candle)), now)
@@ -49,7 +49,7 @@ class ArchiveSpec extends munit.FunSuite:
   }
 
   test("close rescans partial writes before enforcing the disk budget") {
-    val directory = Files.createTempDirectory("desk-archive-partial")
+    val directory = tempDirectory("desk-archive-partial")
     val archive = MarketArchive.open(directory, maximumBytes = 8000, chunkBytes = 3000)
     def chunks =
       val entries = Files.list(directory)
@@ -74,7 +74,7 @@ class ArchiveSpec extends munit.FunSuite:
   }
 
   test("retention prunes only owned public chunks and refuses a second writer") {
-    val directory = Files.createTempDirectory("desk-archive-test")
+    val directory = tempDirectory("desk-archive-test")
     val foreign = directory.resolve("keep.txt")
     Files.writeString(foreign, "keep")
     val archive =
@@ -93,7 +93,7 @@ class ArchiveSpec extends munit.FunSuite:
   }
 
   test("an open archive restores from its initial checkpoint without reading the file again") {
-    val directory = Files.createTempDirectory("desk-archive-reuse")
+    val directory = tempDirectory("desk-archive-reuse")
     val writer = MarketArchive.open(directory)
     writer.record(Event.CandleHistory("XMR", "1m", Vector(candle)), now)
     writer.close()
@@ -105,7 +105,7 @@ class ArchiveSpec extends munit.FunSuite:
   }
 
   test("workspace restores candles even when another recorder holds the archive lock") {
-    val directory = Files.createTempDirectory("desk-archive-held")
+    val directory = tempDirectory("desk-archive-held")
     val owner = MarketArchive.open(directory)
     try
       owner.record(Event.CandleHistory("XMR", "1m", Vector(candle)), now)

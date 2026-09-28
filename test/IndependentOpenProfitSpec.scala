@@ -1,10 +1,9 @@
 package desk
 
 import java.math.{BigDecimal as Exact}
-import java.nio.file.Files
 import java.time.ZoneOffset
 
-class IndependentOpenProfitSpec extends munit.FunSuite:
+class IndependentOpenProfitSpec extends TempDirectorySuite:
   private val now = 1800000000000L
   private val blank = PaperAccount(BigDecimal(1000), deposit = BigDecimal(1000))
   private def exact(text: String): Exact = new Exact(text)
@@ -65,33 +64,28 @@ class IndependentOpenProfitSpec extends munit.FunSuite:
     (plain.result(), result.result())
 
   test("actual buys, partial sales and full closure separate gross open profit from total net") {
-    val dir = Files.createTempDirectory("desk-open-profit-")
+    val dir = tempDirectory("desk-open-profit-")
+    val ledger = PaperLedger.open(dir, "mainnet", BigDecimal(1000), BigDecimal("0.01"))
+    def fill(side: Side, q: Int, px: Int): Unit =
+      assert(
+        ledger
+          .fill(OrderPlan("XMR", 0, side, OrderKind.Hard, q, px, px, q, q * px, Some(px), 0), now)
+          .isRight
+      )
     try
-      val ledger = PaperLedger.open(dir, "mainnet", BigDecimal(1000), BigDecimal("0.01"))
-      def fill(side: Side, q: Int, px: Int): Unit =
-        assert(
-          ledger
-            .fill(OrderPlan("XMR", 0, side, OrderKind.Hard, q, px, px, q, q * px, Some(px), 0), now)
-            .isRight
-        )
-      try
-        fill(Side.Buy, 2, 100)
-        val first = PortfolioView.paper(ledger.account, "XMR", Some(110))
-        same(first.openProfit, exact("20"))
-        same(first.net, exact("18"))
-        fill(Side.Sell, 1, 120)
-        val remaining = PortfolioView.paper(ledger.account, "XMR", Some(90))
-        same(remaining.openProfit, exact("-10"))
-        same(remaining.net, exact("6.8"))
-        fill(Side.Sell, 1, 80)
-        val flat = PortfolioView.paper(ledger.account, "XMR", None)
-        same(flat.openProfit, exact("0"))
-        same(flat.net, exact("-4"))
-      finally ledger.close()
-    finally
-      val paths = Files.walk(dir)
-      try paths.sorted(java.util.Comparator.reverseOrder()).forEach(Files.deleteIfExists(_))
-      finally paths.close()
+      fill(Side.Buy, 2, 100)
+      val first = PortfolioView.paper(ledger.account, "XMR", Some(110))
+      same(first.openProfit, exact("20"))
+      same(first.net, exact("18"))
+      fill(Side.Sell, 1, 120)
+      val remaining = PortfolioView.paper(ledger.account, "XMR", Some(90))
+      same(remaining.openProfit, exact("-10"))
+      same(remaining.net, exact("6.8"))
+      fill(Side.Sell, 1, 80)
+      val flat = PortfolioView.paper(ledger.account, "XMR", None)
+      same(flat.openProfit, exact("0"))
+      same(flat.net, exact("-4"))
+    finally ledger.close()
   }
 
   test(

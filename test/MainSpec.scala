@@ -4,7 +4,7 @@ import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch, LinkedBlocki
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
 import scala.jdk.CollectionConverters.*
 
-class MainSpec extends munit.FunSuite:
+class MainSpec extends TempDirectorySuite:
   test("conflicting or repeated audio flags explain the choice") {
     for flags <- Seq(
         Seq("--chime", "--mute"),
@@ -14,11 +14,6 @@ class MainSpec extends munit.FunSuite:
       )
     do assertEquals(Main.parseArgs(flags), Left("choose one of chime or mute"))
   }
-
-  private def awaitState(label: String)(ready: => Boolean): Unit =
-    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-    while !ready && System.nanoTime() < deadline do Thread.sleep(1)
-    assert(ready, label)
 
   private final class SwitchFixture(blockSocket: Boolean):
     val time = 1_000_000L
@@ -85,13 +80,13 @@ class MainSpec extends munit.FunSuite:
       connection.start()
       assert(startup.await(3, TimeUnit.SECONDS), "initial histories did not finish")
       workers = Main.startFold(queue, state, feed, () => time)
-      awaitState("initial histories did not reach the fold") {
+      Wait.until("initial histories did not reach the fold") {
         val s = state.get()
         s.candles.keySet == State.intervals.toSet &&
         s.refs.values.forall(_.candles.keySet == State.intervals.toSet)
       }
       assertEquals(state.get().feed, Health.Live(time))
-      awaitState("initial repair did not finish")(repairs.get() == 1)
+      Wait.until("initial repair did not finish")(repairs.get() == 1)
       assertEquals(sent.size(), 24)
       assertEquals(bodies.size(), 18)
       sent.clear()
@@ -138,7 +133,7 @@ class MainSpec extends munit.FunSuite:
         f.queue.put(Event.Key(Command.ZoomOut))
         f.queue.put(Event.Resize(120, 40))
         f.queue.put(Event.Key(Command.Quit))
-        awaitState(s"fold stopped behind the held $held")(f.state.get().quit)
+        Wait.until(s"fold stopped behind the held $held")(f.state.get().quit)
         val s = f.state.get()
         assertEquals(s.book.map(_.bids.head.px), Some("20"))
         assertEquals(s.book.map(_.asks.head.px), Some("22"))
@@ -156,18 +151,18 @@ class MainSpec extends munit.FunSuite:
       f.market("ETH")
       assert(f.entered.await(3, TimeUnit.SECONDS), "first history request did not start")
       f.market("SOL")
-      awaitState("verified SOL selection did not arrive")(f.state.get().coin == "SOL")
+      Wait.until("verified SOL selection did not arrive")(f.state.get().coin == "SOL")
       f.market("SOL")
       f.market("XMR")
       f.queue.put(Event.Resize(121, 41))
-      awaitState("queued markets held up the fold")(f.state.get().cols == 121)
-      awaitState("verified return selection did not arrive")(f.state.get().coin == "XMR")
-      awaitState("history held up subscription changes")(
+      Wait.until("queued markets held up the fold")(f.state.get().cols == 121)
+      Wait.until("verified return selection did not arrive")(f.state.get().coin == "XMR")
+      Wait.until("history held up subscription changes")(
         f.feed.coin == "XMR" && f.sent.size() == 60
       )
       assertEquals(f.bodies.size(), 1)
       f.release.countDown()
-      awaitState("latest repair wake was lost")(f.repairs.get() >= 3)
+      Wait.until("latest repair wake was lost")(f.repairs.get() >= 3)
       val expectedSends = Vector("XMR", "ETH", "SOL", "XMR")
         .sliding(2)
         .flatMap(pair =>
@@ -231,7 +226,7 @@ class MainSpec extends munit.FunSuite:
   }
 
   test("a missing default settings file uses defaults but an explicit path stays explicit") {
-    val home = java.nio.file.Files.createTempDirectory("desk-home")
+    val home = tempDirectory("desk-home")
     assertEquals(Main.configPath(Main.Args("XMR", false), home), None)
     val directory = home.resolve(".config/desk")
     java.nio.file.Files.createDirectories(directory)

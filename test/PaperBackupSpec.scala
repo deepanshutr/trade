@@ -1,14 +1,9 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-class PaperBackupSpec extends munit.FunSuite:
-  private def await(label: String)(ready: => Boolean): Unit =
-    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-    while !ready && System.nanoTime() < deadline do Thread.sleep(2)
-    assert(ready, label)
+class PaperBackupSpec extends TempDirectorySuite:
 
   private final class Fixture:
     val now = new AtomicLong(1800000000000L)
@@ -16,7 +11,7 @@ class PaperBackupSpec extends munit.FunSuite:
       def post(body: String): Option[String] =
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("backup-"),
+      tempDirectory("backup-"),
       "mainnet",
       BigDecimal(10000),
       BigDecimal(0)
@@ -24,7 +19,7 @@ class PaperBackupSpec extends munit.FunSuite:
     val worker =
       new PaperWorker(TradingConfig(), "XMR", ledger, rest, () => now.get(), () => now.get())
     worker.start()
-    await("metadata was not loaded")(worker.view.rules.nonEmpty)
+    Wait.until("metadata was not loaded")(worker.view.rules.nonEmpty)
     def book(time: Long = now.get(), market: String = "XMR", socket: Boolean = false): Unit =
       worker.observe(
         Event.BookUpdate(
@@ -46,7 +41,7 @@ class PaperBackupSpec extends munit.FunSuite:
       val review =
         OrderReview(intent, f.worker.preview(intent).toOption.get, f.now.get(), f.now.get() + 30000)
       assert(f.worker.submitReviewed(review))
-      await("the simulated fill did not complete")(!f.worker.view.pending)
+      Wait.until("the simulated fill did not complete")(!f.worker.view.pending)
       assertEquals(f.ledger.account.count, 1L)
       assertEquals(f.worker.view.position, Some(BigDecimal(5)))
       f.now.addAndGet(1001)
@@ -124,7 +119,7 @@ class PaperBackupSpec extends munit.FunSuite:
         f.worker.submitReviewed(review),
         "a reconnect attempt invalidated the fresh backup review"
       )
-      await("the reviewed fill did not complete")(!f.worker.view.pending)
+      Wait.until("the reviewed fill did not complete")(!f.worker.view.pending)
       assertEquals(f.ledger.account.count, 1L)
       assertEquals(f.worker.view.position, Some(BigDecimal(5)))
       assert(!f.worker.submitReviewed(review))
@@ -142,7 +137,7 @@ class PaperBackupSpec extends munit.FunSuite:
         reads += 1
         if reads == 1 then now - 1 else now
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("backup-clock-step"),
+      tempDirectory("backup-clock-step"),
       "mainnet",
       config.paperBalance,
       config.paperFee

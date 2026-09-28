@@ -4,11 +4,11 @@ import java.nio.file.Files
 import scala.jdk.CollectionConverters.*
 import upickle.default.read
 
-class ArchiveMarketsSpec extends munit.FunSuite:
+class ArchiveMarketsSpec extends TempDirectorySuite:
   import MarketArchive.given
 
   test("capture evicts the oldest candle market and continues across restarts") {
-    val directory = Files.createTempDirectory("desk-archive-markets")
+    val directory = tempDirectory("desk-archive-markets")
     val at = 1800000000000L
     val archive = MarketArchive.open(directory)
     try
@@ -51,7 +51,7 @@ class ArchiveMarketsSpec extends munit.FunSuite:
   }
 
   test("a refused new market keeps every saved market") {
-    val directory = Files.createTempDirectory("desk-archive-refused")
+    val directory = tempDirectory("desk-archive-refused")
     val at = 1800000000000L
     val archive = MarketArchive.open(directory, maximumBytes = 200000L, chunkBytes = 100000L)
     try
@@ -71,7 +71,7 @@ class ArchiveMarketsSpec extends munit.FunSuite:
   }
 
   test("an update to a saved market evicts nothing") {
-    val directory = Files.createTempDirectory("desk-archive-known")
+    val directory = tempDirectory("desk-archive-known")
     val at = 1800000000000L
     val archive = MarketArchive.open(directory)
     try

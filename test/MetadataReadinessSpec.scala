@@ -1,17 +1,12 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 
-class MetadataReadinessSpec extends munit.FunSuite:
+class MetadataReadinessSpec extends TempDirectorySuite:
   private val at = 1800000000000L
   private val valid =
     """{"universe":[{"name":"XMR","szDecimals":3,"maxLeverage":5},{"name":"BTC","szDecimals":4,"maxLeverage":10}]}"""
-  private def waitFor(label: String, ms: Long = 2500L)(condition: => Boolean): Unit =
-    val end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(ms)
-    while !condition && System.nanoTime() < end do Thread.sleep(5L)
-    assert(condition, label)
 
   private final class Fixture(initial: Option[(ujson.Value, Long)], respond: () => Option[String]):
     val time = new AtomicLong(at)
@@ -21,7 +16,7 @@ class MetadataReadinessSpec extends munit.FunSuite:
         calls.incrementAndGet()
         respond()
     val config = TradingConfig()
-    val path = Files.createTempDirectory("desk-metadata-readiness-")
+    val path = tempDirectory("desk-metadata-readiness-")
     val ledger = PaperLedger.open(path, "mainnet", config.paperBalance, config.paperFee)
     val worker =
       new PaperWorker(config, "XMR", ledger, rest, () => time.get(), () => time.get(), initial)
@@ -37,16 +32,13 @@ class MetadataReadinessSpec extends munit.FunSuite:
     quote()
     def close(): Unit =
       worker.close()
-      val files = Files.walk(path)
-      try files.sorted(java.util.Comparator.reverseOrder()).forEach(p => Files.delete(p))
-      finally files.close()
 
   test("a syntactically valid but malformed first response does not suppress retries") {
     val count = new AtomicInteger(0)
     val f = new Fixture(None, () => Some(if count.incrementAndGet() == 1 then "null" else valid))
     try
       f.worker.start()
-      waitFor(s"No recovery from malformed first response, calls=${f.calls.get()}")(
+      Wait.until(s"No recovery from malformed first response, calls=${f.calls.get()}")(
         f.worker.view.ready
       )
       assert(f.calls.get() >= 2)
@@ -58,7 +50,9 @@ class MetadataReadinessSpec extends munit.FunSuite:
     try
       assert(!f.worker.view.ready)
       f.worker.start()
-      waitFor("Malformed inherited metadata suppressed a valid fetch", 500L)(f.worker.view.ready)
+      Wait.until("Malformed inherited metadata suppressed a valid fetch", seconds = 0.5)(
+        f.worker.view.ready
+      )
       assert(f.calls.get() >= 1)
     finally f.close()
   }
@@ -87,7 +81,7 @@ class MetadataReadinessSpec extends munit.FunSuite:
     val f = new Fixture(Some(ujson.read(valid) -> originalAt), () => None)
     try
       f.worker.start()
-      waitFor("Refresh not attempted")(f.calls.get() >= 1)
+      Wait.until("Refresh not attempted")(f.calls.get() >= 1)
       assert(f.worker.view.ready)
       f.time.set(originalAt + 60000L)
       f.quote()
@@ -135,7 +129,7 @@ class MetadataReadinessSpec extends munit.FunSuite:
       f.quote("BTC")
       assert(!f.worker.view.ready, "Pending refresh kept expired metadata tradable")
       release.countDown()
-      waitFor("Successful delayed refresh never enabled current market")(f.worker.view.ready)
+      Wait.until("Successful delayed refresh never enabled current market")(f.worker.view.ready)
       assertEquals(f.worker.view.coin, "BTC")
       assertEquals(f.worker.view.rules.map(_.szDecimals), Some(4))
     finally
@@ -153,7 +147,7 @@ class MetadataReadinessSpec extends munit.FunSuite:
       try
         assert(f.worker.view.ready)
         f.worker.start()
-        waitFor("Removal or delisting left stale rules tradable")(!f.worker.view.ready)
+        Wait.until("Removal or delisting left stale rules tradable")(!f.worker.view.ready)
         assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard)).isLeft)
       finally f.close()
   }
@@ -168,7 +162,7 @@ class MetadataReadinessSpec extends munit.FunSuite:
       f.quote("BTC")
       assert(!f.worker.view.ready)
       f.worker.start()
-      waitFor("Malformed newly selected metadata suppressed refetch")(f.worker.view.ready)
+      Wait.until("Malformed newly selected metadata suppressed refetch")(f.worker.view.ready)
       assertEquals(f.worker.view.rules.map(_.szDecimals), Some(4))
     finally f.close()
   }

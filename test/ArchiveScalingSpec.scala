@@ -3,9 +3,9 @@ package desk
 import java.nio.file.Files
 import scala.jdk.CollectionConverters.*
 
-class ArchiveScalingSpec extends munit.FunSuite:
+class ArchiveScalingSpec extends TempDirectorySuite:
   test("regular checkpoints preserve the active chunk while sufficient space remains") {
-    val root = Files.createTempDirectory("desk-capture-checkpoints")
+    val root = tempDirectory("desk-capture-checkpoints")
     val archive = MarketArchive.open(root, maximumBytes = 1000000L, chunkBytes = 100000L)
     val at = 1800000000000L
     val book = Book(Vector(Level("100", "10", 2)), Vector(Level("101", "10", 2)), at)

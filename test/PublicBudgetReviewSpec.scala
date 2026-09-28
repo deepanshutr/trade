@@ -7,7 +7,7 @@ import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 import scala.jdk.CollectionConverters.*
 
-class PublicBudgetReviewSpec extends munit.FunSuite:
+class PublicBudgetReviewSpec extends TempDirectorySuite:
   private val at = 1800000000000L
   private val stoppedConnector = new Connector:
     def connect(text: String => Unit, closed: () => Unit): Socket =
@@ -25,7 +25,7 @@ class PublicBudgetReviewSpec extends munit.FunSuite:
   }
 
   test("mixed clients preserve reservations across reopen and idle time") {
-    val root = Files.createTempDirectory("desk-review-public-budget")
+    val root = tempDirectory("desk-review-public-budget")
     val now = new AtomicLong(at)
     val first = new PublicRequestBudget(root, () => now.get())
     assertEquals(first.reserve(2), 172L)
@@ -38,7 +38,7 @@ class PublicBudgetReviewSpec extends munit.FunSuite:
   }
 
   test("invalid budgets and unsafe schedules preserve the previous reservation") {
-    val root = Files.createTempDirectory("desk-review-public-invalid")
+    val root = tempDirectory("desk-review-public-invalid")
     val now = new AtomicLong(at)
     val budget = new PublicRequestBudget(root, () => now.get())
     budget.reserve(20)
@@ -53,7 +53,7 @@ class PublicBudgetReviewSpec extends munit.FunSuite:
   }
 
   test("a symbolic schedule cannot overwrite a different private file") {
-    val root = Files.createTempDirectory("desk-review-public-symlink")
+    val root = tempDirectory("desk-review-public-symlink")
     val target = root.resolve("foreign.txt")
     LocalFiles.write(target, at.toString)
     Files.createSymbolicLink(root.resolve("schedule.txt"), target)
@@ -186,7 +186,7 @@ class PublicBudgetReviewSpec extends munit.FunSuite:
   }
 
   test("an unforced active archive chunk cannot advance the durable checkpoint") {
-    val root = Files.createTempDirectory("desk-review-active-force")
+    val root = tempDirectory("desk-review-active-force")
     val archive = MarketArchive.open(root, maximumBytes = 100000L, chunkBytes = 20000L)
     val bar = Candle(at - 60000L, 100, 101, 99, 100, 1)
     try

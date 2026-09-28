@@ -13,10 +13,6 @@ import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import scala.jdk.CollectionConverters.*
 
 class SocketWaitSpec extends munit.FunSuite:
-  private def await(label: String)(ready: => Boolean): Unit =
-    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-    while !ready && System.nanoTime() < deadline do Thread.sleep(1)
-    assert(ready, label)
 
   private final class Wire extends WebSocket:
     val aborted = new AtomicInteger(0)
@@ -91,11 +87,11 @@ class SocketWaitSpec extends munit.FunSuite:
     val _ = boundary.replies.add(CompletableFuture.completedFuture(replacement))
     val running = new Running(feed)
     try
-      await("the replacement startup did not finish")(started(queue, replacement))
+      Wait.until("the replacement startup did not finish")(started(queue, replacement))
       queue.clear()
       val obsolete = new Wire
       assert(pending.complete(obsolete))
-      await("the late socket was not aborted")(obsolete.aborted.get() == 1)
+      Wait.until("the late socket was not aborted")(obsolete.aborted.get() == 1)
       val old = boundary.listeners.peek()
       val _ = old.onText(obsolete, """{"channel":"pong"}""", true)
       val _ = old.onClose(obsolete, 1000, "late")
@@ -122,7 +118,7 @@ class SocketWaitSpec extends munit.FunSuite:
       val running = new Running(feed)
       try
         if operation != "subscription" then
-          await("the connection startup did not finish")(started(queue, wire))
+          Wait.until("the connection startup did not finish")(started(queue, wire))
           wire.hold = _ => true
           if operation == "heartbeat" then feed.heartbeat() else feed.setMarket("ETH")
         running.finish()

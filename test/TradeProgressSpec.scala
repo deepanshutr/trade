@@ -5,17 +5,13 @@ import java.time.ZoneId
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 
-class TradeProgressSpec extends munit.FunSuite:
+class TradeProgressSpec extends TempDirectorySuite:
   private val start = 1800000000000L
-  private def await(label: String)(condition: => Boolean): Unit =
-    val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-    while !condition && System.nanoTime() < end do Thread.sleep(2)
-    assert(condition, label)
 
   private class Paper(balance: BigDecimal = BigDecimal(10000), fee: BigDecimal = BigDecimal(0)):
     val clock = new AtomicLong(start)
     val ledger =
-      PaperLedger.open(Files.createTempDirectory("trade-progress-"), "mainnet", balance, fee)
+      PaperLedger.open(tempDirectory("trade-progress-"), "mainnet", balance, fee)
     val worker = new PaperWorker(
       TradingConfig(),
       "XMR",
@@ -37,7 +33,7 @@ class TradeProgressSpec extends munit.FunSuite:
       worker.start()
       worker.observe(Event.SocketUp)
       publish()
-      await("metadata unavailable")(worker.view.ready)
+      Wait.until("metadata unavailable")(worker.view.ready)
     def review(): OrderReview =
       val intent = Trading.action(0)
       OrderReview(intent, worker.preview(intent).toOption.get, clock.get(), clock.get() + 30000)
@@ -96,7 +92,7 @@ class TradeProgressSpec extends munit.FunSuite:
     try
       f.open()
       assert(f.worker.submitReviewed(f.review()))
-      await("receipt missing")(!f.worker.view.pending)
+      Wait.until("receipt missing")(!f.worker.view.pending)
       val result = f.worker.view.outcome.get
       assert(result.contains(java.time.Instant.ofEpochMilli(f.clock.get()).toString), result)
       assert(!result.contains(f.clock.get().toString), result)
@@ -151,7 +147,7 @@ class TradeProgressSpec extends munit.FunSuite:
       assertEquals(review.plan.estimatedQuantity, BigDecimal(1))
       f.publish("50")
       assert(f.worker.submitReviewed(review))
-      await("capacity result absent")(!f.worker.view.pending)
+      Wait.until("capacity result absent")(!f.worker.view.pending)
       assert(f.worker.view.outcome.exists(_.toLowerCase.contains("limit")))
       assertEquals(f.ledger.account.count, 0L)
     finally f.close()
@@ -184,7 +180,7 @@ class TradeProgressSpec extends munit.FunSuite:
           OrderReview(Trading.action(0), plan, f.clock.get(), f.clock.get() + 30000)
         )
       )
-      await("partial result absent")(!f.worker.view.pending)
+      Wait.until("partial result absent")(!f.worker.view.pending)
       assertEquals(f.ledger.account.positions("XMR").quantity, BigDecimal(1))
     finally f.close()
   }
@@ -200,7 +196,7 @@ class TradeProgressSpec extends munit.FunSuite:
         val review = f.review()
         f.publish("50")
         assert(f.worker.submitReviewed(review))
-        await("refusal absent")(!f.worker.view.pending)
+        Wait.until("refusal absent")(!f.worker.view.pending)
         updates.collect(f.worker.view)(text => received :+= text)
         updates.collect(f.worker.view)(text => received :+= text)
       assertEquals(received.size, 2)
@@ -362,7 +358,7 @@ class TradeProgressSpec extends munit.FunSuite:
               )
             )
         }
-        await("paper completion missing")(!f.worker.view.pending)
+        Wait.until("paper completion missing")(!f.worker.view.pending)
         val completed = update("result")
         val expected = scenario match
           case "no-fill"  => "No fill"

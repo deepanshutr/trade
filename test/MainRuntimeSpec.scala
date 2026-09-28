@@ -3,7 +3,7 @@ package desk
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 
-class MainRuntimeSpec extends munit.FunSuite:
+class MainRuntimeSpec extends TempDirectorySuite:
   test("live one-click submission captures observed leverage and margin") {
     val now = 1800000000000L
     val snapshot = Snapshot.initial("XMR", now)
@@ -67,7 +67,7 @@ class MainRuntimeSpec extends munit.FunSuite:
   }
 
   test("paper balance and fee can be configured without live addresses") {
-    val directory = Files.createTempDirectory("desk-paper-settings")
+    val directory = tempDirectory("desk-paper-settings")
     val path = directory.resolve("settings.json")
     Files.writeString(path, """{"paperBalance":"20000","paperFee":"0.001"}""")
     Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"))

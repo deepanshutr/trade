@@ -110,7 +110,7 @@ object PaperLedger:
         lease.close()
         throw error
 
-final class PaperLedger private (
+final class PaperLedger private[desk] (
     initial: PaperAccount,
     fee: BigDecimal,
     persist: PaperAccount => Unit,

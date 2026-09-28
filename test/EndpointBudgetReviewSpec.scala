@@ -15,9 +15,9 @@ object EndpointBudgetProbe:
     require(deadline >= before + 1715L, "public request reserved too little allowance")
     require(System.currentTimeMillis() >= deadline, "public request ignored its reserved wait")
 
-class EndpointBudgetReviewSpec extends munit.FunSuite:
+class EndpointBudgetReviewSpec extends TempDirectorySuite:
   test("the real public adapter reserves and waits before constructing an HTTP request") {
-    val root = Files.createTempDirectory("desk-review-endpoint-budget")
+    val root = tempDirectory("desk-review-endpoint-budget", keepOnFailure = true)
     val child = new ProcessBuilder(
       Path.of(System.getProperty("java.home"), "bin/java").toString,
       "-Duser.home=" + root.toString,

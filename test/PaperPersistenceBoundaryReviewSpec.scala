@@ -1,29 +1,19 @@
 package desk
 
-import java.nio.file.Files
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.{AtomicLong, AtomicReference}
 import scala.util.control.NonFatal
 
-class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
-  private def waitFor(label: String)(condition: => Boolean): Unit =
-    val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-    while !condition && System.nanoTime() < until do Thread.sleep(2)
-    assert(condition, label)
+class PaperPersistenceBoundaryReviewSpec extends TempDirectorySuite:
 
   private class Fixture(persist: PaperAccount => Unit):
     val clock = new AtomicLong(1800000000000L)
-    val constructor =
-      classOf[PaperLedger].getDeclaredConstructors.find(_.getParameterCount == 4).get
-    constructor.setAccessible(true)
-    val ledger = constructor
-      .newInstance(
-        PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
-        BigDecimal(0),
-        persist,
-        new AutoCloseable { def close(): Unit = () }
-      )
-      .asInstanceOf[PaperLedger]
+    val ledger = new PaperLedger(
+      PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
+      BigDecimal(0),
+      persist,
+      new AutoCloseable { def close(): Unit = () }
+    )
     val rest = new Rest:
       def post(body: String): Option[String] =
         require(ujson.read(body) == ujson.Obj("type" -> "meta"))
@@ -63,7 +53,7 @@ class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
       live,
       _ => throw new IllegalStateException("unexpected live worker"),
       rest,
-      Files.createTempDirectory("persist-boundary-"),
+      tempDirectory("persist-boundary-"),
       () => clock.get(),
       () => clock.get()
     )
@@ -88,7 +78,7 @@ class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
       router.start()
       router.observe(Event.SocketUp)
       book("XMR")
-      waitFor("paper did not become ready")(router.view.ready)
+      Wait.until("paper did not become ready")(router.view.ready)
     def review(): OrderReview =
       val intent = Trading.action(0)
       OrderReview(intent, router.preview(intent).toOption.get, clock.get(), clock.get() + 30000)
@@ -115,7 +105,9 @@ class PaperPersistenceBoundaryReviewSpec extends munit.FunSuite:
       field.setAccessible(true)
       field.get(worker).asInstanceOf[Vector[Thread]].find(_.getName == "paper-orders").get
     def complete(): Unit =
-      waitFor("paper order remained pending")(!router.view.pending && router.view.outcome.nonEmpty)
+      Wait.until("paper order remained pending")(
+        !router.view.pending && router.view.outcome.nonEmpty
+      )
     def close(): Unit =
       readers.foreach(_.join(1000L))
       router.close()

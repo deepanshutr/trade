@@ -3,9 +3,8 @@ package desk
 import java.nio.file.{Files, Path}
 import java.time.ZoneOffset
 import java.util.concurrent.atomic.AtomicBoolean
-import scala.jdk.CollectionConverters.*
 
-class PaperAccountingSpec extends munit.FunSuite:
+class PaperAccountingSpec extends TempDirectorySuite:
   private val now = 1800000000000L
   private val fee = BigDecimal("0.001")
 
@@ -25,12 +24,8 @@ class PaperAccountingSpec extends munit.FunSuite:
     )
 
   private def temporary[A](body: Path => A): A =
-    val directory = Files.createTempDirectory("desk-accounting-check-")
-    try body(directory)
-    finally
-      val paths = Files.walk(directory)
-      try paths.iterator().asScala.toVector.reverse.foreach(Files.delete)
-      finally paths.close()
+    val directory = tempDirectory("desk-accounting-check-")
+    body(directory)
 
   private def workerFor(ledger: PaperLedger, bid: String = "99", ask: String = "100"): PaperWorker =
     val rest = new Rest:
@@ -344,24 +339,19 @@ class PaperAccountingSpec extends munit.FunSuite:
       def removed(key: String): Map[String, PaperPosition] = original.removed(key)
       def updated[V1 >: PaperPosition](key: String, value: V1): Map[String, V1] =
         original.updated(key, value)
-    val constructor =
-      classOf[PaperLedger].getDeclaredConstructors.find(_.getParameterCount == 4).get
-    constructor.setAccessible(true)
     val save: PaperAccount => Unit = _ => ()
     val lease: AutoCloseable = () => ()
-    val ledger = constructor
-      .newInstance(
-        PaperAccount(
-          BigDecimal("799.8"),
-          fees = BigDecimal("0.2"),
-          positions = positions,
-          deposit = BigDecimal(1000)
-        ),
-        fee,
-        save,
-        lease
-      )
-      .asInstanceOf[PaperLedger]
+    val ledger = new PaperLedger(
+      PaperAccount(
+        BigDecimal("799.8"),
+        fees = BigDecimal("0.2"),
+        positions = positions,
+        deposit = BigDecimal(1000)
+      ),
+      fee,
+      save,
+      lease
+    )
     val worker = workerFor(ledger, "109", "111")
     duringRead = () => assert(ledger.fill(plan(Side.Sell, 1, 110), now).isRight)
     try

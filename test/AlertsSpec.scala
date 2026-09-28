@@ -14,10 +14,6 @@ class AlertsSpec extends munit.FunSuite:
           Book(Vector(Level(price, "1", 1)), Vector(Level(price, "1", 1)), at)
         )
       )
-  private def checkSoon(message: String)(condition: => Boolean): Unit =
-    val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-    while !condition && System.nanoTime() < until do Thread.sleep(5)
-    assert(condition, message)
 
   test("first snapshot is silent even with a large restored sample history") {
     val policy = new AlertPolicy
@@ -254,7 +250,7 @@ class AlertsSpec extends munit.FunSuite:
       Thread.sleep(100)
       assertEquals(output.calls.get(), 1)
       assert(alerts.offer(announcement(4)))
-      checkSoon("new announcement did not play")(output.calls.get() == 2)
+      Wait.until("new announcement did not play")(output.calls.get() == 2)
     finally alerts.close()
   }
 
@@ -270,9 +266,9 @@ class AlertsSpec extends munit.FunSuite:
     assert(!alerts.offer(announcement(1)))
     alerts.setMuted(false)
     assert(alerts.offer(announcement(2)))
-    checkSoon("failed output was not called")(calls.get() == 1)
+    Wait.until("failed output was not called")(calls.get() == 1)
     assert(alerts.offer(announcement(3)))
-    checkSoon("output failure stranded the queue")(calls.get() == 2)
+    Wait.until("output failure stranded the queue")(calls.get() == 2)
     alerts.close()
     alerts.close()
     alerts.start()

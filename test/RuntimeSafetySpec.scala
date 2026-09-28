@@ -5,12 +5,8 @@ import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong}
 import scala.jdk.CollectionConverters.*
 
-class RuntimeSafetySpec extends munit.FunSuite:
+class RuntimeSafetySpec extends TempDirectorySuite:
   private val now = 1800000000000L
-  private def waitFor(label: String)(condition: => Boolean): Unit =
-    val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-    while !condition && System.nanoTime() < until do Thread.sleep(5)
-    assert(condition, label)
   private def chunks(directory: java.nio.file.Path): String =
     val paths = Files.list(directory)
     try
@@ -23,7 +19,7 @@ class RuntimeSafetySpec extends munit.FunSuite:
     finally paths.close()
 
   test("overflow is visible during capture and remains visible after close") {
-    val directory = Files.createTempDirectory("desk-recorder-overflow")
+    val directory = tempDirectory("desk-recorder-overflow")
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)
     val first = new AtomicBoolean(true)
@@ -54,7 +50,7 @@ class RuntimeSafetySpec extends munit.FunSuite:
   }
 
   test("shutdown drains an observation already accepted by the recorder") {
-    val directory = Files.createTempDirectory("desk-recorder-close-race")
+    val directory = tempDirectory("desk-recorder-close-race")
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)
     val finished = new CountDownLatch(1)
@@ -91,7 +87,7 @@ class RuntimeSafetySpec extends munit.FunSuite:
   }
 
   test("recorder keeps public event categories only") {
-    val directory = Files.createTempDirectory("desk-recorder-public-only")
+    val directory = tempDirectory("desk-recorder-public-only")
     val recorder = new PublicRecorder(MarketArchive.open(directory), () => now)
     recorder.start()
     recorder.observe(Event.Bad)
@@ -112,7 +108,7 @@ class RuntimeSafetySpec extends munit.FunSuite:
         assertEquals(ujson.read(body), ujson.Obj("type" -> "meta"))
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("desk-paper-public-only"),
+      tempDirectory("desk-paper-public-only"),
       "mainnet",
       BigDecimal(10000),
       BigDecimal(0)
@@ -130,7 +126,7 @@ class RuntimeSafetySpec extends munit.FunSuite:
           true
         )
       )
-      waitFor("paper never became ready")(worker.view.ready)
+      Wait.until("paper never became ready")(worker.view.ready)
       val intent = OrderIntent(Side.Buy, OrderKind.Hard)
       val review = OrderReview(intent, worker.preview(intent).toOption.get, now, now + 30000)
       worker.synchronized {
@@ -139,7 +135,7 @@ class RuntimeSafetySpec extends munit.FunSuite:
           Event.BboUpdate("XMR", Level("100", "50", 1), Level("101", "50", 1), now + 1)
         )
       }
-      waitFor("paper order outside the newer quote did not report no fill")(
+      Wait.until("paper order outside the newer quote did not report no fill")(
         worker.view.outcome.exists(_.contains("no fill"))
       )
       assertEquals(ledger.account.count, 0L)

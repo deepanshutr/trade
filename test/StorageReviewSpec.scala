@@ -4,7 +4,7 @@ import java.nio.file.{Files, Path}
 import java.nio.file.attribute.PosixFilePermissions
 import scala.jdk.CollectionConverters.*
 
-class StorageReviewSpec extends munit.FunSuite:
+class StorageReviewSpec extends TempDirectorySuite:
   private val now = 1_800_000_000_000L
   private val candle = Candle(now - 60000L, 100, 102, 98, 101, 12)
   private def plan(side: Side, quantity: String, price: String): OrderPlan =
@@ -18,7 +18,7 @@ class StorageReviewSpec extends munit.FunSuite:
     finally paths.close()
 
   test("a refused persistent write leaves the previous account and disables fills") {
-    val directory = Files.createTempDirectory("desk-paper-write-failure")
+    val directory = tempDirectory("desk-paper-write-failure")
     val path = directory.resolve("wallet-mainnet.json")
     val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
@@ -40,7 +40,7 @@ class StorageReviewSpec extends munit.FunSuite:
 
   test("unequal adds, partial closes and a new holding retain the correct purchase basis") {
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("desk-paper-weighted"),
+      tempDirectory("desk-paper-weighted"),
       "mainnet",
       BigDecimal(1000),
       BigDecimal("0.001")
@@ -70,7 +70,7 @@ class StorageReviewSpec extends munit.FunSuite:
 
   test("a paper fill cannot persist an invalid market that prevents reopen") {
     val ledger = PaperLedger.open(
-      Files.createTempDirectory("desk-paper-invalid"),
+      tempDirectory("desk-paper-invalid"),
       "mainnet",
       BigDecimal(1000),
       BigDecimal(0)
@@ -83,7 +83,7 @@ class StorageReviewSpec extends munit.FunSuite:
   }
 
   test("stale private atomic files count against the archive disk limit") {
-    val directory = Files.createTempDirectory("desk-archive-stale")
+    val directory = tempDirectory("desk-archive-stale")
     val stale = directory.resolve(".desk-12345678901234567890.tmp")
     LocalFiles.write(stale, "x" * 3990)
     val archive = MarketArchive.open(directory, maximumBytes = 4000, chunkBytes = 1000)
@@ -97,7 +97,7 @@ class StorageReviewSpec extends munit.FunSuite:
   }
 
   test("an owned event file with changed permissions still counts against the limit") {
-    val directory = Files.createTempDirectory("desk-archive-unsafe")
+    val directory = tempDirectory("desk-archive-unsafe")
     val stale = directory.resolve("events-1800000000000-aaaaaaaa.jsonl")
     LocalFiles.write(stale, "x" * 3990)
     Files.setPosixFilePermissions(stale, PosixFilePermissions.fromString("rw-r--r--"))
@@ -113,7 +113,7 @@ class StorageReviewSpec extends munit.FunSuite:
   }
 
   test("an invalid interval from the event parser cannot poison the next checkpoint") {
-    val directory = Files.createTempDirectory("desk-archive-invalid-event")
+    val directory = tempDirectory("desk-archive-invalid-event")
     val archive = MarketArchive.open(directory)
     try
       archive.record(Event.CandleHistory("XMR", "1m", Vector(candle)), now)
@@ -133,7 +133,7 @@ class StorageReviewSpec extends munit.FunSuite:
   }
 
   test("a structurally invalid saved checkpoint is refused by archive open") {
-    val directory = Files.createTempDirectory("desk-archive-invalid-checkpoint")
+    val directory = tempDirectory("desk-archive-invalid-checkpoint")
     LocalFiles.write(
       directory.resolve("candles.json"),
       """{"at":1800000000000,"markets":{"XMR":{"bogus":[]}}}"""
@@ -145,7 +145,7 @@ class StorageReviewSpec extends munit.FunSuite:
   }
 
   test("checkpoint pruning reserves both atomic copies even when the active chunk must close") {
-    val directory = Files.createTempDirectory("desk-archive-checkpoint-budget")
+    val directory = tempDirectory("desk-archive-checkpoint-budget")
     val checkpoint = directory.resolve("candles.json")
     val bars = Vector.tabulate(28)(i => candle.copy(t = now - (i + 1) * 60000L))
     val archive = MarketArchive.open(directory, maximumBytes = 4000, chunkBytes = 1000)

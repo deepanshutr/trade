@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
 
-class PanInputSpec extends munit.FunSuite:
+class PanInputSpec extends TempDirectorySuite:
   override val munitTimeout = 90.seconds
   private val initial = Snapshot.initial("XMR", 0L)
   private def fold(start: Snapshot, queue: LinkedBlockingQueue[Event]): Snapshot =
@@ -42,7 +42,7 @@ class PanInputSpec extends munit.FunSuite:
   }
 
   test("actual input orders resize before an immediate pan while the fold waits") {
-    val directory = Files.createTempDirectory("desk-resize-runtime-")
+    val directory = tempDirectory("desk-resize-runtime-", keepOnFailure = true)
     val log = directory.resolve("runner.log")
     val process = new ProcessBuilder(
       "python3",
@@ -56,7 +56,6 @@ class PanInputSpec extends munit.FunSuite:
     ).redirectErrorStream(true).redirectOutput(log.toFile).start()
     try
       assert(process.waitFor(75, TimeUnit.SECONDS), s"resize witness watchdog, see $log")
-      println(s"resize witness evidence: $directory")
       assertEquals(process.exitValue(), 0, Files.readString(log))
     finally
       if process.isAlive then
