@@ -10,9 +10,7 @@ object Quant:
       .map(_.head)
       .filter(c =>
         c.t >= 0 && c.t <= now - step && c.t % step == 0 &&
-          Vector(c.o, c.h, c.l, c.c).forall(v => v > 0 && v.isFinite) &&
-          c.v >= 0 && c.v.isFinite && c.l <= c.o && c.o <= c.h &&
-          c.l <= c.c && c.c <= c.h
+          c.valid
       )
       .toVector
       .sortBy(_.t)

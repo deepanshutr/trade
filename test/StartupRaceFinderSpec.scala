@@ -24,7 +24,7 @@ class StartupRaceFinderSpec extends munit.FunSuite:
         new Socket:
           def send(body: String): Unit = ()
           def close(): Unit = closed.countDown()
-    val feed = new Feed(connector, rest, events, () => at, "XMR", Vector.empty)
+    val feed = new Feed(connector, rest, events, () => at, "XMR")
     val thread = new Thread(() =>
       try feed.runForever(_ => throw new InterruptedException())
       catch case _: InterruptedException => ()
@@ -66,7 +66,7 @@ class StartupRaceFinderSpec extends munit.FunSuite:
         new Socket:
           def send(body: String): Unit = ()
           def close(): Unit = socketClosed.countDown()
-    val feed = new Feed(connector, rest, events, () => at, "XMR", Vector.empty)
+    val feed = new Feed(connector, rest, events, () => at, "XMR")
     val thread = new Thread(() =>
       try feed.runForever(_ => throw new InterruptedException())
       catch case _: InterruptedException => ()

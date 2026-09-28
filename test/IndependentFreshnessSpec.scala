@@ -78,7 +78,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
         new Socket:
           def send(body: String): Unit = subscribed.countDown()
           def close(): Unit = ()
-    val feed = new Feed(connector, rest, events, () => at, "XMR", Vector("BTC", "ETH"))
+    val feed = new Feed(connector, rest, events, () => at, "XMR")
     val repair = launch(errors) { feed.awaitHistoryRepair(); feed.awaitHistoryRepair() }
     val connection = launch(errors) {
       try { val _ = feed.connectOnce() }
@@ -101,7 +101,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
       repair.join(3000L)
       assert(!repair.isAlive)
       val expected = Vector(("XMR", "1m")) ++
-        Vector("PAXG", "BTC", "ETH").flatMap(c => State.intervals.map(i => (c, i)))
+        Vector("PAXG", "BTC").flatMap(c => State.intervals.map(i => (c, i)))
       assertEquals(requests.asScala.toVector, expected)
       assert(!events.asScala.exists(_ == Event.CandleHistoryFailed))
       assertEquals(feed.coin, "PAXG")
@@ -126,8 +126,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
       rest,
       new ConcurrentLinkedQueue[Event](),
       () => at,
-      "XMR",
-      Vector.empty
+      "XMR"
     )
     (1 to 100).foreach(n => feed.setMarket(if n % 2 == 0 then "PAXG" else "BTC"))
     val completed = new AtomicInteger(0)
@@ -141,7 +140,10 @@ class IndependentFreshnessSpec extends munit.FunSuite:
       waitFor("first history wake did not run")(completed.get() >= 1)
       Thread.sleep(100L)
       assertEquals(completed.get(), 1)
-      assertEquals(requests.asScala.toVector, Vector.fill(State.intervals.size)("PAXG"))
+      assertEquals(
+        requests.asScala.toVector,
+        Vector("PAXG", "BTC").flatMap(c => Vector.fill(State.intervals.size)(c))
+      )
     finally stop(repair)
     assertEquals(errors.asScala.toVector, Vector.empty)
   }
@@ -153,8 +155,8 @@ class IndependentFreshnessSpec extends munit.FunSuite:
       def post(body: String): Option[String] =
         requests.add(body)
         Some(bar)
-    val feed = new Feed(stoppedConnector, rest, events, () => at, "XMR", Vector.empty)
-    var state = Snapshot.initial("XMR", at, Vector.empty)
+    val feed = new Feed(stoppedConnector, rest, events, () => at, "XMR")
+    var state = Snapshot.initial("XMR", at)
     def drain(): Unit =
       var event = events.poll()
       while event != null do
@@ -197,7 +199,7 @@ class IndependentFreshnessSpec extends munit.FunSuite:
           entered.countDown()
           require(release.await(5, TimeUnit.SECONDS))
         Some(bar)
-    val feed = new Feed(stoppedConnector, rest, events, () => at, "XMR", Vector.empty)
+    val feed = new Feed(stoppedConnector, rest, events, () => at, "XMR")
     val repair = launch(errors) { feed.repairHistory(); feed.awaitHistoryRepair() }
     try
       assert(entered.await(3, TimeUnit.SECONDS))
@@ -295,7 +297,6 @@ class IndependentFreshnessSpec extends munit.FunSuite:
         new ConcurrentLinkedQueue[Event](),
         () => f.now.get(),
         "XMR",
-        Vector.empty,
         f.worker.observe
       )
       f.start()

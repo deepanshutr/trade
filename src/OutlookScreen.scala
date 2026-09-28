@@ -33,10 +33,11 @@ object OutlookScreen:
   ): Vector[String] =
     val cellWidth = (width - 2) / 3
     val columns = view.columns.reverse.map { column =>
-      val period = column.horizon.label match
-        case "LONG" => "1d"
-        case "MID"  => "4h"
-        case _      => "1h"
+      val minutes = column.horizon.periodMs / 60000L
+      val period =
+        if minutes % 1440 == 0 then s"${minutes / 1440}d"
+        else if minutes % 60 == 0 then s"${minutes / 60}h"
+        else s"${minutes}m"
       val direction = column.direction match
         case OutlookDirection.Up    => "↑"
         case OutlookDirection.Down  => "↓"

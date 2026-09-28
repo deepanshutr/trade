@@ -43,8 +43,7 @@ object PaperLedger:
   ): Either[String, PaperAccount] =
     val q = plan.estimatedQuantity
     val value = plan.estimatedValue
-    if !plan.coin.matches("[A-Za-z0-9][A-Za-z0-9:._-]{0,39}") then
-      Left("Paper rejected: invalid market")
+    if !State.validMarket(plan.coin) then Left("Paper rejected: invalid market")
     else if q <= 0 || q > plan.quantity || value <= 0 then
       Left("Paper rejected: no valid fill at this limit")
     else if saved.positions.keys.exists(_ != plan.coin) then
@@ -103,7 +102,7 @@ object PaperLedger:
         account.cash >= 0 && account.count >= 0 && account.orders.size <= 1000 && account.fees >= 0
       )
       require(account.positions.size <= 1 && account.positions.forall { (coin, p) =>
-        coin.matches("[A-Za-z0-9][A-Za-z0-9:._-]{0,39}") && p.entry > 0 && p.quantity > 0
+        State.validMarket(coin) && p.entry > 0 && p.quantity > 0
       })
       new PaperLedger(account, fee, next => LocalFiles.write(path, Json.encode(next)), lease)
     catch

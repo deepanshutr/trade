@@ -71,3 +71,47 @@ class CandleIntegritySpec extends munit.FunSuite:
       Files.deleteIfExists(directory.resolve("candles.json"))
       Files.deleteIfExists(directory)
   }
+
+  test("OHLCV validity agrees across readers without conflating duplicate handling") {
+    import MarketArchive.given
+    val directory = Files.createTempDirectory("desk-validity-table")
+    val step = State.intervalMs("5m")
+    val cs = bars.map(c => c.copy(t = c.t * 5))
+    val good = cs(25)
+    val cases = Vector(
+      good,
+      good.copy(v = 0),
+      good.copy(o = 103),
+      good.copy(c = 97),
+      good.copy(h = 0),
+      good.copy(l = -1),
+      good.copy(v = -1),
+      good.copy(o = Double.NaN),
+      good.copy(v = Double.PositiveInfinity)
+    )
+    try
+      for c <- cases do
+        val expected = c == good || c == good.copy(v = 0)
+        assertEquals(c.valid, expected)
+        assertEquals(Events.parseRestCandles(ujson.Arr(json(c)).render()).nonEmpty, expected)
+        val series = cs.updated(25, c)
+        LocalFiles.write(
+          directory.resolve("candles.json"),
+          upickle.default.write(CandleCheckpoint(50 * step, Map("XMR" -> Map("5m" -> series))))
+        )
+        assertEquals(
+          scala.util
+            .Try(MarketArchive.restore(directory, Snapshot.initial("XMR", 50 * step)))
+            .isSuccess,
+          expected
+        )
+        assertEquals(Quant.compare(series, cs, "5m", 49, 50 * step).count == 49, expected)
+        val snapshot = Snapshot.initial("XMR", 0).copy(candles = Map("5m" -> series))
+        assertEquals(
+          Outlook.compute(snapshot, 50 * step).columns.last.status != "invalid data",
+          expected
+        )
+    finally
+      Files.deleteIfExists(directory.resolve("candles.json"))
+      Files.deleteIfExists(directory)
+  }

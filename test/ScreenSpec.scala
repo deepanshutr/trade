@@ -13,7 +13,7 @@ class ScreenSpec extends munit.FunSuite:
       .renderMarket(
         s,
         cols,
-        rows - 13 - 3 * s.referenceCoins.distinct.count(_ != s.coin),
+        rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin),
         now,
         zone,
         style

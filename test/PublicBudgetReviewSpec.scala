@@ -67,43 +67,48 @@ class PublicBudgetReviewSpec extends munit.FunSuite:
     val start = at + 5000L
     val now = new AtomicLong(start)
     val requests = new ConcurrentLinkedQueue[String]()
+    val allRequests = new ConcurrentLinkedQueue[String]()
     var available = true
     val rest = new Rest:
       def post(body: String): Option[String] =
-        requests.add(body)
+        allRequests.add(body)
+        if ujson.read(body)("req")("coin").str == "XMR" then requests.add(body)
         if available then Some(response(now.get())) else None
     val feed = new Feed(
       stoppedConnector,
       rest,
       new ConcurrentLinkedQueue[Event](),
       () => now.get(),
-      "XMR",
-      Vector.empty
+      "XMR"
     )
     feed.repairHistory()
     assertEquals(requests.size(), 6)
+    assertEquals(allRequests.size(), 18)
     now.addAndGet(60000L)
     feed.repairHistory()
     val recent = ujson.read(requests.asScala.toVector.last)("req")
     assertEquals(requests.size(), 7)
+    assertEquals(allRequests.size(), 21)
     assertEquals(recent("interval").str, "1m")
     assertEquals(recent("startTime").num.toLong, start - 120000L)
     assertEquals(PublicRequestBudget.cost(requests.asScala.toVector.last), 21)
     available = false
     requests.clear()
+    allRequests.clear()
     val failed = new Feed(
       stoppedConnector,
       rest,
       new ConcurrentLinkedQueue[Event](),
       () => now.get(),
-      "XMR",
-      Vector.empty
+      "XMR"
     )
     failed.repairHistory()
     assertEquals(requests.size(), 12)
+    assertEquals(allRequests.size(), 36)
     now.addAndGet(60000L)
     failed.repairHistory()
     assertEquals(requests.size(), 24)
+    assertEquals(allRequests.size(), 72)
     assertEquals(PublicRequestBudget.cost(requests.asScala.toVector.last), 104)
   }
 
@@ -115,8 +120,11 @@ class PublicBudgetReviewSpec extends munit.FunSuite:
     val errors = new ConcurrentLinkedQueue[Throwable]()
     val rest = new Rest:
       def post(body: String): Option[String] =
-        requests.add(body)
-        if ujson.read(body)("req")("interval").str == "1m" then
+        if ujson.read(body)("req")("coin").str == "XMR" then requests.add(body)
+        if ujson
+            .read(body)("req")("coin")
+            .str == "XMR" && ujson.read(body)("req")("interval").str == "1m"
+        then
           entered.countDown()
           val released = release.await(10, TimeUnit.SECONDS)
           require(released, "owned repair probe was not released")
@@ -126,8 +134,7 @@ class PublicBudgetReviewSpec extends munit.FunSuite:
       rest,
       new ConcurrentLinkedQueue[Event](),
       () => now.get(),
-      "XMR",
-      Vector.empty
+      "XMR"
     )
     def runRepair(): Unit =
       try feed.repairHistory()
@@ -161,15 +168,14 @@ class PublicBudgetReviewSpec extends munit.FunSuite:
     val requests = new ConcurrentLinkedQueue[String]()
     val rest = new Rest:
       def post(body: String): Option[String] =
-        requests.add(body)
+        if ujson.read(body)("req")("coin").str == "XMR" then requests.add(body)
         Some("[]")
     val feed = new Feed(
       stoppedConnector,
       rest,
       new ConcurrentLinkedQueue[Event](),
       () => now.get(),
-      "XMR",
-      Vector.empty
+      "XMR"
     )
     feed.repairHistory()
     assertEquals(requests.size(), 6)

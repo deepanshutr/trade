@@ -42,6 +42,7 @@ object TradingConfig:
     "onchain"
   )
   private val marketName = "[A-Z0-9][A-Z0-9._-]{0,19}"
+  private def validAddress(value: String): Boolean = value.matches("0x[0-9a-f]{40}")
   private val endpoint = "https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?"
 
   private[desk] def onchainMarkets(j: ujson.Value): Vector[OnchainMarket] =
@@ -50,7 +51,7 @@ object TradingConfig:
       require(name.matches(marketName) && State.validMarket(name), "invalid on-chain market name")
       def address(field: String): String =
         val a = m(field).str.toLowerCase(java.util.Locale.ROOT)
-        require(a.matches("0x[0-9a-f]{40}"), "invalid on-chain address")
+        require(validAddress(a), "invalid on-chain address")
         a
       val rpc = m("rpc").arr.toVector.map(_.str)
       require(
@@ -114,7 +115,7 @@ object TradingConfig:
           j.obj.get(name).map(_.str).getOrElse(fallback)
         def address(name: String): Option[String] = j.obj.get(name).map { v =>
           val a = v.str.toLowerCase(java.util.Locale.ROOT)
-          require(a.matches("0x[0-9a-f]{40}"), "invalid owner or agent address")
+          require(validAddress(a), "invalid owner or agent address")
           a
         }
         def millis(name: String, fallback: Long): Long =
@@ -124,7 +125,8 @@ object TradingConfig:
             "invalid quoteAgeMs or positionAgeMs age limit"
           )
           n.toLongExact
-        val defaults = TradeSizes()
+        val d = TradingConfig()
+        val defaults = d.sizes
         val sizes = TradeSizes(
           decimal("small", defaults.small),
           decimal("big", defaults.big),
@@ -137,12 +139,12 @@ object TradingConfig:
           "invalid small, big or target dollar size"
         )
         require(sizes.small <= sizes.big, "small exceeds big")
-        val network = string("network", "mainnet")
+        val network = string("network", d.network)
         require(Set("mainnet", "testnet").contains(network), "invalid network")
-        val service = string("keyService", "desk")
+        val service = string("keyService", d.keyService)
         require(service.matches("[A-Za-z0-9._-]{1,80}"), "invalid key service")
-        val balance = decimal("paperBalance", BigDecimal("10000"))
-        val fee = decimal("paperFee", BigDecimal("0.0005"))
+        val balance = decimal("paperBalance", d.paperBalance)
+        val fee = decimal("paperFee", d.paperFee)
         require(balance > 0 && balance <= BigDecimal("1000000000"), "invalid paper balance")
         require(fee >= 0 && fee <= BigDecimal("0.01"), "invalid paper fee")
         TradingConfig(
@@ -151,8 +153,8 @@ object TradingConfig:
           address("owner"),
           address("agent"),
           service,
-          millis("quoteAgeMs", 1000L),
-          millis("positionAgeMs", 2000L),
+          millis("quoteAgeMs", d.quoteAgeMs),
+          millis("positionAgeMs", d.positionAgeMs),
           balance,
           fee,
           onchainMarkets(j)

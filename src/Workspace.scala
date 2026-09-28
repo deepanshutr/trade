@@ -200,7 +200,7 @@ object Workspace:
         s,
         chartWidth,
         priceRows = (tradeTop - 8).min(
-          tradeTop - 3 - Layout.referenceRows * s.referenceCoins.distinct.count(_ != s.coin)
+          tradeTop - 3 - Layout.referenceRows * State.refCoins.distinct.count(_ != s.coin)
         ),
         now = now,
         zone = zone,

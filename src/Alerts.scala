@@ -34,18 +34,10 @@ final class AlertPolicy:
     val connected = snapshot.feed match
       case Health.Live(at) => fresh(at)
       case _               => false
-    def price(text: String): Option[BigDecimal] =
-      Option.when(text.length <= 80)(text).flatMap { value =>
-        Try(value.toDouble).toOption
-          .filter(n => n.isFinite && n > 0)
-          .flatMap(_ => Try(BigDecimal(value)).toOption)
-      }
     for
       book <- snapshot.book if connected && fresh(book.time)
-      bid <- book.bids.headOption.flatMap(level => price(level.px))
-      ask <- book.asks.headOption.flatMap(level => price(level.px))
-      if bid <= ask
-    yield Point(book.time, (bid + ask) / 2)
+      mid <- book.mid
+    yield Point(book.time, mid)
 
   def market(snapshot: Snapshot, now: Long): Vector[Announcement] =
     synchronized {

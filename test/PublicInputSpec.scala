@@ -19,7 +19,7 @@ class PublicInputSpec extends munit.FunSuite:
       .renderMarket(
         s,
         cols,
-        rows - 13 - 3 * s.referenceCoins.distinct.count(_ != s.coin),
+        rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin),
         now,
         zone,
         style
@@ -227,16 +227,16 @@ class PublicInputSpec extends munit.FunSuite:
     val connector = new Connector:
       def connect(text: String => Unit, close: () => Unit): Socket = fail("unexpected connection")
     val queue = new ConcurrentLinkedQueue[Event]()
-    val feed = new Feed(connector, rest, queue, () => now, "XMR", Vector.empty)
+    val feed = new Feed(connector, rest, queue, () => now, "XMR")
     feed.poll()
     feed.pollCoarse()
     assert(queue.isEmpty)
     feed.repairHistory()
-    assertEquals(queue.asScala.toVector, Vector.fill(6)(Event.CandleHistoryFailed))
-    assertEquals(bodies.size(), 16)
+    assertEquals(queue.asScala.toVector, Vector.fill(18)(Event.CandleHistoryFailed))
+    assertEquals(bodies.size(), 40)
     val before = Golden.snapshot
     val after = queue.asScala.foldLeft(before)((s, e) => State.reduce(s, e, now))
-    assertEquals(after, before.copy(bad = before.bad + 6))
+    assertEquals(after, before.copy(bad = before.bad + 18))
   }
 
   test("recorded socket data reaches the real fold and malformed data increments its count") {

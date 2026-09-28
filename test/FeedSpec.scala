@@ -6,10 +6,12 @@ import scala.jdk.CollectionConverters.*
 class FeedSpec extends munit.FunSuite:
   test("feed JSON preserves quoted and escaped market names as string values") {
     val coin = "odd\"\\market"
-    val reference = "ref\"\\name"
-    val subscriptions = Feed.subscriptions(coin, Vector(reference)).map(ujson.read(_))
-    assertEquals(subscriptions.map(_("subscription")("coin").str).toSet, Set(coin, reference))
-    val removed = Feed.unsubscriptions(coin, Vector(reference)).map(ujson.read(_))
+    val subscriptions = Feed.subscriptions(coin).map(ujson.read(_))
+    assertEquals(
+      subscriptions.map(_("subscription")("coin").str).toSet,
+      State.refCoins.toSet + coin
+    )
+    val removed = Feed.unsubscriptions(coin).map(ujson.read(_))
     assert(removed.forall(_("method").str == "unsubscribe"))
     assertEquals(removed.map(_("subscription")), subscriptions.map(_("subscription")))
     assertEquals(ujson.read(Feed.historyBody(coin, "1m", 1000L))("req")("coin").str, coin)
@@ -314,8 +316,14 @@ class FeedSpec extends munit.FunSuite:
     assertEquals(feed.coin, "ETH")
     val sent = s.sent.asScala.toVector
     assertEquals(sent.size, 20)
-    assertEquals(sent.take(10), Feed.unsubscriptions("XMR", Vector.empty))
-    assertEquals(sent.drop(10), Feed.subscriptions("ETH", Vector.empty))
+    assertEquals(
+      sent.take(10),
+      Feed.unsubscriptions("XMR").filter(m => ujson.read(m)("subscription")("coin").str == "XMR")
+    )
+    assertEquals(
+      sent.drop(10),
+      Feed.subscriptions("ETH").filter(m => ujson.read(m)("subscription")("coin").str == "ETH")
+    )
     assert(sent.take(10).forall(m => m.contains("\"method\":\"unsubscribe\"")), sent.take(10))
     val bodies = rest.bodies.asScala.toVector
     assertEquals(bodies.size, 6)
@@ -341,7 +349,6 @@ class FeedSpec extends munit.FunSuite:
       queue,
       () => 1_000_000L,
       "XMR",
-      State.refCoins,
       event => {
         assert(queue.isEmpty)
         val _ = seen.add(event)
@@ -352,40 +359,17 @@ class FeedSpec extends munit.FunSuite:
     assertEquals(seen.size(), 1)
   }
 
-  test("configured references control subscriptions and history without duplicates") {
-    val refs = Vector("BTC", "PAXG", "ETH", "ETH")
-    for (main, markets, count) <- Vector(
-        ("ETH", Set("ETH", "BTC", "PAXG"), 18),
-        ("XMR", Set("XMR", "ETH", "BTC", "PAXG"), 24)
-      )
-    do
-      val subscriptions = Feed.subscriptions(main, refs)
-      val decoded = subscriptions.map(ujson.read(_)("subscription"))
-      assertEquals(decoded.map(_("coin").str).toSet, markets)
-      assertEquals(subscriptions.distinct.size, subscriptions.size)
-      assertEquals(decoded.count(v => v("type").str == "candle"), count)
-      val rest = restAnswering()
-      val queue = new ConcurrentLinkedQueue[Event]()
-      val feed = new Feed(new FakeConnector, rest, queue, () => 10_000_000L, main, refs)
-      feed.repairHistory()
-      val history = queue.asScala.toVector.collect { case Event.CandleHistory(c, i, _, _) =>
-        (c, i)
-      }
-      assertEquals(history.toSet, markets.flatMap(c => State.intervals.map(c -> _)))
-      assertEquals(history.size, count)
-      assertEquals(rest.bodies.size, count)
-  }
-
-  test("a market switch retains the configured reference subscription set") {
-    val refs = Vector("BTC", "PAXG", "ETH")
+  test("a market switch retains the fixed reference subscription set") {
     val connector = new FakeConnector
     val rest = restAnswering()
     val queue = new ConcurrentLinkedQueue[Event]()
-    val feed = new Feed(connector, rest, queue, () => 10_000_000L, "XMR", refs)
+    val feed = new Feed(connector, rest, queue, () => 10_000_000L, "XMR")
     val thread = startConnected(feed)
     try
       feed.awaitHistoryRepair()
       val socket = connector.sockets.peek()
+      assertEquals(socket.sent.size(), 24)
+      assertEquals(rest.bodies.size(), 18)
       socket.sent.clear()
       rest.bodies.clear()
       feed.setMarket("SOL")
@@ -393,7 +377,11 @@ class FeedSpec extends munit.FunSuite:
       feed.awaitHistoryRepair()
       assertEquals(
         socket.sent.asScala.toVector,
-        Feed.unsubscriptions("XMR", Vector.empty) ++ Feed.subscriptions("SOL", Vector.empty)
+        Feed
+          .unsubscriptions("XMR")
+          .filter(m => ujson.read(m)("subscription")("coin").str == "XMR") ++ Feed
+          .subscriptions("SOL")
+          .filter(m => ujson.read(m)("subscription")("coin").str == "SOL")
       )
       assertEquals(rest.bodies.size, 6)
       socket.sent.clear()

@@ -10,6 +10,12 @@ class TradingConfigSpec extends munit.FunSuite:
     Files.writeString(p, text)
     p
 
+  test("an empty private settings file loads every default") {
+    val p = setting("{}")
+    try assertEquals(TradingConfig.load(Some(p)), Right(TradingConfig()))
+    finally Files.deleteIfExists(p)
+  }
+
   test("defaults preserve dollar sizes and age limits") {
     val c = TradingConfig.load(None).toOption.get
     assertEquals(c.sizes, TradeSizes())

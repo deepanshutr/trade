@@ -155,8 +155,8 @@ class AlignedOutlookSpec extends munit.FunSuite:
   }
 
   test("reference panels cannot push the columns or trade controls beyond the screen") {
-    for refs <- Vector(Vector.empty, Vector("BTC"), Vector("BTC", "PAXG", "ETH")) do
-      val frame = draw(market.copy(referenceCoins = refs))
+    for refs <- Vector(Map.empty[String, Ref], market.refs) do
+      val frame = draw(market.copy(refs = refs))
       assertEquals(frame.lines.size, 30)
       assert(frame.lines.forall(_.length == 100))
       assert(frame.lines(15).contains("VIEW XMR"))

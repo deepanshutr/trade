@@ -92,6 +92,8 @@ class MainSpec extends munit.FunSuite:
       }
       assertEquals(state.get().feed, Health.Live(time))
       awaitState("initial repair did not finish")(repairs.get() == 1)
+      assertEquals(sent.size(), 24)
+      assertEquals(bodies.size(), 18)
       sent.clear()
       bodies.clear()
       callers.clear()
@@ -169,8 +171,11 @@ class MainSpec extends munit.FunSuite:
       val expectedSends = Vector("XMR", "ETH", "SOL", "XMR")
         .sliding(2)
         .flatMap(pair =>
-          Feed.unsubscriptions(pair.head, Vector.empty) ++ Feed
-            .subscriptions(pair.last, Vector.empty)
+          Feed
+            .unsubscriptions(pair.head)
+            .filter(m => ujson.read(m)("subscription")("coin").str == pair.head) ++ Feed
+            .subscriptions(pair.last)
+            .filter(m => ujson.read(m)("subscription")("coin").str == pair.last)
         )
         .toVector
       assertEquals(f.sent.asScala.toVector, expectedSends)

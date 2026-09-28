@@ -23,7 +23,7 @@ class FeedFreshnessSpec extends munit.FunSuite:
           def close(): Unit = ()
     val rest = new Rest:
       def post(body: String): Option[String] = None
-    val feed = new Feed(connector, rest, events, () => at, "XMR", Vector.empty)
+    val feed = new Feed(connector, rest, events, () => at, "XMR")
     val thread = new Thread(() => { val _ = feed.connectOnce() })
     thread.setDaemon(true)
     thread.start()
@@ -50,7 +50,7 @@ class FeedFreshnessSpec extends munit.FunSuite:
       def connect(text: String => Unit, ended: () => Unit): Socket =
         throw new UnsupportedOperationException("no connection needed")
     val feed =
-      new Feed(connector, rest, new ConcurrentLinkedQueue[Event](), () => at, "XMR", Vector.empty)
+      new Feed(connector, rest, new ConcurrentLinkedQueue[Event](), () => at, "XMR")
     val thread = new Thread(() =>
       try
         feed.setMarket("BTC")
