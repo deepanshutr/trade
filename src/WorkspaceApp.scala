@@ -2,10 +2,31 @@ package desk
 
 import java.nio.file.Path
 import java.util.concurrent.{CountDownLatch, LinkedBlockingQueue, TimeUnit}
-import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
+import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import scala.util.Try
 
 object WorkspaceApp:
+  private[desk] final class Restoration(closeAll: () => Unit, terminal: () => Unit):
+    @volatile private var restored = false
+    def started: Boolean = restored
+    def restore(): Boolean = synchronized {
+      if restored then false
+      else
+        restored = true
+        try closeAll()
+        finally terminal()
+        true
+    }
+
+  private[desk] def enterTerminal(
+      enter: () => String,
+      closeAll: () => Unit
+  ): scala.util.Try[String] =
+    Try(enter()).recoverWith { case error =>
+      closeAll()
+      scala.util.Failure(error)
+    }
+
   private[desk] def collectExecution(
       inputLock: Object,
       controller: DeskController,
@@ -237,38 +258,34 @@ object WorkspaceApp:
           "data",
           "Saved public candles could not be loaded. Available exchange history will be requested"
         )
-      val saved = Try(Term.enterRaw()).getOrElse {
+      def closeAll(): Unit =
         outlook.close()
         announcements.close()
         recorder.foreach(_.close())
+        worker.close()
         controller.close()
         history.close()
-        worker.close()
+        diagnostics.close()
+      val saved = enterTerminal(() => Term.enterRaw(), () => closeAll()).getOrElse {
         System.err.println("desk needs a terminal")
         sys.exit(1)
       }
       print(Screen.esc + "[?1000h" + Screen.esc + "[?1006h")
       Console.flush()
-      val restored = new AtomicBoolean(false)
-      def restore(): Unit =
-        if restored.compareAndSet(false, true) then
-          try
-            outlook.close()
-            announcements.close()
-            recorder.foreach(_.close())
-            worker.close()
-            controller.close()
-            history.close()
-            diagnostics.close()
-          finally
-            print(Screen.esc + "[?1006l" + Screen.esc + "[?1000l")
-            Term.restore(saved)
+      val restoration = new Restoration(
+        () => closeAll(),
+        () => {
+          print(Screen.esc + "[?1006l" + Screen.esc + "[?1000l")
+          Term.restore(saved)
+        }
+      )
+      def restore(): Unit = { restoration.restore(); () }
       Runtime.getRuntime.addShutdownHook(new Thread(() => restore()))
       Thread.setDefaultUncaughtExceptionHandler { (thread, error) =>
         diagnostics.failure(Diagnostics.component(thread.getName), error)
-        restore()
-        System.err.println("Desk stopped: " + error.getClass.getSimpleName)
-        sys.exit(1)
+        if !restoration.started && restoration.restore() then
+          System.err.println("Desk stopped: " + error.getClass.getSimpleName)
+          sys.exit(1)
       }
       val actualSize = new AtomicReference(Term.size())
       val pendingPrompts = new AtomicInteger(0)
