@@ -205,6 +205,20 @@ class FeedSpec extends munit.FunSuite:
     feed2.repairHistory()
     assertEquals(queue2.asScala.toVector, Vector.fill(18)(Event.CandleHistoryFailed))
   }
+  test("one-minute candle repair continues after the wall clock steps back an hour") {
+    val start = 1_800_000_006_000L
+    var now = start
+    val (feed, queue) = newFeed(new FakeConnector, restAnswering(), () => now)
+    for at <- Vector(start, start - 3_600_000L, start - 3_540_000L) do
+      now = at
+      queue.clear()
+      feed.repairHistory()
+      val repaired = queue.asScala.toVector.collect {
+        case Event.CandleHistory("XMR", "1m", candles, fetchedAt) if candles.nonEmpty => fetchedAt
+      }
+      assertEquals(repaired, Vector(at), s"one-minute repair stopped at wall clock $at")
+  }
+
   test("history for a market already followed as a reference is fetched once") {
     val rest = restAnswering()
     val queue = new ConcurrentLinkedQueue[Event]()
