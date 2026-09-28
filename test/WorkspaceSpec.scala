@@ -62,30 +62,14 @@ class WorkspaceSpec extends munit.FunSuite:
     assertEquals(small.buttons, Vector.empty[DeskButton])
   }
 
-  test("assistant and news text cannot emit terminal control bytes") {
+  test("action notices cannot emit terminal control bytes") {
     val text = "news " + 27.toChar + "[2J" + 7.toChar + " hostile"
     val panel = PanelView(
-      messages = Vector(DeskMessage(1, now, "analysis", text))
+      actionNotice = Some(text)
     )
     val frame = Workspace.draw(s, view, panel, 120, 40, now, java.time.ZoneId.of("UTC"), Style.mono)
     assert(!frame.lines.mkString.contains(27.toChar))
     assert(!frame.lines.mkString.contains(7.toChar))
-  }
-
-  test("saved analysis text stays hidden") {
-    val messages = Vector(DeskMessage(1, now, "analysis", "hidden answer")) ++
-      (2L to 30L).map(id => DeskMessage(id, now, "news", "news " + id))
-    val frame = Workspace.draw(
-      s,
-      view,
-      PanelView(messages = messages),
-      120,
-      40,
-      now,
-      java.time.ZoneId.of("UTC"),
-      Style.mono
-    )
-    assert(!frame.lines.exists(_.contains("hidden answer")))
   }
 
   test("displayed mode shortcut letters decode to the indicated mode") {

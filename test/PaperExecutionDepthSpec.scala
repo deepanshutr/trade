@@ -368,12 +368,10 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
         f.settled()
         c.orders(f.worker.view)
       assertEquals(f.ledger.account.count, 12L)
-      assertEquals(c.panel.messages.count(_.kind == "order"), 12)
+      assertEquals(c.panel.actionNumber, 12L)
       assertEquals(f.ledger.account.positions.size, 0)
       assert(f.ledger.account.cash < BigDecimal(10000))
-    finally
-      c.close()
-      f.close()
+    finally f.close()
   }
 
   test(

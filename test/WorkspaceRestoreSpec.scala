@@ -46,8 +46,6 @@ class WorkspaceRestoreSpec extends munit.FunSuite:
           close("announcements"),
           Some(close("recorder")),
           close("worker"),
-          close("controller"),
-          close("history"),
           close("diagnostics")
         )
     )
@@ -59,8 +57,6 @@ class WorkspaceRestoreSpec extends munit.FunSuite:
         "announcements",
         "recorder",
         "worker",
-        "controller",
-        "history",
         "diagnostics"
       )
     )

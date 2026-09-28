@@ -90,12 +90,12 @@ class ExecutionReceiptOrderFinderSpec extends munit.FunSuite:
       assert(!input.isAlive && !frame.isAlive)
       assert(!publishedEarly, "Frame publication overtook the input snapshot")
       assert(contextLocked.get(), "Frame context was captured outside the input lock")
-      assertEquals(controller.panel.messages.map(_.text), Vector("Order pending", fill))
+      assertEquals(controller.panel.actionNumber, 2L)
+      assertEquals(controller.panel.actionNotice, Some(fill))
     finally
       releaseInput.countDown()
       input.interrupt()
       frame.interrupt()
       input.join(1000L)
       frame.join(1000L)
-      controller.close()
   }

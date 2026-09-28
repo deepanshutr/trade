@@ -10,61 +10,6 @@ class RuntimeMutationFollowupSpec extends munit.FunSuite:
     val ready = latch.await(5, TimeUnit.SECONDS)
     assert(ready, label)
 
-  test("opening invalid saved messages rejects every invariant and releases the failed lease") {
-    val directory = Files.createTempDirectory("desk-message-open-mutation")
-    val saved = Vector(DeskMessage(1, 1800000000000L, "analysis", "known good", Some(true)))
-    val initial = MessageHistory.open(directory)
-    try initial.save(saved)
-    finally initial.close()
-    val file = directory.resolve("messages.json")
-    val valid = Files.readString(file)
-    def changed(key: String, value: ujson.Value): ujson.Value =
-      val next = ujson.read(valid)
-      next(0)(key) = value
-      next
-    val invalid = Vector(
-      changed("id", ujson.Num(-1)),
-      changed("at", ujson.Num(-1)),
-      changed("kind", ujson.Str("unknown")),
-      changed("text", ujson.Str("x" * 30001)),
-      ujson.Arr(ujson.read(valid)(0), ujson.read(valid)(0)),
-      ujson.Arr.from(Vector.tabulate(301) { id =>
-        val value = ujson.read(valid)(0)
-        value("id") = ujson.Num(id)
-        value
-      })
-    )
-    invalid.foreach { encoded =>
-      LocalFiles.write(file, ujson.write(encoded))
-      intercept[IllegalArgumentException] {
-        val unexpected = MessageHistory.open(directory)
-        unexpected.close()
-      }
-      LocalFiles.write(file, valid)
-      val repaired = MessageHistory.open(directory)
-      try assertEquals(repaired.messages, saved)
-      finally repaired.close()
-    }
-  }
-
-  test("message count and text limits accept their boundary and reject one beyond it") {
-    val directory = Files.createTempDirectory("desk-message-boundary-mutation")
-    val valid = Vector.tabulate(300) { id =>
-      DeskMessage(id, 1800000000000L, "analysis", if id == 0 then "x" * 30000 else "saved")
-    }
-    val history = MessageHistory.open(directory)
-    try
-      history.save(valid)
-      intercept[IllegalArgumentException](history.save(valid :+ valid.last.copy(id = 300)))
-      assertEquals(history.messages, valid)
-      intercept[IllegalArgumentException](history.save(Vector(valid.head.copy(text = "x" * 30001))))
-      assertEquals(history.messages, valid)
-    finally history.close()
-    val reopened = MessageHistory.open(directory)
-    try assertEquals(reopened.messages, valid)
-    finally reopened.close()
-  }
-
   test("close saves a dropped marker published after the consumer drained its last queued event") {
     val directory = Files.createTempDirectory("desk-recorder-final-gap-mutation")
     val startupEntered = new CountDownLatch(1)

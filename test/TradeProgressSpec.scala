@@ -75,11 +75,9 @@ class TradeProgressSpec extends munit.FunSuite:
       val second = draw(c, f.worker.view)
       capture("100x30-mono-repeated-second", second)
       assert(first.lines != second.lines, "the repeated refusal looked like no response")
-      assertEquals(c.panel.messages.count(_.kind == "order"), 2)
+      assertEquals(c.panel.actionNumber, 2L)
       assertEquals(f.ledger.account.count, 0L)
-    finally
-      c.close()
-      f.close()
+    finally f.close()
   }
 
   test("a flat account below every preset gets an achievable settings route") {
@@ -245,43 +243,6 @@ class TradeProgressSpec extends munit.FunSuite:
     c.publish(frame)
     frame
 
-  test("slow history persistence does not hold the display and keyboard") {
-    val entered = new CountDownLatch(1)
-    val release = new CountDownLatch(1)
-    val read = new CountDownLatch(1)
-    val c = new DeskController(
-      PanelView(mode = "PAPER"),
-      () => start,
-      plan,
-      _ => false,
-      _ => Left("disabled"),
-      persist = _ => {
-        entered.countDown()
-        release.await(5, TimeUnit.SECONDS)
-        ()
-      }
-    )
-    val writer = new Thread(() => c.addMessage("order", "PAPER filled 5 XMR"))
-    val reader = new Thread(() => {
-      draw(c)
-      c.handle(Command.ToggleMute, snapshot, ready, (100, 30), false)
-      read.countDown()
-    })
-    writer.setDaemon(true)
-    reader.setDaemon(true)
-    try
-      c.start()
-      writer.start()
-      assert(entered.await(2, TimeUnit.SECONDS))
-      reader.start()
-      assert(read.await(250, TimeUnit.MILLISECONDS), "screen and keys blocked behind history save")
-    finally
-      release.countDown()
-      writer.join(1000L)
-      reader.join(1000L)
-      c.close()
-  }
-
   for mouse <- Vector(false, true) do
     test(s"unavailable order explains its reason for mouse=$mouse") {
       val c = new DeskController(
@@ -413,13 +374,11 @@ class TradeProgressSpec extends munit.FunSuite:
         else if scenario == "partial" then BigDecimal(1)
         else BigDecimal(0)
         assertEquals(f.worker.view.position, Some(expectedPosition))
-        assertEquals(c.panel.messages.count(_.kind == "order"), 1)
+        assertEquals(c.panel.actionNumber, 1L)
         assertEquals(
           f.worker.view.lastPlan.map(p => (p.quantity, p.limit)),
           Some((before.quantity, before.limit))
         )
         assertEquals(f.ledger.account.count, if expectedPosition == 0 then 0L else 1L)
-      finally
-        c.close()
-        f.close()
+      finally f.close()
     }

@@ -52,11 +52,11 @@ class StatusPanelSpec extends munit.FunSuite:
     for cols <- Vector(100, 120, 160) do
       val frame = draw(
         TradingView("XMR", message = "Ready", ready = true),
-        panel.copy(historyFailure = Some("save failed")),
+        panel,
         cols,
         logsUnavailable = true
       )
-      assert(frame.lines.head.contains("!logs !save"))
+      assert(frame.lines.head.contains("!logs"))
       assert(frame.lines.forall(_.length == cols))
       assert(frame.lines.exists(_.contains("Bought")))
   }

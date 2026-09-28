@@ -13,22 +13,20 @@ class TradingWorkerSpec extends munit.FunSuite:
       _ => false,
       _ => Left("unused")
     )
-    try
-      controller.orders(view)
-      Workspace
-        .draw(
-          Snapshot.initial(view.coin, 1000L),
-          view,
-          controller.panel,
-          160,
-          45,
-          1000L,
-          java.time.ZoneOffset.UTC,
-          Style.mono
-        )
-        .lines
-        .mkString("\n")
-    finally controller.close()
+    controller.orders(view)
+    Workspace
+      .draw(
+        Snapshot.initial(view.coin, 1000L),
+        view,
+        controller.panel,
+        160,
+        45,
+        1000L,
+        java.time.ZoneOffset.UTC,
+        Style.mono
+      )
+      .lines
+      .mkString("\n")
 
   private def waitFor(label: String)(condition: => Boolean): Unit =
     val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
@@ -1355,24 +1353,22 @@ class TradingWorkerSpec extends munit.FunSuite:
         _ => fail("an invalid preview submitted an order"),
         _ => Left("unused")
       )
-      try
-        val snapshot = Snapshot.initial("XMR", f.clock.get())
-        def draw() = Workspace.draw(
-          snapshot,
-          f.worker.view,
-          controller.panel,
-          160,
-          45,
-          f.clock.get(),
-          java.time.ZoneOffset.UTC,
-          Style.mono
-        )
-        controller.publish(draw())
-        controller.handle(Command.PlaceOrder(buy), snapshot, f.worker.view, (160, 45), false)
-        val text = draw().lines.mkString("\n")
-        assert(text.contains("No visible quantity fits this order"), text)
-        assert(!text.contains("Filled #1"), text)
-      finally controller.close()
+      val snapshot = Snapshot.initial("XMR", f.clock.get())
+      def draw() = Workspace.draw(
+        snapshot,
+        f.worker.view,
+        controller.panel,
+        160,
+        45,
+        f.clock.get(),
+        java.time.ZoneOffset.UTC,
+        Style.mono
+      )
+      controller.publish(draw())
+      controller.handle(Command.PlaceOrder(buy), snapshot, f.worker.view, (160, 45), false)
+      val text = draw().lines.mkString("\n")
+      assert(text.contains("No visible quantity fits this order"), text)
+      assert(!text.contains("Filled #1"), text)
       assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }

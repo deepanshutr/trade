@@ -15,22 +15,13 @@ final case class OrderReview(
     leverage: Option[Int] = None,
     marginMode: Option[String] = None
 )
-final case class DeskMessage(
-    id: Long,
-    at: Long,
-    kind: String,
-    text: String,
-    feedback: Option[Boolean] = None
-)
 final case class PanelView(
     mode: String = "VIEW",
-    messages: Vector[DeskMessage] = Vector.empty,
     sizes: TradeSizes = TradeSizes(),
     modeReview: Option[String] = None,
     outlook: OutlookView = Outlook.empty(""),
     muted: Boolean = false,
     actionNotice: Option[String] = None,
-    historyFailure: Option[String] = None,
     actionNumber: Long = 0L,
     bigOrder: Boolean = false
 )
@@ -343,8 +334,7 @@ object Workspace:
                 content.slice(start, start + b.width)
               ) + content.drop(start + b.width)
             }
-        val warnings = (if logsUnavailable then " !logs" else "") +
-          (if panel.historyFailure.nonEmpty then " !save" else "")
+        val warnings = if logsUnavailable then " !logs" else ""
         val publicLine = if i == 0 && warnings.nonEmpty then
           Chart
             .fit(left, Chart.plain(left).length - warnings.length) + style.wrap(style.ask, warnings)

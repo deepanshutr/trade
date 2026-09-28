@@ -1,5 +1,7 @@
 import importlib.util
 import os
+import json
+import tempfile
 import re
 import signal
 import subprocess
@@ -15,6 +17,19 @@ spec.loader.exec_module(playback)
 
 
 class PlaybackSpec(unittest.TestCase):
+    def test_append_only_receipts_keep_all_600_and_ignore_an_incomplete_tail(self):
+        with tempfile.TemporaryDirectory() as root:
+            run = object.__new__(playback.Playback)
+            run.state_directory = Path(root)
+            run.receipts, run.clicks = {}, []
+            path = Path(root) / "order-results.jsonl"
+            records = [{"id": str(i), "kind": "order", "text": "Order pending"} for i in range(600)]
+            path.write_text("".join(json.dumps(r) + "\n" for r in records) + '{"id":')
+            run.read_receipts()
+            self.assertEqual(list(run.receipts.values()), records)
+            run.read_receipts()
+            self.assertEqual(len(run.receipts), 600)
+
     def test_settling_keeps_quotes_paced_even_when_output_is_always_ready(self):
         run = object.__new__(playback.Playback)
         clock = [0.0]

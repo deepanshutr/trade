@@ -84,15 +84,11 @@ class RefineTradingSpec extends munit.FunSuite:
     f.draw(first)
     f.key(Command.PlaceOrder(OrderIntent(Side.Sell, OrderKind.Hard)), first)
     assertEquals(f.sent.size, 1)
-    assertEquals(f.controller.panel.messages.map(_.text), Vector(first.outcome.get))
+    assertEquals(f.controller.panel.actionNumber, 1L)
     val second =
       view.copy(outcome = Some("PAPER XMR sell filled 5"), outcomeId = OrderUpdates.nextId())
     f.draw(second)
     f.key(Command.PlaceOrder(OrderIntent(Side.Buy, OrderKind.Hard)), second)
-    assertEquals(
-      f.controller.panel.messages.map(_.text),
-      Vector(first.outcome.get, second.outcome.get)
-    )
     assertEquals(f.controller.panel.actionNumber, 2L)
     f.key(Command.ToggleMute, second)
     assertEquals(f.controller.panel.actionNumber, 2L)

@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong}
 import scala.util.Try
 
 enum DiagnosticPart:
-  case Input, Build, FrameLock, Terminal, Render, Fold, Feed, History, Account, Background
+  case Input, Build, FrameLock, Terminal, Render, Fold, Feed, Account, Background, OrderResults
 
 object Diagnostics:
   private[desk] trait Sink extends AutoCloseable:
@@ -67,7 +67,6 @@ object Diagnostics:
   def component(thread: String): DiagnosticPart = thread match
     case "keys"                                                    => DiagnosticPart.Input
     case "fold" | "market"                                         => DiagnosticPart.Fold
-    case "message-history"                                         => DiagnosticPart.History
     case "orders" | "paper-orders" | "account" | "balance-display" => DiagnosticPart.Account
     case "feed" | "poll" | "coarse" | "heartbeat" | "onchain" | "history-repair" =>
       DiagnosticPart.Feed

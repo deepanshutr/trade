@@ -72,9 +72,11 @@ real account. No fill, partial fill, refusals and repeated results appear in one
 short status row, with a separate action number for each result.
 
 Local state defaults to `~/.local/state/desk`. Change it with `--state /absolute/path`.
-Account files, message history, public data and live recovery state use separate
-locks. Unreadable saved state is preserved. Public recording retains up to seven
-days or one GB. Gaps remain gaps. Run `desk XMR --record` for the
+Message history is no longer kept. Existing message files are left untouched.
+Order outcomes alone are appended to `order-results.jsonl` for replay, with a separate
+`order-results.lock` held during each append. Two view-only desks may run at once. Account files, public data, diagnostics and
+live recovery state use separate locks. Unreadable saved state is preserved.
+Public recording retains up to seven days or one GB. Gaps remain gaps. Run `desk XMR --record` for the
 background public recorder. Inspect its Mac service with `python3 tools/recorder.py`.
 
 The interactive process writes private diagnostic records under `diagnostics/`
@@ -83,6 +85,6 @@ Four files retain at most 8 MiB. These records include validated market selectio
 history counts, quote age, disconnects, slow input and frames, and fixed failure
 categories. They exclude typed text, account data, orders and raw error messages.
 Logging uses a bounded background queue. `!logs` marks unavailable diagnostic
-storage and `!save` marks a message-history save failure. See [logging details](diagnostics.md).
+storage. See [logging details](diagnostics.md).
 
 Restart an already running Desk after installation to load the new build.

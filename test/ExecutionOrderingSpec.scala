@@ -59,11 +59,7 @@ class ExecutionOrderingSpec extends munit.FunSuite:
       }
       assert(finished.await(2L, TimeUnit.SECONDS), "frame thread did not finish after key release")
       assert(!interleaved, "frame published a fill while the key still held an older pending view")
-      assertEquals(
-        controller.panel.messages.filter(_.kind == "order").map(_.text),
-        Vector("Order pending", receipt)
-      )
-    finally
-      frame.join(2000L)
-      controller.close()
+      assertEquals(controller.panel.actionNumber, 2L)
+      assertEquals(controller.panel.actionNotice, Some(receipt))
+    finally frame.join(2000L)
   }

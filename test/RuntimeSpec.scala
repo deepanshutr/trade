@@ -62,35 +62,3 @@ class RuntimeSpec extends munit.FunSuite:
     assert(recovered.feed.isInstanceOf[Health.Down])
     assert(recorder.status.contains("saved"))
   }
-
-  test("saved messages preserve acceptance across restart without restoring an order") {
-    val directory = Files.createTempDirectory("desk-message-history")
-    val history = MessageHistory.open(directory)
-    try history.save(Vector(DeskMessage(1, 123L, "analysis", "reading", Some(false))))
-    finally history.close()
-    val again = MessageHistory.open(directory)
-    try
-      assertEquals(again.messages, Vector(DeskMessage(1, 123L, "analysis", "reading", Some(false))))
-    finally again.close()
-  }
-
-  test("saved news messages survive loading and a new order") {
-    val directory = Files.createTempDirectory("desk-legacy-news")
-    val path = directory.resolve("messages.json")
-    try
-      LocalFiles.write(path, """[{"id":1,"at":123,"kind":"news","text":"old headline"}]""")
-      val old = Vector(DeskMessage(1, 123L, "news", "old headline"))
-      val next = old :+ DeskMessage(2, 124L, "order", "PAPER XMR buy filled 5")
-      val history = MessageHistory.open(directory)
-      try
-        assertEquals(history.messages, old)
-        history.save(next)
-      finally history.close()
-      val reopened = MessageHistory.open(directory)
-      try assertEquals(reopened.messages, next)
-      finally reopened.close()
-    finally
-      Files.deleteIfExists(path)
-      Files.deleteIfExists(directory.resolve("messages.lock"))
-      Files.deleteIfExists(directory)
-  }
