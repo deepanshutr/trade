@@ -24,6 +24,121 @@ class OrderResultLogSpec extends munit.FunSuite:
     assertEquals(ujson.read(lines.get(0))("text").str, "second")
   }
 
+  test("an interrupted trim leaves the old log readable and the temporary file private") {
+    val directory = Files.createTempDirectory("desk-order-interrupted")
+    OrderResultLog.append(directory, 1L, "first")
+    val path = directory.resolve("order-results.jsonl")
+    val line = Files.readString(path)
+    Files.writeString(path, line * 1001)
+    val original = Files.readString(path)
+    val child = new ProcessBuilder(
+      java.nio.file.Path.of(sys.props("java.home"), "bin", "java").toString,
+      "-cp",
+      sys.props("java.class.path"),
+      "desk.OrderResultTrimCrash",
+      directory.toString
+    ).inheritIO().start()
+    try
+      assert(child.waitFor(10, java.util.concurrent.TimeUnit.SECONDS))
+      assertEquals(child.exitValue(), 23)
+    finally
+      if child.isAlive then
+        child.destroyForcibly()
+        child.waitFor()
+    val paths = Files.list(directory)
+    val temporary = try
+      import scala.jdk.CollectionConverters.*
+      paths.iterator().asScala.find(_.getFileName.toString.startsWith(".desk-")).get
+    finally paths.close()
+    assertEquals(Files.readAllLines(temporary).size(), 1000)
+    assertEquals(
+      Files.getPosixFilePermissions(temporary),
+      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
+    )
+    assertEquals(Files.readString(path), original)
+    import scala.jdk.CollectionConverters.*
+    assert(Files.readAllLines(path).asScala.forall(line => ujson.read(line)("text").str == "first"))
+  }
+
+  test("the background writer returns while a write is blocked and drains in order") {
+    val entered = new java.util.concurrent.CountDownLatch(1)
+    val release = new java.util.concurrent.CountDownLatch(1)
+    val records = new java.util.concurrent.CopyOnWriteArrayList[String]()
+    val writer = new OrderResultLog.Writer(
+      text => {
+        entered.countDown()
+        release.await()
+        records.add(text)
+        ()
+      },
+      _ => ()
+    )
+    try
+      writer.append("first")
+      assert(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+      writer.append("second")
+      assertEquals(records.size(), 0)
+    finally
+      release.countDown()
+      writer.close()
+    assertEquals(records.toArray.toVector, Vector("first", "second"))
+  }
+
+  test("appending after writer close is a quiet no-op that records a diagnostic") {
+    val records = new java.util.concurrent.CopyOnWriteArrayList[String]()
+    val failures = new java.util.concurrent.CopyOnWriteArrayList[Throwable]()
+    val writer = new OrderResultLog.Writer(
+      text => { records.add(text); () },
+      error => { failures.add(error); () }
+    )
+    writer.append("first")
+    writer.close()
+    writer.append("late")
+    assertEquals(records.toArray.toVector, Vector("first"))
+    assertEquals(failures.size(), 1)
+    assert(failures.get(0).isInstanceOf[java.util.concurrent.RejectedExecutionException])
+  }
+
+  test("retention repairs a truncated UTF-8 character before subsequent appends") {
+    val directory = Files.createTempDirectory("desk-order-torn-utf8")
+    OrderResultLog.append(directory, 1L, "first")
+    val path = directory.resolve("order-results.jsonl")
+    val good = (Files.readString(path) * 1000).getBytes(java.nio.charset.StandardCharsets.UTF_8)
+    Files.write(path, good ++ Array(0xe2.toByte, 0x82.toByte))
+    OrderResultLog.append(directory, 2L, "second")
+    OrderResultLog.append(directory, 3L, "third")
+    import scala.jdk.CollectionConverters.*
+    val records = Files.readAllLines(path).asScala.map(ujson.read(_)).toVector
+    assertEquals(records.size, 1000)
+    assertEquals(records.takeRight(2).map(_("text").str), Vector("second", "third"))
+  }
+
+  test("retention excludes torn lines and keeps repaired appends readable") {
+    val directory = Files.createTempDirectory("desk-order-torn-trim")
+    OrderResultLog.append(directory, 1L, "first")
+    val path = directory.resolve("order-results.jsonl")
+    Files.writeString(path, Files.readString(path) * 1000 + "{\"id\":\"torn")
+    OrderResultLog.append(directory, 2L, "second")
+    import scala.jdk.CollectionConverters.*
+    val records = Files.readAllLines(path).asScala.map(ujson.read(_)).toVector
+    assertEquals(records.size, 1000)
+    assertEquals(records.last("text").str, "second")
+  }
+
+  test("appending 1100 results keeps the newest 1000 in order and private") {
+    val directory = Files.createTempDirectory("desk-order-retention")
+    for i <- 1 to 1100 do OrderResultLog.append(directory, i.toLong, s"result $i")
+    import scala.jdk.CollectionConverters.*
+    val path = directory.resolve("order-results.jsonl")
+    val records = Files.readAllLines(path).asScala.map(ujson.read(_)).toVector
+    assertEquals(records.map(_("at").str.toInt), (101 to 1100).toVector)
+    assertEquals(records.map(_("text").str), (101 to 1100).map(i => s"result $i").toVector)
+    assertEquals(
+      Files.getPosixFilePermissions(path),
+      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
+    )
+  }
+
   test("two controllers append all 600 order results without keeping general messages") {
     val directory = Files.createTempDirectory("desk-order-results")
     def controller = new DeskController(
@@ -116,3 +231,10 @@ class OrderResultLogSpec extends munit.FunSuite:
         child.destroyForcibly()
         child.waitFor()
   }
+
+object OrderResultTrimCrash:
+  def main(args: Array[String]): Unit =
+    OrderResultLog.trim(
+      java.nio.file.Path.of(args(0)).resolve("order-results.jsonl"),
+      () => Runtime.getRuntime.halt(23)
+    )

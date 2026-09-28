@@ -22,7 +22,7 @@ object LocalFiles:
       require(TradingConfig.privateFile(path) && Files.size(path) <= maximum, "invalid local file")
       Some(Files.readString(path))
 
-  def write(path: Path, text: String): Unit =
+  def write(path: Path, text: String, beforeReplace: () => Unit = () => ()): Unit =
     directory(path.getParent)
     require(
       !Files.exists(path, LinkOption.NOFOLLOW_LINKS) || TradingConfig.privateFile(path),
@@ -41,6 +41,7 @@ object LocalFiles:
         while bytes.hasRemaining do channel.write(bytes)
         channel.force(true)
       finally channel.close()
+      beforeReplace()
       Files.move(
         temporary,
         path,

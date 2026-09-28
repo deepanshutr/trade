@@ -9,6 +9,22 @@ import java.util.concurrent.locks.ReentrantLock
 
 /** Replay receipts only. Each append owns the lock, so viewing processes may coexist. */
 object OrderResultLog:
+  final class Writer(write: String => Unit, failure: Throwable => Unit) extends AutoCloseable:
+    private val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    def append(text: String): Unit =
+      try executor.execute(() => write(text))
+      catch case error: java.util.concurrent.RejectedExecutionException => failure(error)
+    def close(): Unit = executor.close()
+
+  private[desk] def trim(path: Path, beforeReplace: () => Unit = () => ()): Unit =
+    val lines = new String(
+      Files.readAllBytes(path),
+      java.nio.charset.StandardCharsets.UTF_8
+    ).linesIterator.toVector
+    if lines.size > 1000 then
+      val records = lines.filter(line => scala.util.Try(ujson.read(line)).isSuccess).takeRight(1000)
+      LocalFiles.write(path, records.mkString("", "\n", "\n"), beforeReplace)
+
   private val writing = new ReentrantLock(true)
   private def open(path: Path, append: Boolean): FileChannel =
     require(
@@ -71,6 +87,7 @@ object OrderResultLog:
           while bytes.hasRemaining do log.write(bytes)
           log.force(true)
         finally log.close()
+        trim(directory.resolve("order-results.jsonl"))
       finally lease.release()
     finally channel.close()
   }
