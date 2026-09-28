@@ -39,3 +39,39 @@ class OrderResultLogSpec extends munit.FunSuite:
       try paths.sorted(java.util.Comparator.reverseOrder()).forEach(p => Files.delete(p))
       finally paths.close()
   }
+
+  test("an append starts a new line after a torn record") {
+    val directory = Files.createTempDirectory("desk-order-torn")
+    OrderResultLog.append(directory, 1L, "first")
+    val path = directory.resolve("order-results.jsonl")
+    Files.writeString(path, "{\"id\":\"torn", java.nio.file.StandardOpenOption.APPEND)
+    OrderResultLog.append(directory, 2L, "second")
+    import scala.jdk.CollectionConverters.*
+    val lines = Files.readAllLines(path).asScala.toVector
+    assertEquals(lines.size, 3)
+    assertEquals(ujson.read(lines.last)("text").str, "second")
+    assertEquals(lines(1), "{\"id\":\"torn")
+  }
+
+  test("a lock held by another process times out promptly") {
+    val directory = Files.createTempDirectory("desk-order-locked")
+    OrderResultLog.append(directory, 1L, "first")
+    val child = new ProcessBuilder(
+      "python3",
+      "-c",
+      "import fcntl, sys, time; f = open(sys.argv[1], 'r+'); fcntl.lockf(f, fcntl.LOCK_EX); print('locked', flush=True); time.sleep(1)",
+      directory.resolve("order-results.lock").toString
+    ).start()
+    try
+      assertEquals(child.inputReader().readLine(), "locked")
+      val began = System.nanoTime()
+      val result = scala.util.Try(OrderResultLog.append(directory, 2L, "blocked"))
+      val elapsed = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began)
+      assert(elapsed < 250, s"lock blocked the caller for $elapsed ms")
+      assert(result.failed.toOption.exists(_.isInstanceOf[java.io.IOException]))
+      assertEquals(Files.readAllLines(directory.resolve("order-results.jsonl")).size(), 1)
+    finally
+      if !child.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) then
+        child.destroyForcibly()
+        child.waitFor()
+  }
