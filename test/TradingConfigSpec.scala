@@ -162,6 +162,13 @@ class TradingConfigSpec extends munit.FunSuite:
   // Tokenize strings and comments before looking for require calls. Delimiters inside
   // conditions or quoted text must not be mistaken for the message argument.
   private def fixedRequireMessages(source: String): Boolean =
+    val displayMapping =
+      """case Some(message) if message.startsWith("requirement failed: ") =>
+        |            "invalid trading settings: " + message.stripPrefix("requirement failed: ")""".stripMargin
+    if source
+        .replaceFirst(java.util.regex.Pattern.quote(displayMapping), "")
+        .contains("requirement failed")
+    then return false
     val plain = """"(?:\\.|[^"\\])*"""".r
     val token =
       """(?s)//[^\r\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[A-Za-z_][A-Za-z0-9_]*|[^\s]""".r
@@ -170,8 +177,9 @@ class TradingConfigSpec extends munit.FunSuite:
     val opening = Map(")" -> "(", "]" -> "[", "}" -> "{")
     var seen = false
     var i = 0
-    while i + 1 < tokens.size do
-      if tokens(i) == "require" && tokens(i + 1) == "(" then
+    while i < tokens.size do
+      if tokens(i) == "require" then
+        if i + 1 >= tokens.size || tokens(i + 1) != "(" then return false
         seen = true
         var stack = List("(")
         var message = -1
@@ -221,6 +229,36 @@ class TradingConfigSpec extends munit.FunSuite:
     assert(fixedRequireMessages("""/* require(false, variable) */ require(check(')', ','))"""))
     assert(!fixedRequireMessages("""require(true, "fixed", "extra")"""))
     assert(!fixedRequireMessages("""require(true, "unfinished""""))
+  }
+
+  test("settings require aliases cannot bypass the fixed message guard") {
+    val source = Files.readString(Path.of("src/TradingConfig.scala"))
+    val changed = source
+      .replace(
+        "object TradingConfig:",
+        "object TradingConfig:\n  private val check: (Boolean, Any) => Unit = Predef.require"
+      )
+      .replace(
+        "require(service.matches(\"[A-Za-z0-9._-]{1,80}\"), \"invalid key service\")",
+        "check(service.matches(\"[A-Za-z0-9._-]{1,80}\"), \"invalid key service \" + service)"
+      )
+    assertNotEquals(changed, source)
+    assert(!fixedRequireMessages(changed), "require alias must fail the guard")
+    assert(!fixedRequireMessages(source + "\nprivate val check = Predef.require"))
+    assert(fixedRequireMessages(source))
+  }
+
+  test("hand-written settings throws cannot bypass the fixed message guard") {
+    val source = Files.readString(Path.of("src/TradingConfig.scala"))
+    val changed = source.replace(
+      "require(service.matches(\"[A-Za-z0-9._-]{1,80}\"), \"invalid key service\")",
+      "if !service.matches(\"[A-Za-z0-9._-]{1,80}\") then\n" +
+        "          throw IllegalArgumentException(\"requirement failed: invalid \" + service)"
+    )
+    assertNotEquals(changed, source)
+    assert(!fixedRequireMessages(changed), "hand-written requirement failure must fail the guard")
+    assert(!fixedRequireMessages(source + "\n// requirement failed"))
+    assert(fixedRequireMessages(source))
   }
 
   test("settings nesting accepts depth thirty-two and refuses thirty-three") {
