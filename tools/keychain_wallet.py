@@ -264,9 +264,11 @@ def main():
         print(json.dumps({**public, "state": "stored", "prompt_required": True}))
         return 0
     except Exception as error:
-        print(json.dumps({"state": "stopped", "item": public,
-                          "message": str(error) if isinstance(error, SetupError) else "Setup did not finish. Preserve any setup record and inspect the named item before retrying."}),
-              file=sys.stderr)
+        stopped = {"state": "stopped", "item": public,
+                   "message": "Setup did not finish. Preserve any setup record and inspect the named item before retrying."}
+        if isinstance(error, SetupError):
+            stopped["reason"] = str(error)
+        print(json.dumps(stopped), file=sys.stderr)
         return 1
     finally:
         if record:

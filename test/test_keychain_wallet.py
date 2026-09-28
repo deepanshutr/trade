@@ -17,7 +17,7 @@ wallet = importlib.util.module_from_spec(spec)
 try:
     spec.loader.exec_module(wallet)
 except ModuleNotFoundError as error:
-    if error.name.split(".")[0] not in {"cryptography", "Crypto", "eth_account"}:
+    if (error.name or "").split(".")[0] not in {"cryptography", "Crypto", "eth_account"}:
         raise
     raise unittest.SkipTest("key helper crypto module missing: " + error.name) from error
 
@@ -47,21 +47,61 @@ class KeychainWalletTests(unittest.TestCase):
                     patch.object(sys, "argv", ["setup", "--create", "agent"]), \
                     contextlib.redirect_stderr(error):
                 self.assertEqual(wallet.main(), 1)
-            self.assertEqual(json.loads(error.getvalue())["message"],
+            self.assertIn("inspect the named item", error.getvalue())
+            self.assertEqual(json.loads(error.getvalue())["reason"],
                              "private Desk settings directory required")
             generate.assert_not_called()
             self.assertEqual(store.calls, [])
 
     def test_unexpected_errors_keep_fixed_message(self):
         for failure in (ValueError(FIXTURE.hex()), RuntimeError(FIXTURE.hex())):
-            with self.subTest(error=type(failure).__name__):
+            with self.subTest(error=type(failure).__name__), tempfile.TemporaryDirectory() as temporary:
                 error = io.StringIO()
-                with patch.object(wallet, "MacKeychain", side_effect=failure), \
+                with patch.object(wallet.Path, "home", return_value=Path(temporary)), \
+                        patch.object(wallet, "generate") as generate, \
+                        patch.object(wallet, "MacKeychain", side_effect=failure), \
                         patch.object(sys, "argv", ["setup", "--create", "agent"]), \
                         contextlib.redirect_stderr(error):
                     self.assertEqual(wallet.main(), 1)
                 self.assertEqual(json.loads(error.getvalue())["message"],
                                  "Setup did not finish. Preserve any setup record and inspect the named item before retrying.")
+                self.assertNotIn("reason", json.loads(error.getvalue()))
+                self.assertNotIn(FIXTURE.hex(), error.getvalue())
+                generate.assert_not_called()
+
+    def test_setup_failure_after_add_keeps_recovery_instruction_and_reason(self):
+        reason = "new item did not refuse access without a prompt"
+
+        class RefusedStore(Store):
+            def add(self, *args):
+                super().add(*args)
+                raise wallet.SetupError(reason)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            directory = home / ".config/desk"
+            directory.mkdir(parents=True, mode=0o700)
+            store = RefusedStore()
+            error = io.StringIO()
+            with patch.object(wallet.Path, "home", return_value=home), \
+                    patch.object(wallet, "MacKeychain", return_value=store), \
+                    patch.object(wallet, "generate", return_value=bytearray(FIXTURE)), \
+                    patch.object(sys, "argv", ["setup", "--create", "agent"]), \
+                    contextlib.redirect_stderr(error):
+                self.assertEqual(wallet.main(), 1)
+            self.assertEqual(len(store.calls), 1)
+            stopped = json.loads(error.getvalue())
+            self.assertIn("inspect the named item", stopped["message"])
+            self.assertEqual(stopped["reason"], reason)
+            self.assertEqual(stopped["item"]["account"], PUBLIC)
+
+    def test_missing_module_without_name_preserves_original_error(self):
+        failure = ModuleNotFoundError("unnamed module")
+        with patch.object(type(spec.loader), "exec_module", side_effect=failure):
+            with self.assertRaises(ModuleNotFoundError) as raised:
+                exec(compile(Path(__file__).read_text(), __file__, "exec"),
+                     {"__file__": __file__})
+        self.assertIs(raised.exception, failure)
 
     def test_known_address(self):
         self.assertEqual(wallet.address(FIXTURE), PUBLIC)

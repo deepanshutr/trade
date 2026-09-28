@@ -96,7 +96,6 @@ offline Scala suite and `make test-python`, which discovers `test/test_*.py`.
 The key-helper tests skip with a reason when `cryptography`, `pycryptodome`
 (`Crypto`) or `eth-account` is missing. They use fixture keys and fake stores,
 plus native access objects on macOS, without creating or reading keychain items.
-`make live` runs tests tagged `live` against public endpoints. `make slow` runs
-the slow terminal replay and must run before release.
+`make live` runs tests tagged `live` against public endpoints.
 `WRITE_GOLDEN=1` is the historical golden-output write variable. The current
 screen tests have no golden-file writer, so setting it does not update fixtures.
