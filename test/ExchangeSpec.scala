@@ -25,6 +25,13 @@ class ExchangeSpec extends munit.FunSuite:
     assertEquals(order("r").bool, false)
   }
 
+  test("a top-level err rejects the saved order") {
+    assertEquals(
+      Exchange.outcome(Some(ujson.Obj("status" -> "err", "response" -> "x")), saved),
+      Some("XMR order rejected")
+    )
+  }
+
   test("outer success does not turn an inner error into a fill") {
     assertEquals(
       Exchange.outcome(reply(ujson.Obj("error" -> "rejected")), saved),

@@ -700,7 +700,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
       val saved = f.openedJournal.pending.get
       f.clock.set(saved.expiresAfter + 60000L)
       val reads = f.recoveryReads.get()
-      Wait.until("boundary lookup missing")(f.recoveryReads.get() > reads)
+      // Lookups run serially, so the second start proves the first boundary lookup completed.
+      Wait.until("boundary lookup not completed")(f.recoveryReads.get() > reads + 1)
       assert(f.worker.view.pending)
       assertEquals(f.openedJournal.pending, Some(saved))
       f.clock.incrementAndGet()
