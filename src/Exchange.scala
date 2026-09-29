@@ -327,6 +327,9 @@ final class JdkExchange(
     orders.shutdownNow()
 
 object Exchange:
+  // Unproven assumption until a test-network order confirms that the venue refuses expired actions.
+  private val ExpiryMarginMs = 60000L
+
   private val terminal = Set(
     "filled",
     "canceled",
@@ -406,50 +409,57 @@ object Exchange:
 
   def outcome(reply: Option[ujson.Value], saved: SavedOrder): Option[String] =
     reply.flatMap(j =>
-      Try {
-        require(j("status").str == "ok" && j("response")("type").str == "order")
-        val statuses = j("response")("data")("statuses").arr
-        require(statuses.size == 1)
-        val status = statuses.head
-        if status.obj.keySet == Set("error") then
-          val _ = status("error").str
-          saved.coin + " order rejected"
-        else
-          require(status.obj.keySet == Set("filled"))
-          val f = status("filled")
-          val quantity = BigDecimal(f("totalSz").str)
-          val price = BigDecimal(f("avgPx").str)
-          require(
-            f("oid").num.isWhole && f(
-              "oid"
-            ).num >= 0 && quantity > 0 && quantity <= BigDecimal(
-              saved.quantity
-            ) && price > 0
-          )
-          require(if saved.side == Side.Buy then price <= BigDecimal(saved.limit)
-          else price >= BigDecimal(saved.limit))
-          s"${saved.coin} filled ${Trading.display(quantity, 6)} at ${Trading.display(price, 6)}"
-      }.toOption
+      if j.objOpt.flatMap(_.get("status")).flatMap(_.strOpt).contains("err") then
+        Some(saved.coin + " order rejected")
+      else
+        Try {
+          require(j("status").str == "ok" && j("response")("type").str == "order")
+          val statuses = j("response")("data")("statuses").arr
+          require(statuses.size == 1)
+          val status = statuses.head
+          if status.obj.keySet == Set("error") then
+            val _ = status("error").str
+            saved.coin + " order rejected"
+          else
+            require(status.obj.keySet == Set("filled"))
+            val f = status("filled")
+            val quantity = BigDecimal(f("totalSz").str)
+            val price = BigDecimal(f("avgPx").str)
+            require(
+              f("oid").num.isWhole && f(
+                "oid"
+              ).num >= 0 && quantity > 0 && quantity <= BigDecimal(
+                saved.quantity
+              ) && price > 0
+            )
+            require(if saved.side == Side.Buy then price <= BigDecimal(saved.limit)
+            else price >= BigDecimal(saved.limit))
+            s"${saved.coin} filled ${Trading.display(quantity, 6)} at ${Trading.display(price, 6)}"
+        }.toOption
     )
 
-  def recovered(reply: Option[ujson.Value], saved: SavedOrder): Option[String] =
+  def recovered(reply: Option[ujson.Value], saved: SavedOrder, now: Long): Option[String] =
     reply.flatMap(j =>
-      Try {
-        require(j("status").str == "order")
-        val detail = j("order")
-        val order = detail("order")
-        val status = detail("status").str
-        require(terminal.contains(status) && order("cloid").str == saved.id)
-        require(
-          order("coin").str == saved.coin && order(
-            "side"
-          ).str == (if saved.side == Side.Buy then "B"
-                    else "A")
-        )
-        require(BigDecimal(order("origSz").str) == BigDecimal(saved.quantity))
-        require(BigDecimal(order("limitPx").str) == BigDecimal(saved.limit))
-        s"${saved.coin} recovered $status"
-      }.toOption
+      if j.objOpt.flatMap(_.get("status")).flatMap(_.strOpt).contains("unknownOid") &&
+        BigInt(now) > BigInt(saved.expiresAfter) + ExpiryMarginMs
+      then Some(saved.coin + " not placed")
+      else
+        Try {
+          require(j("status").str == "order")
+          val detail = j("order")
+          val order = detail("order")
+          val status = detail("status").str
+          require(terminal.contains(status) && order("cloid").str == saved.id)
+          require(
+            order("coin").str == saved.coin && order(
+              "side"
+            ).str == (if saved.side == Side.Buy then "B"
+                      else "A")
+          )
+          require(BigDecimal(order("origSz").str) == BigDecimal(saved.quantity))
+          require(BigDecimal(order("limitPx").str) == BigDecimal(saved.limit))
+          s"${saved.coin} recovered $status"
+        }.toOption
     )
 
 object ProtectedKey:

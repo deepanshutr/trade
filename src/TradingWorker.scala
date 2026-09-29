@@ -610,7 +610,7 @@ final class TradingWorker private[desk] (
               "oid" -> p.id
             )
           )
-          Exchange.recovered(reply, p).foreach(text => complete(p, text))
+          Exchange.recovered(reply, p, wall()).foreach(text => complete(p, text))
         }
       else if enabled then synchronized { message = "Configure owner and delegated signer" }
     catch
