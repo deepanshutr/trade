@@ -205,8 +205,8 @@ object Workspace:
         portfolio = view.portfolio
       )
       val gauges = indicatorRows(s, now, (leftWidth - 1) / 2, style).map(Chart.fit(_, leftWidth))
-      val market = (marketFrame.lines.padTo(tradeTop, " " * chartWidth) ++
-        Vector.fill(3)(" " * leftWidth) ++ gauges).padTo(rows, " " * leftWidth).take(rows)
+      val market = marketFrame.lines.padTo(tradeTop, " " * chartWidth) ++
+        Vector.fill(3)(" " * leftWidth) ++ gauges
       val right = Array.fill(rows)("")
       val buttons = Vector.newBuilder[DeskButton]
       val disabled = Vector.newBuilder[DeskButton]
