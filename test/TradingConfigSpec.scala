@@ -159,6 +159,24 @@ class TradingConfigSpec extends munit.FunSuite:
       finally Files.deleteIfExists(p)
   }
 
+  for field <- Vector("owner", "agent", "small", "big", "target", "quoteAgeMs", "positionAgeMs") do
+    test(s"wrong JSON types name $field without including supplied values") {
+      val values = Vector(
+        ujson.Num(5),
+        ujson.Bool(true),
+        ujson.Null,
+        ujson.Arr("private-type-canary"),
+        ujson.Obj("private-type-canary" -> "private-type-canary")
+      )
+      for value <- values do
+        val p = setting(ujson.Obj(field -> value).render())
+        try
+          val error = TradingConfig.load(Some(p)).swap.toOption.get
+          assert(error.contains(field), error)
+          assert(!error.contains("private-type-canary"), error)
+        finally Files.deleteIfExists(p)
+    }
+
   // Tokenize strings and comments before looking for require calls. Delimiters inside
   // conditions or quoted text must not be mistaken for the message argument.
   private def fixedRequireMessages(source: String): Boolean =

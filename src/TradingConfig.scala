@@ -109,6 +109,14 @@ object TradingConfig:
         require(shallowJson(text))
         val j = ujson.read(text)
         require(j.obj.keySet.forall(fields.contains), "unknown setting")
+        def stringFields(names: String*): Boolean =
+          names.forall(name => j.obj.get(name).forall(_.strOpt.isDefined))
+        require(stringFields("owner", "agent"), "owner and agent must be strings")
+        require(stringFields("small", "big", "target"), "small, big and target must be strings")
+        require(
+          stringFields("quoteAgeMs", "positionAgeMs"),
+          "quoteAgeMs and positionAgeMs must be strings"
+        )
         def decimal(name: String, fallback: BigDecimal): BigDecimal =
           j.obj.get(name).map(v => BigDecimal(v.str)).getOrElse(fallback)
         def string(name: String, fallback: String): String =
