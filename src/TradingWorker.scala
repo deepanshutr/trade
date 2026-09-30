@@ -509,7 +509,7 @@ final class TradingWorker private[desk] (
     val (current, g, version) = synchronized((coin, generation, accountVersion))
     val startedAt = monotonic()
     try
-      if enabled && config.configured && !synchronized(fatal) && journal.isEmpty then
+      if enabled && !synchronized(fatal) && journal.isEmpty then
         try
           val opened = openJournal()
           journal = Some(opened)

@@ -99,6 +99,18 @@ class ExchangeSpec extends munit.FunSuite:
     )
   }
 
+  test("unknownOid cannot release without permission even well past expiry") {
+    assertEquals(
+      Exchange.recovered(
+        Some(ujson.Obj("status" -> "unknownOid")),
+        saved,
+        saved.expiresAfter + 600000L,
+        allowUnknown = false
+      ),
+      None
+    )
+  }
+
   test("failed and malformed lookups never release after expiry") {
     Vector(
       None,

@@ -30,7 +30,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
 
   private final class Fixture(
       enabled: Boolean = true,
-      roleMatches: Boolean = true,
+      @volatile var roleMatches: Boolean = true,
       beforeReplace: () => Unit = () => (),
       afterReserve: () => Unit = () => (),
       afterReplace: () => Unit = () => (),
@@ -335,6 +335,43 @@ class TradingWorkerSpec extends TempDirectorySuite:
       worker.close()
 
   private val buy = OrderIntent(Side.Buy, OrderKind.Hard)
+
+  test("a saved order stays busy after an owner mismatch and successful account refresh") {
+    val writes = new AtomicInteger()
+    val f = new Fixture(beforeReplace = () => { writes.incrementAndGet(); () })
+    try
+      f.ready()
+      f.lose = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("lost result was not saved")(
+        f.worker.view.message == "XMR waiting for order result"
+      )
+      val saved = f.openedJournal.pending
+      assert(saved.nonEmpty)
+      f.roleMatches = false
+      f.worker.observe(Event.SocketDown)
+      f.fresh(f.worker, time = 2000L)
+      Wait.until("owner mismatch was not shown")(
+        f.worker.view.message == "Signer does not match the configured owner"
+      )
+      f.roleMatches = true
+      f.position = "1"
+      f.clock.addAndGet(10001L)
+      f.fresh(f.worker, time = 12001L)
+      Wait.until("account did not refresh after the role matched")(
+        f.worker.view.position.contains(BigDecimal(1)) && f.worker.view.block.isEmpty
+      )
+      assertEquals(f.openedJournal.pending, saved)
+      assert(f.worker.view.pending)
+      val before = writes.get()
+      val ready = f.worker.view.ready
+      val accepted = f.worker.submit(buy, "XMR")
+      assert(!ready, "saved order became ready after owner recovery")
+      assert(!accepted, "new submit was accepted with an order still saved")
+      assertEquals(writes.get(), before)
+      assertEquals(f.orderPosts.get(), 1)
+    finally f.close()
+  }
 
   private def saveAtStartup(f: Fixture): SavedOrder =
     val plan = Trading
