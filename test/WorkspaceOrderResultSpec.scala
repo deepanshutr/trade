@@ -21,11 +21,12 @@ class WorkspaceOrderResultSpec extends TempDirectorySuite:
     )
     diagnostics.start()
     try
-      WorkspaceApp.orderResultFailureHandler(diagnostics, () => controller.orderResultNotSaved())(
+      WorkspaceApp.orderResultFailureHandler(diagnostics, controller.orderResultNotSaved)(
+        1,
         new java.io.IOException("private detail")
       )
     finally diagnostics.close()
-    assertEquals(controller.panel.actionNotice, Some("Order result not saved"))
+    assertEquals(controller.panel.actionNotice, Some("Order result #1 not saved"))
     val failures = records.toArray.toVector
       .map(_.toString)
       .map(ujson.read(_))
@@ -59,7 +60,7 @@ class WorkspaceOrderResultSpec extends TempDirectorySuite:
     val reported = new java.util.concurrent.CountDownLatch(1)
     val handler = WorkspaceApp.orderResultFailureHandler(
       diagnostics,
-      () => controller.orderResultNotSaved()
+      controller.orderResultNotSaved
     )
     val writer = new OrderResultLog.Writer(
       text =>
@@ -69,7 +70,7 @@ class WorkspaceOrderResultSpec extends TempDirectorySuite:
           text,
           afterForce = () => throw new java.io.IOException("trim failed")
         ),
-      error => { handler(error); reported.countDown(); () }
+      error => { handler(0, error); reported.countDown(); () }
     )
     diagnostics.start()
     try

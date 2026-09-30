@@ -122,8 +122,11 @@ object Workspace:
     )
 
   private def orderStatus(view: TradingView, panel: PanelView): String =
-    val raw = if view.pending then view.message
-    else view.block.orElse(panel.actionNotice).getOrElse("")
+    val unsaved = panel.actionNotice.filter(_.toLowerCase.matches("order result #[0-9]+ not saved"))
+    val raw = unsaved.getOrElse(
+      if view.pending then view.message
+      else view.block.orElse(panel.actionNotice).getOrElse("")
+    )
     val lower = raw.toLowerCase
     val coded = if view.block.isEmpty || panel.mode == "VIEW" then None
     else
@@ -136,8 +139,8 @@ object Workspace:
         // Dynamic action notices and uncoded router blocks retain their existing labels.
         case BlockCode.Blocked => None
     val text =
-      if !view.pending && coded.nonEmpty then coded.get
-      else if lower.contains("order result not saved") then "Order result not saved"
+      if unsaved.nonEmpty then safeText(raw)
+      else if !view.pending && coded.nonEmpty then coded.get
       else if view.pending then
         val stage = "(?i).*\\b(queued|checking|saving) (\\d+s).*".r
         raw match
@@ -166,7 +169,8 @@ object Workspace:
       else if panel.mode == "VIEW" then "View only"
       else if raw.nonEmpty then safeText(raw).takeWhile(_ != '\n')
       else ""
-    if text.nonEmpty && panel.actionNumber > 0 && !view.pending then s"$text #${panel.actionNumber}"
+    if text.nonEmpty && panel.actionNumber > 0 && !view.pending && unsaved.isEmpty
+    then s"$text #${panel.actionNumber}"
     else text
 
   def draw(

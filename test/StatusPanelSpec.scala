@@ -8,6 +8,7 @@ class StatusPanelSpec extends munit.FunSuite:
       view: TradingView,
       p: PanelView = panel,
       cols: Int = 100,
+      rows: Int = 30,
       logsUnavailable: Boolean = false
   ): WorkspaceFrame =
     Workspace.draw(
@@ -15,7 +16,7 @@ class StatusPanelSpec extends munit.FunSuite:
       view,
       p,
       cols,
-      30,
+      rows,
       now,
       java.time.ZoneOffset.UTC,
       Style.mono,
@@ -61,32 +62,146 @@ class StatusPanelSpec extends munit.FunSuite:
       assert(frame.lines.exists(_.contains("Bought")))
   }
 
-  test("an unsaved order result is named in the action status") {
-    val controller = new DeskController(
+  private def failingReceipt(receipt: String): (DeskController, OrderResultLog.Writer) =
+    val failed = new java.util.concurrent.CountDownLatch(1)
+    lazy val controller: DeskController = new DeskController(
       PanelView(mode = "PAPER"),
       () => now,
       _ => Left("unused"),
       _ => false,
-      _ => Left("unused")
+      _ => Left("unused"),
+      result = (number, text) =>
+        writer.append(
+          text,
+          error => { controller.orderResultNotSaved(number); failed.countDown(); () }
+        )
     )
-    controller.orderResultNotSaved()
-    val frame = draw(TradingView("XMR", message = "Ready", ready = true), controller.panel)
-    assert(frame.lines.exists(_.contains("Order result not saved")), frame.lines.mkString("\n"))
+    lazy val writer = new OrderResultLog.Writer(
+      _ => throw new java.io.IOException("save failed"),
+      _ => ()
+    )
+    controller.addMessage("order", receipt)
+    assert(failed.await(2, java.util.concurrent.TimeUnit.SECONDS))
+    writer.close()
+    (controller, writer)
+
+  test("failed real order receipts name their own action in the smallest frame") {
+    for receipt <- Vector(
+        "PAPER XMR buy filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z",
+        "PAPER XMR sell filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z",
+        "PAPER XMR buy partial 0.5 at 100\nFee $0.03 | #1 2026-09-30T00:00:00Z",
+        "Paper no fill: no depth inside reviewed limit",
+        "XMR order rejected"
+      )
+    do
+      val (controller, writer) = failingReceipt(receipt)
+      try
+        val frame = draw(
+          TradingView("XMR", message = "Ready", ready = true),
+          controller.panel,
+          Layout.minCols,
+          Layout.minRows
+        )
+        assert(
+          frame.lines.exists(_.contains("Order result #1 not saved")),
+          frame.lines.mkString("\n")
+        )
+      finally writer.close()
   }
 
-  test("an unsaved order result preserves the outcome and adds its suffix only once") {
-    val controller = new DeskController(
-      panel.copy(actionNotice = Some("Bought #7")),
+  test("a failed earlier order keeps its number after a newer order notice") {
+    val started = new java.util.concurrent.CountDownLatch(1)
+    val release = new java.util.concurrent.CountDownLatch(1)
+    val failed = new java.util.concurrent.CountDownLatch(1)
+    lazy val controller: DeskController = new DeskController(
+      PanelView(mode = "PAPER"),
       () => now,
       _ => Left("unused"),
       _ => false,
-      _ => Left("unused")
+      _ => Left("unused"),
+      result = (number, text) =>
+        writer.append(
+          text,
+          error => { controller.orderResultNotSaved(number); failed.countDown(); () }
+        )
     )
-    controller.orderResultNotSaved()
-    controller.orderResultNotSaved()
-    assertEquals(controller.panel.actionNotice, Some("Bought #7 (not saved)"))
-    val frame = draw(TradingView("XMR", message = "Ready", ready = true), controller.panel)
-    assert(frame.lines.exists(_.contains("Bought #7 (not saved)")), frame.lines.mkString("\n"))
+    lazy val writer = new OrderResultLog.Writer(
+      text => {
+        if text.startsWith("PAPER XMR buy filled") then
+          started.countDown()
+          release.await(2, java.util.concurrent.TimeUnit.SECONDS)
+          throw new java.io.IOException("save failed")
+        ()
+      },
+      _ => ()
+    )
+    try
+      controller.addMessage(
+        "order",
+        "PAPER XMR buy filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z"
+      )
+      assert(started.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      controller.addMessage(
+        "order",
+        "PAPER XMR sell filled 1 at 100\nFee $0.05 | #2 2026-09-30T00:00:00Z"
+      )
+      val newer = draw(
+        TradingView("XMR", message = "Ready", ready = true),
+        controller.panel,
+        Layout.minCols,
+        Layout.minRows
+      )
+      assert(newer.lines.exists(_.contains("Sold #2")), newer.lines.mkString("\n"))
+      release.countDown()
+      assert(failed.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      val frame = draw(
+        TradingView("XMR", message = "Ready", ready = true),
+        controller.panel,
+        Layout.minCols,
+        Layout.minRows
+      )
+      assert(
+        frame.lines.exists(_.contains("Order result #1 not saved")),
+        frame.lines.mkString("\n")
+      )
+      assert(
+        !frame.lines.exists(_.contains("Order result #2 not saved")),
+        frame.lines.mkString("\n")
+      )
+    finally
+      release.countDown()
+      writer.close()
+  }
+
+  test("a successful real order receipt adds no failure status") {
+    val saved = new java.util.concurrent.CountDownLatch(1)
+    lazy val controller = new DeskController(
+      PanelView(mode = "PAPER"),
+      () => now,
+      _ => Left("unused"),
+      _ => false,
+      _ => Left("unused"),
+      result = (number, text) => writer.append(text)
+    )
+    lazy val writer = new OrderResultLog.Writer(
+      _ => { saved.countDown(); () },
+      _ => fail("successful save reported failure")
+    )
+    try
+      controller.addMessage(
+        "order",
+        "PAPER XMR buy filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z"
+      )
+      assert(saved.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      val frame = draw(
+        TradingView("XMR", message = "Ready", ready = true),
+        controller.panel,
+        Layout.minCols,
+        Layout.minRows
+      )
+      assert(!frame.lines.exists(_.contains("not saved")), frame.lines.mkString("\n"))
+      assert(frame.lines.exists(_.contains("Bought #1")), frame.lines.mkString("\n"))
+    finally writer.close()
   }
 
   test("a fill without a reported side cannot be labelled as a sale") {

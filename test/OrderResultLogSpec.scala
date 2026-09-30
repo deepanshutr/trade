@@ -174,7 +174,7 @@ class OrderResultLogSpec extends TempDirectorySuite:
       _ => Left("unused"),
       _ => false,
       _ => Left("unused"),
-      result = text => resultWriters.head.append(text)
+      result = (_, text) => resultWriters.head.append(text)
     )
     val second = new DeskController(
       PanelView(),
@@ -182,7 +182,7 @@ class OrderResultLogSpec extends TempDirectorySuite:
       _ => Left("unused"),
       _ => false,
       _ => Left("unused"),
-      result = text => resultWriters(1).append(text)
+      result = (_, text) => resultWriters(1).append(text)
     )
     val (holder, release) = holdWritingLock()
     try

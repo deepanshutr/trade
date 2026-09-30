@@ -22,7 +22,7 @@ object OrderResultLog:
     private val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val closing = new java.util.concurrent.atomic.AtomicBoolean(false)
 
-    private def writeWithRetry(text: String): Unit =
+    private def writeWithRetry(text: String, onFailure: Throwable => Unit): Unit =
       val began = System.nanoTime()
       var saved = false
       var failed = Option.empty[Throwable]
@@ -41,11 +41,14 @@ object OrderResultLog:
                   Thread.currentThread().interrupt()
                   failed = Some(interrupted)
           case NonFatal(error) => failed = Some(error)
-      failed.foreach(failure)
+      failed.foreach(onFailure)
 
     def append(text: String): Unit =
-      try executor.execute(() => writeWithRetry(text))
-      catch case error: java.util.concurrent.RejectedExecutionException => failure(error)
+      append(text, failure)
+
+    def append(text: String, onFailure: Throwable => Unit): Unit =
+      try executor.execute(() => writeWithRetry(text, onFailure))
+      catch case error: java.util.concurrent.RejectedExecutionException => onFailure(error)
     def close(): Unit =
       closing.set(true)
       executor.close()

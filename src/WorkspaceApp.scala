@@ -39,10 +39,10 @@ object WorkspaceApp:
 
   private[desk] def orderResultFailureHandler(
       diagnostics: Diagnostics,
-      reportNotice: () => Unit
-  ): Throwable => Unit = error =>
+      reportNotice: Long => Unit
+  ): (Long, Throwable) => Unit = (number, error) =>
     diagnostics.failure(DiagnosticPart.OrderResults, error)
-    if !error.isInstanceOf[OrderResultLog.SavedRecordFailure] then reportNotice()
+    if !error.isInstanceOf[OrderResultLog.SavedRecordFailure] then reportNotice(number)
 
   private[desk] def closeAll(
       outlook: AutoCloseable,
@@ -269,7 +269,7 @@ object WorkspaceApp:
       val announcements = Main.announcements(args, NativeAnnouncementOutput.create())
       lazy val results: OrderResultLog.Writer = new OrderResultLog.Writer(
         text => OrderResultLog.append(directory, now(), text),
-        orderResultFailureHandler(diagnostics, () => controller.orderResultNotSaved())
+        error => diagnostics.failure(DiagnosticPart.OrderResults, error)
       )
       lazy val controller: DeskController = new DeskController(
         PanelView(
@@ -282,7 +282,12 @@ object WorkspaceApp:
         worker.submitReviewed,
         worker.switchMode,
         announcements.setMuted,
-        results.append
+        (number, text) =>
+          results.append(
+            text,
+            error =>
+              orderResultFailureHandler(diagnostics, controller.orderResultNotSaved)(number, error)
+          )
       )
       val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
       val alerts = new AlertPolicy
