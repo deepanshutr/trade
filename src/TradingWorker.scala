@@ -117,6 +117,7 @@ final class TradingWorker private[desk] (
   private var accountAt = Long.MinValue
   private var leverageReady = false
   private var activeAt = Long.MinValue
+  private var activeFloor = Long.MinValue
   private var activeMode = "cross"
   private var activeLeverage = 0
   private var roleAt = Long.MinValue
@@ -390,6 +391,7 @@ final class TradingWorker private[desk] (
         accountVersion += 1
         accountAt = Long.MinValue
         activeAt = Long.MinValue
+        activeFloor = monotonic()
         balance = None
       }
       wakeAccount()
@@ -491,7 +493,7 @@ final class TradingWorker private[desk] (
       }.toOption
     )
     synchronized {
-      if generation == g then
+      if generation == g && at >= activeFloor then
         parsed match
           case Some((mode, leverage, limits)) =>
             activeMode = mode

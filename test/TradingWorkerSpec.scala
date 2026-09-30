@@ -99,16 +99,18 @@ class TradingWorkerSpec extends TempDirectorySuite:
     @volatile var maximums = Vector("100", "100")
     @volatile var activeCoin = "XMR"
     @volatile var activeReceive: Option[ujson.Value] => Unit = _ => ()
-    def sendActive(): Unit = activeReceive(
-      Some(
-        ujson.Obj(
-          "user" -> owner,
-          "coin" -> activeCoin,
-          "leverage" -> ujson.Obj("type" -> activeMode, "value" -> leverage),
-          "maxTradeSzs" -> ujson.Arr.from(maximums)
-        )
+    @volatile var timedActiveReceive: (Option[ujson.Value], Long) => Unit = (_, _) => ()
+    private val activeDelivery = new Object
+    def pauseActive(): Unit = activeDelivery.synchronized { publishActive = false }
+    def activePayload: Option[ujson.Value] = Some(
+      ujson.Obj(
+        "user" -> owner,
+        "coin" -> activeCoin,
+        "leverage" -> ujson.Obj("type" -> activeMode, "value" -> leverage),
+        "maxTradeSzs" -> ujson.Arr.from(maximums)
       )
     )
+    def sendActive(): Unit = activeReceive(activePayload)
     val directory = tempDirectory("desk-worker")
     val exchange = new Exchange:
       def watch(
@@ -116,11 +118,21 @@ class TradingWorkerSpec extends TempDirectorySuite:
           owner: String,
           generation: Long,
           receive: Option[ujson.Value] => Unit
-      ): Unit =
+      ): Unit = activeDelivery.synchronized {
         require(failedRead != "socket", "account socket failed")
         activeCoin = coin
         activeReceive = receive
         if publishActive then sendActive()
+      }
+      override def watchTimed(
+          coin: String,
+          owner: String,
+          generation: Long,
+          clock: () => Long,
+          receive: (Option[ujson.Value], Long) => Unit
+      ): Unit =
+        timedActiveReceive = receive
+        watch(coin, owner, generation, data => receive(data, clock()))
       def info(body: ujson.Value): Option[ujson.Value] =
         infoReads.incrementAndGet()
         if readFailure || body("type").str == failedRead then None
@@ -339,7 +351,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
 
   private def completeWithoutActive(f: Fixture): Unit =
     f.ready()
-    f.publishActive = false
+    f.pauseActive()
     assert(f.worker.submit(buy, "XMR"))
     Wait.until("completion and fresh account snapshot missing")(!f.worker.view.pending)
     assertEquals(
@@ -368,6 +380,29 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assertEquals(f.orderPosts.get(), 1)
       assert(f.worker.submit(buy.copy(side = Side.Sell), "XMR"))
       Wait.until("renewed sell capacity was not used")(f.orderPosts.get() == 2)
+    finally f.close()
+  }
+
+  test("active data stamped before a fill cannot restore readiness or pre-fill capacity") {
+    val f = new Fixture()
+    try
+      f.ready()
+      val receive = f.timedActiveReceive
+      val requestStartedAt = f.clock.get()
+      val preFill = f.activePayload
+      f.clock.incrementAndGet()
+      completeWithoutActive(f)
+      receive(preFill, requestStartedAt)
+      assert(!f.worker.view.ready)
+      assert(!f.worker.submit(buy, "XMR"))
+      assertEquals(f.orderPosts.get(), 1)
+      f.maximums = Vector("0", "100")
+      receive(f.activePayload, f.clock.incrementAndGet())
+      f.ready()
+      assert(!f.worker.submit(buy, "XMR"))
+      assertEquals(f.worker.view.message, "Requested quantity exceeds confirmed account capacity")
+      assert(f.worker.submit(buy.copy(side = Side.Sell), "XMR"))
+      Wait.until("post-fill sell capacity was not used")(f.orderPosts.get() == 2)
     finally f.close()
   }
 
