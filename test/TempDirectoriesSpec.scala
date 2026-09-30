@@ -4,7 +4,11 @@ import java.nio.file.{Files, Path}
 
 class TempDirectoriesSpec extends TempDirectorySuite:
   private var testFolder = Option.empty[Path]
-  private lazy val sharedFolder = suiteDirectory("suite-")
+  private var shared = Option.empty[Path]
+  private lazy val sharedFolder =
+    val path = suiteDirectory("suite-")
+    shared = Some(path)
+    path
 
   test("successful cleanup removes nested files and links without following links") {
     val outside = tempDirectory("outside-")
@@ -87,4 +91,4 @@ class TempDirectoriesSpec extends TempDirectorySuite:
 
   override def afterAll(): Unit =
     super.afterAll()
-    assert(!Files.exists(sharedFolder))
+    shared.foreach(path => assert(!Files.exists(path)))

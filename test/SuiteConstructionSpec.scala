@@ -10,7 +10,11 @@ class SuiteConstructionSpec extends munit.FunSuite:
       paths
         .iterator()
         .asScala
-        .filter(path => Files.isDirectory(path) && path.getFileName.toString.startsWith("desk-"))
+        .filter { path =>
+          val name = path.getFileName.toString
+          Files.isDirectory(path) &&
+          (name.startsWith("desk-live-readiness-") || name.startsWith("desk-suite-"))
+        }
         .toSet
     finally paths.close()
 
