@@ -30,6 +30,7 @@ final case class TradingView(
     else TradingView(current, message = "changing market", pending = true)
 
 object TradingWorker:
+  val ownerMismatchMessage: String = "Signer does not match the configured owner"
   val maximumReviewLifetimeMs: Long = 30000L
 
   def create(
@@ -444,17 +445,6 @@ final class TradingWorker private[desk] (
           synchronized { message = p.coin + " waiting for order result" }
 
   private def initializeSigning(): Unit =
-    if journal.isEmpty then
-      try
-        val opened = openJournal()
-        journal = Some(opened)
-        synchronized {
-          saved = opened.pending
-          if saved.nonEmpty then
-            busy.set(true)
-            message = saved.get.coin + " waiting for order result"
-        }
-      catch case _: Exception => storageFailure()
     if !accountPaused() && !synchronized(
         fatal || saved.nonEmpty || secret.nonEmpty
       )
@@ -514,9 +504,43 @@ final class TradingWorker private[desk] (
     }
 
   private def refresh(): Unit =
+    if enabled && !config.configured then
+      synchronized { message = "Configure owner and delegated signer" }
+      return
     val (current, g, version) = synchronized((coin, generation, accountVersion))
     val startedAt = monotonic()
     try
+      if enabled && !synchronized(fatal) && journal.isEmpty then
+        try
+          val opened = openJournal()
+          journal = Some(opened)
+          synchronized {
+            saved = opened.pending
+            if saved.nonEmpty then
+              busy.set(true)
+              message = saved.get.coin + " waiting for order result"
+          }
+        catch case _: Exception => storageFailure()
+      val unresolved = synchronized(
+        if !fatal && !executing.get() then saved else None
+      )
+      unresolved.foreach { p =>
+        val reply = exchange.info(
+          ujson.Obj(
+            "type" -> "orderStatus",
+            "user" -> config.owner.get,
+            "oid" -> p.id
+          )
+        )
+        Exchange
+          .recovered(
+            reply,
+            p,
+            wall(),
+            allowUnknown = synchronized(roleGeneration.contains(g) && fresh(roleAt, 60000L))
+          )
+          .foreach(text => complete(p, text))
+      }
       val cached = synchronized {
         metadata.filter(_ => fresh(metadataAt, 60000L)).filter(Exchange.validMetadata(_, current))
       }
@@ -537,7 +561,6 @@ final class TradingWorker private[desk] (
       require(matched.nonEmpty)
       if config.owner.nonEmpty then
         if enabled then
-          require(config.configured, "owner")
           if synchronized(!roleGeneration.contains(g) || !fresh(roleAt, 60000L))
           then
             if fresh(failedRoleAt, 10000L) then return
@@ -555,12 +578,16 @@ final class TradingWorker private[desk] (
               )
             catch
               case error: Exception =>
-                failedRoleAt = monotonic()
+                synchronized {
+                  failedRoleAt = monotonic()
+                }
                 throw error
             synchronized {
               if generation == g then
                 roleGeneration = Some(g)
                 roleAt = startedAt
+                if message == TradingWorker.ownerMismatchMessage then
+                  message = saved.fold("Preparing trading")(_.coin + " waiting for order result")
             }
           initializeSigning()
         exchange.watchTimed(
@@ -599,30 +626,15 @@ final class TradingWorker private[desk] (
             if message == "Preparing trading" && leverageReady && secret.nonEmpty
             then message = "Ready"
         }
-        val unresolved = synchronized(
-          if !fatal && !executing.get() then saved else None
-        )
-        unresolved.foreach { p =>
-          val reply = exchange.info(
-            ujson.Obj(
-              "type" -> "orderStatus",
-              "user" -> config.owner.get,
-              "oid" -> p.id
-            )
-          )
-          Exchange.recovered(reply, p, wall()).foreach(text => complete(p, text))
-        }
-      else if enabled then synchronized { message = "Configure owner and delegated signer" }
     catch
       case error: Exception =>
         synchronized {
           accountAt = Long.MinValue
           leverageReady = false
-          if !fatal && saved.isEmpty && !busy.get() then
-            message =
-              if Option(error.getMessage).exists(_.endsWith(": owner")) then
-                "Signer does not match the configured owner"
-              else "Waiting for market or account data"
+          if !fatal then
+            if Option(error.getMessage).exists(_.endsWith(": owner")) then
+              message = TradingWorker.ownerMismatchMessage
+            else if saved.isEmpty && !busy.get() then message = "Waiting for market or account data"
         }
 
   // Optional display reads run separately. Their failure or delay cannot hold
