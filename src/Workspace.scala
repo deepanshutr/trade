@@ -252,14 +252,19 @@ object Workspace:
           if value > 0 then " LONG" else if value < 0 then " SHORT" else " FLAT"
         )
       else ""
+      val usable = if live then view.usableMargin else None
+      val cashWidth = if usable.nonEmpty then (rightWidth - half) / 2 else rightWidth - half
+      val cashHeading = "Stables" + usable.fold("")(_ => " " * (cashWidth - 7) + "Usable")
+      val cashValues = amount(
+        view.portfolio.stables,
+        cashWidth - (if usable.nonEmpty then 1 else 0)
+      ).padTo(cashWidth, ' ') +
+        usable.fold("")(n => amount(Some(n), rightWidth - half - cashWidth))
       line(tradeTop, heading)
-      line(tradeTop + 1, (s.coin + direction).take(half - 2).padTo(half, ' ') + "Stables")
+      line(tradeTop + 1, (s.coin + direction).take(half - 2).padTo(half, ' ') + cashHeading)
       line(
         tradeTop + 2,
-        amount(view.portfolio.tokenValue, half - 1).padTo(half, ' ') + amount(
-          view.portfolio.stables,
-          rightWidth - half
-        )
+        amount(view.portfolio.tokenValue, half - 1).padTo(half, ' ') + cashValues
       )
       line(
         tradeTop + 3,

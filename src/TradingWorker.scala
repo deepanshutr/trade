@@ -21,7 +21,8 @@ final case class TradingView(
     marginMode: Option[String] = None,
     outcomeId: Long = 0L,
     portfolio: PortfolioView = PortfolioView(),
-    blockCode: BlockCode = BlockCode.Blocked
+    blockCode: BlockCode = BlockCode.Blocked,
+    usableMargin: Option[BigDecimal] = None
 ):
   def reference(side: Side): Option[BigDecimal] =
     if side == Side.Buy then ask else bid
@@ -124,6 +125,7 @@ final class TradingWorker private[desk] (
   private var roleAt = Long.MinValue
   private var failedRoleAt = Long.MinValue
   private var roleGeneration = Option.empty[Long]
+  private var usableMargin = Option.empty[BigDecimal]
   private var maximums = Vector(BigDecimal(0), BigDecimal(0))
   private var lastPlan = Option.empty[OrderPlan]
   private var message = if enabled then "Preparing trading" else "View only"
@@ -208,7 +210,8 @@ final class TradingWorker private[desk] (
           case _                                               => None
         })
       else PortfolioView(),
-      blockCode = block.fold(BlockCode.Blocked)(_.code)
+      blockCode = block.fold(BlockCode.Blocked)(_.code),
+      usableMargin = usableMargin.filter(_ => fresh(activeAt, config.positionAgeMs))
     )
   }
 
@@ -225,6 +228,7 @@ final class TradingWorker private[desk] (
       accountAt = Long.MinValue
       leverageReady = false
       activeAt = Long.MinValue
+      usableMargin = None
       roleGeneration = None
       lastPlan = None
       metadata = metadata.filter(Exchange.validMetadata(_, coin))
@@ -258,6 +262,7 @@ final class TradingWorker private[desk] (
         accountAt = Long.MinValue
         leverageReady = false
         activeAt = Long.MinValue
+        usableMargin = None
         roleGeneration = None
       case Event.BookUpdate(c, b, _) if c == coin =>
         val better = exact.forall { old =>
@@ -392,6 +397,7 @@ final class TradingWorker private[desk] (
         accountVersion += 1
         accountAt = Long.MinValue
         activeAt = Long.MinValue
+        usableMargin = None
         activeFloor = monotonic()
         balance = None
       }
@@ -490,21 +496,31 @@ final class TradingWorker private[desk] (
           else BigDecimal(v.num.toString)
         }
         require(limits.size == 2 && limits.forall(_ >= 0))
-        (mode, leverage, limits)
+        val available = Try {
+          val sides = active("availableToTrade").arr.toVector.map { v =>
+            if v.isInstanceOf[ujson.Str] then BigDecimal(v.str)
+            else BigDecimal(v.num.toString)
+          }
+          require(sides.size == 2 && sides.forall(_ >= 0))
+          sides.min
+        }.toOption
+        (mode, leverage, limits, available)
       }.toOption
     )
     synchronized {
       if generation == g && at >= activeFloor then
         parsed match
-          case Some((mode, leverage, limits)) =>
+          case Some((mode, leverage, limits, available)) =>
             activeMode = mode
             activeLeverage = leverage
             leverageReady = rules.exists(m => leverage >= 1 && leverage <= m.maxLeverage)
             maximums = limits
+            usableMargin = available
             activeAt = at
           case None =>
             leverageReady = false
             activeAt = Long.MinValue
+            usableMargin = None
     }
 
   private def refresh(): Unit =
