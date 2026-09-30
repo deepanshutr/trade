@@ -578,7 +578,10 @@ final class TradingWorker private[desk] (
               )
             catch
               case error: Exception =>
-                failedRoleAt = monotonic()
+                synchronized {
+                  roleAt = Long.MinValue
+                  failedRoleAt = monotonic()
+                }
                 throw error
             synchronized {
               if generation == g then

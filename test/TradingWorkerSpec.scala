@@ -440,6 +440,35 @@ class TradingWorkerSpec extends TempDirectorySuite:
     }
   }
 
+  test("a failed role check drops recent proof for releasing an unknown saved order") {
+    val f = new Fixture(autoStart = false)
+    try
+      val saved = saveAtStartup(f)
+      f.clock.set(saved.expiresAfter + 60001L)
+      f.lookupFailure = true
+      f.worker.start()
+      Wait.until("matching role did not refresh the account")(
+        f.roleReads.get() == 1 && f.worker.view.position.nonEmpty
+      )
+      f.roleMatches = false
+      f.worker.observe(Event.SocketDown)
+      f.fresh(f.worker, time = 2000L)
+      Wait.until("owner mismatch was not shown")(
+        f.worker.view.message == TradingWorker.ownerMismatchMessage
+      )
+      val reads = f.recoveryReads.get()
+      f.lookupFailure = false
+      Wait.until("unknown order lookup did not complete")(
+        f.recoveryReads.get() >= reads + 2 || f.worker.view.outcome.nonEmpty
+      )
+      assertEquals(f.openedJournal.pending, Some(saved))
+      assert(f.worker.view.pending)
+      assertEquals(f.worker.view.message, TradingWorker.ownerMismatchMessage)
+      assertEquals(f.worker.view.outcome, None)
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
+
   test("startup matching fill settles even when the role belongs to another owner") {
     val f = new Fixture(autoStart = false, roleMatches = false)
     try
