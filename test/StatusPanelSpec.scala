@@ -128,6 +128,45 @@ class StatusPanelSpec extends munit.FunSuite:
     )
   }
 
+  test("long connection details shrink before a warning constrained header overflows") {
+    val ctx = Ctx("400", "401", "0.0001", "210160.16", "31202156.16", "300", Some("312.452123"))
+    for (feed, bad, health) <- Vector(
+        (Health.Down(now - 604800000L, now - 604800000L), 1234, "connection disconnected"),
+        (Health.Live(now - 99999999000L), 999999, "connection stale")
+      )
+    do
+      val s = snapshot.copy(coin = "SOLANA", ctx = Some(ctx), feed = feed, bad = bad)
+      val frame = draw(
+        TradingView("SOLANA", message = "Ready", ready = true),
+        cols = 100,
+        rows = 30,
+        logsUnavailable = true,
+        orderResultsUnavailable = true,
+        s = s
+      )
+      val header = frame.lines.head.takeWhile(_ != '|')
+      assertEquals(frame.lines.map(_.length), Vector.fill(30)(100))
+      assert(header.contains("!logs") && header.contains("!results"), header)
+      assert(header.startsWith(health), header)
+      assert(header.contains("SOLANA") || header.contains("..."), header)
+      val expectedStats = Vector(
+        "mid 312.452123",
+        "mark 400",
+        "oracle 401",
+        "24h -100.0%",
+        "fund 0.0100%",
+        "open interest 210.2k",
+        "volume 31.2M"
+      )
+      val coin = if header.contains("SOLANA") then "SOLANA" else "..."
+      val stats = header
+        .drop(header.indexOf(coin) + coin.length)
+        .takeWhile(_ != '!')
+        .trim
+      val shownStats = if stats.isEmpty then Vector.empty else stats.split("  ").toVector
+      assert(shownStats.forall(expectedStats.contains), s"partial statistics field: $header")
+  }
+
   test("the coin remains visible in long and warning constrained headers") {
     val longName = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD"
     for (name, feed, bad) <- Vector(
@@ -156,14 +195,16 @@ class StatusPanelSpec extends munit.FunSuite:
 
   test("a market prompt stays visible when status and warnings leave little room") {
     val s = snapshot.copy(
-      prompt = Some("ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+      prompt = Some("SOLANA"),
       feed = Health.Live(now - 86_400_000L),
       bad = 12
     )
+    assert(Screen.stats(s, now, 46).contains("market: "), Screen.stats(s, now, 46))
     val header = draw(
       TradingView("XMR", message = "Ready", ready = true),
       cols = Layout.minCols,
       logsUnavailable = true,
+      orderResultsUnavailable = true,
       s = s
     ).lines.head.takeWhile(_ != '|')
     assert(header.contains("market: "), header)

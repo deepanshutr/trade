@@ -32,8 +32,15 @@ object Screen:
       case _ if age > 5      => "stale"
       case _                 => "active"
     val bad = if s.bad > 0 then s" bad ${s.bad}" else ""
-    val status = f"connection $health $age%.1fs$bad"
+    val fullStatus = f"connection $health $age%.1fs$bad"
+    val statusWithoutBad = f"connection $health $age%.1fs"
+    val shortestStatus = s"connection $health"
+    val statuses = Vector(fullStatus, statusWithoutBad, shortestStatus)
     val promptRoom = if s.prompt.nonEmpty then 24 else 0
+    val required = 2 + 3 + (if s.prompt.nonEmpty then 11 else 0)
+    val status = statuses.find(_.length + required <= cols).getOrElse {
+      shortestStatus.take((cols - required).max(0))
+    }
     val marketWidth = (cols - status.length - 2 - promptRoom).min(Layout.marketLabelWidth).max(3)
     val coin = if s.coin.length <= marketWidth then s.coin else s.coin.take(marketWidth - 3) + "..."
     val prefix = status + "  " + coin
@@ -41,7 +48,10 @@ object Screen:
     val fields = s.prompt match
       case Some(p) =>
         val width = (cols - prefix.length - 11).max(0)
-        val shown = if p.length <= width then p else "..." + p.takeRight((width - 3).max(0))
+        val shown =
+          if p.length <= width then p
+          else if width >= 3 then "..." + p.takeRight(width - 3)
+          else p.takeRight(width)
         Vector(s"market: ${shown}_")
       case None =>
         Vector(
