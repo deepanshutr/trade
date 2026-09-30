@@ -2,10 +2,15 @@ package desk
 
 import java.nio.file.Path
 import java.util.concurrent.{CountDownLatch, LinkedBlockingQueue, TimeUnit}
-import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
+import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import scala.util.Try
 
 object WorkspaceApp:
+  private[desk] final case class OrderResultHandling(
+      handle: (Long, String) => Unit,
+      unavailable: () => Boolean
+  )
+
   private[desk] final class Restoration(closeAll: () => Unit, terminal: () => Unit):
     @volatile private var restored = false
     @volatile private var restoreOwner: Thread = null
@@ -50,11 +55,14 @@ object WorkspaceApp:
   private[desk] def orderResultHandler(
       writer: OrderResultLog.Writer,
       diagnostics: Diagnostics,
-      reportNotice: Long => Unit,
-      markUnavailable: () => Unit
-  ): (Long, String) => Unit =
-    val failed = orderResultFailureHandler(diagnostics, reportNotice, markUnavailable)
-    (number, text) => writer.append(text, error => failed(number, error))
+      reportNotice: Long => Unit
+  ): OrderResultHandling =
+    val unavailable = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val failed = orderResultFailureHandler(diagnostics, reportNotice, () => unavailable.set(true))
+    OrderResultHandling(
+      (number, text) => writer.append(text, error => failed(number, error)),
+      () => unavailable.get()
+    )
 
   private[desk] def closeAll(
       outlook: AutoCloseable,
@@ -281,10 +289,14 @@ object WorkspaceApp:
       val routed: MarketFeed =
         onchain.fold[MarketFeed](feed)(o => new CompositeFeed(feed, o, () => state.get().coin))
       val announcements = Main.announcements(args, NativeAnnouncementOutput.create())
-      val orderResultsUnavailable = new AtomicBoolean(false)
-      lazy val results: OrderResultLog.Writer = new OrderResultLog.Writer(
+      val results: OrderResultLog.Writer = new OrderResultLog.Writer(
         text => OrderResultLog.append(directory, now(), text),
         error => diagnostics.failure(DiagnosticPart.OrderResults, error)
+      )
+      lazy val orderResults = orderResultHandler(
+        results,
+        diagnostics,
+        number => controller.orderResultNotSaved(number)
       )
       lazy val controller: DeskController = new DeskController(
         PanelView(
@@ -297,12 +309,7 @@ object WorkspaceApp:
         worker.submitReviewed,
         worker.switchMode,
         announcements.setMuted,
-        orderResultHandler(
-          results,
-          diagnostics,
-          controller.orderResultNotSaved,
-          () => orderResultsUnavailable.set(true)
-        )
+        orderResults.handle
       )
       val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
       val alerts = new AlertPolicy
@@ -464,7 +471,7 @@ object WorkspaceApp:
               style,
               outlook,
               diagnostics.status.nonEmpty,
-              orderResultsUnavailable.get()
+              orderResults.unavailable()
             )
           diagnostics.slow(DiagnosticPart.Build, System.nanoTime() - building)
           val waiting = System.nanoTime()

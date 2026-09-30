@@ -10,10 +10,11 @@ class StatusPanelSpec extends munit.FunSuite:
       cols: Int = 100,
       rows: Int = 30,
       logsUnavailable: Boolean = false,
-      orderResultsUnavailable: Boolean = false
+      orderResultsUnavailable: Boolean = false,
+      s: Snapshot = snapshot
   ): WorkspaceFrame =
     Workspace.draw(
-      snapshot,
+      s,
       view,
       p,
       cols,
@@ -62,6 +63,35 @@ class StatusPanelSpec extends munit.FunSuite:
       assert(frame.lines.head.contains("!logs"))
       assert(frame.lines.forall(_.length == cols))
       assert(frame.lines.exists(_.contains("Bought")))
+  }
+
+  test("header warnings leave whole snapshot fields visible") {
+    val ctx = Ctx("400", "401", "0.0001", "210160.16", "31202156.16", "300", Some("312.452123"))
+    val s = snapshot.copy(
+      ctx = Some(ctx),
+      feed = Health.Live(now - 9_876_500L)
+    )
+    val blocked = TradingView("XMR", message = "Ready", ready = true)
+    val both = draw(
+      blocked,
+      cols = 100,
+      logsUnavailable = true,
+      orderResultsUnavailable = true,
+      s = s
+    )
+    val bothHeader = both.lines.head.takeWhile(_ != '|')
+    assert(bothHeader.contains("!logs") && bothHeader.contains("!results"), bothHeader)
+    assert(bothHeader.contains("connection stale 9876.5s"), bothHeader)
+    assert(bothHeader.contains("mid 312.452123"), bothHeader)
+
+    val logsOnly = draw(blocked, logsUnavailable = true, s = snapshot.copy(ctx = Some(ctx)))
+    val logsHeader = logsOnly.lines.head.takeWhile(_ != '|')
+    assert(logsHeader.contains("!logs"), logsHeader)
+    assert(!logsHeader.contains("24h +4") || logsHeader.contains("24h +4.2%"), logsHeader)
+
+    val noWarnings = draw(blocked, s = snapshot.copy(ctx = Some(ctx)))
+    val plainHeader = noWarnings.lines.head.takeWhile(_ != '|')
+    assert(plainHeader.contains("mid 312.452123"), plainHeader)
   }
 
   private def failingReceipt(receipt: String): (DeskController, OrderResultLog.Writer) =
@@ -155,6 +185,19 @@ class StatusPanelSpec extends munit.FunSuite:
 
     val healthy = draw(TradingView("XMR", message = "Ready", ready = true), panel)
     assert(!healthy.lines.head.contains("!results"), healthy.lines.head)
+  }
+
+  test("an unsaved notice does not change a block status line") {
+    val view = TradingView(
+      "XMR",
+      message = "Trading stopped",
+      block = Some("Trading stopped\nextra detail"),
+      blockCode = BlockCode.Blocked
+    )
+    val failed = panel.copy(actionNotice = Some("Order result #7 not saved"), actionNumber = 7)
+    val frame = draw(view, failed)
+    assert(frame.lines.exists(_.contains("Trading stopped #7")), frame.lines.mkString("\n"))
+    assert(!frame.lines.exists(_.contains("extra detail")), frame.lines.mkString("\n"))
   }
 
   test("a failed earlier order keeps its number after a newer order notice") {

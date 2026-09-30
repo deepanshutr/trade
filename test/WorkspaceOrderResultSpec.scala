@@ -3,7 +3,6 @@ package desk
 class WorkspaceOrderResultSpec extends TempDirectorySuite:
   test("order result writer failure reaches diagnostics and the controller notice") {
     val records = new java.util.concurrent.CopyOnWriteArrayList[String]()
-    val marked = new java.util.concurrent.atomic.AtomicBoolean(false)
     val reported = new java.util.concurrent.CountDownLatch(1)
     val diagnostics = new Diagnostics(
       () =>
@@ -28,18 +27,17 @@ class WorkspaceOrderResultSpec extends TempDirectorySuite:
     val handle = WorkspaceApp.orderResultHandler(
       writer,
       diagnostics,
-      number => { controller.orderResultNotSaved(number); reported.countDown() },
-      () => marked.set(true)
+      number => { controller.orderResultNotSaved(number); reported.countDown() }
     )
     diagnostics.start()
     try
-      handle(1, "order result")
+      handle.handle(1, "order result")
       assert(reported.await(2, java.util.concurrent.TimeUnit.SECONDS))
     finally
       writer.close()
       diagnostics.close()
     assertEquals(controller.panel.actionNotice, Some("Order result #1 not saved"))
-    assert(marked.get())
+    assert(handle.unavailable())
     val failures = records.toArray.toVector
       .map(_.toString)
       .map(ujson.read(_))
