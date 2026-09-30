@@ -375,6 +375,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
           )
           assertEquals(f.openedJournal.pending, Some(saved))
           assert(f.worker.view.pending)
+          assertEquals(f.worker.view.message, "Signer does not match the configured owner")
           assertEquals(f.worker.view.outcome, None)
         assertEquals(f.posts.get(), 0)
       finally f.close()

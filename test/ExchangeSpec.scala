@@ -67,27 +67,36 @@ class ExchangeSpec extends munit.FunSuite:
       )
     )
     assertEquals(
-      Exchange.recovered(Some(status("canceled")), saved, 66001L),
+      Exchange.recovered(Some(status("canceled")), saved, 66001L, allowUnknown = true),
       Some("XMR recovered canceled")
     )
-    assertEquals(Exchange.recovered(Some(status("futureStatus")), saved, 66001L), None)
-    assertEquals(Exchange.recovered(Some(status("open")), saved, 66001L), None)
-    assertEquals(Exchange.recovered(Some(status("filled", "wrong")), saved, 66001L), None)
     assertEquals(
-      Exchange.recovered(Some(status("filled")), saved, 66001L),
+      Exchange.recovered(Some(status("futureStatus")), saved, 66001L, allowUnknown = true),
+      None
+    )
+    assertEquals(Exchange.recovered(Some(status("open")), saved, 66001L, allowUnknown = true), None)
+    assertEquals(
+      Exchange.recovered(Some(status("filled", "wrong")), saved, 66001L, allowUnknown = true),
+      None
+    )
+    assertEquals(
+      Exchange.recovered(Some(status("filled")), saved, 66001L, allowUnknown = true),
       Some("XMR recovered filled")
     )
     assertEquals(
-      Exchange.recovered(Some(status("iocCancelRejected")), saved, 66001L),
+      Exchange.recovered(Some(status("iocCancelRejected")), saved, 66001L, allowUnknown = true),
       Some("XMR recovered iocCancelRejected")
     )
   }
 
   test("unknownOid releases only strictly past signed expiry plus sixty seconds") {
     val unknown = Some(ujson.Obj("status" -> "unknownOid"))
-    assertEquals(Exchange.recovered(unknown, saved, 65999L), None)
-    assertEquals(Exchange.recovered(unknown, saved, 66000L), None)
-    assertEquals(Exchange.recovered(unknown, saved, 66001L), Some("XMR not placed"))
+    assertEquals(Exchange.recovered(unknown, saved, 65999L, allowUnknown = true), None)
+    assertEquals(Exchange.recovered(unknown, saved, 66000L, allowUnknown = true), None)
+    assertEquals(
+      Exchange.recovered(unknown, saved, 66001L, allowUnknown = true),
+      Some("XMR not placed")
+    )
   }
 
   test("failed and malformed lookups never release after expiry") {
@@ -97,7 +106,7 @@ class ExchangeSpec extends munit.FunSuite:
       Some(ujson.Str("unknownOid")),
       Some(ujson.Obj("status" -> "err"))
     ).foreach { reply =>
-      assertEquals(Exchange.recovered(reply, saved, 66001L), None)
+      assertEquals(Exchange.recovered(reply, saved, 66001L, allowUnknown = true), None)
     }
   }
 
@@ -126,7 +135,7 @@ class ExchangeSpec extends munit.FunSuite:
       assertEquals(post, None)
       assertEquals(lookup, None)
       assertEquals(Exchange.outcome(post, saved), None)
-      assertEquals(Exchange.recovered(lookup, saved, 66001L), None)
+      assertEquals(Exchange.recovered(lookup, saved, 66001L, allowUnknown = true), None)
     try
       val refusal = """{"status":"err","response":"x"}"""
       val unknown = """{"status":"unknownOid"}"""
@@ -192,7 +201,8 @@ class ExchangeSpec extends munit.FunSuite:
         )
       ),
       saved,
-      66001L
+      66001L,
+      allowUnknown = true
     )
 
   test(

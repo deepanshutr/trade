@@ -445,7 +445,7 @@ object Exchange:
       reply: Option[ujson.Value],
       saved: SavedOrder,
       now: Long,
-      allowUnknown: Boolean = true
+      allowUnknown: Boolean
   ): Option[String] =
     if allowUnknown && status(reply).contains("unknownOid") &&
       BigInt(now) > BigInt(saved.expiresAfter) + ExpiryMarginMs

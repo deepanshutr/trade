@@ -556,7 +556,6 @@ final class TradingWorker private[desk] (
       require(matched.nonEmpty)
       if config.owner.nonEmpty then
         if enabled then
-          require(config.configured, "owner")
           if synchronized(!roleGeneration.contains(g) || !fresh(roleAt, 60000L))
           then
             if fresh(failedRoleAt, 10000L) then return
@@ -618,17 +617,15 @@ final class TradingWorker private[desk] (
             if message == "Preparing trading" && leverageReady && secret.nonEmpty
             then message = "Ready"
         }
-      else if enabled then synchronized { message = "Configure owner and delegated signer" }
     catch
       case error: Exception =>
         synchronized {
           accountAt = Long.MinValue
           leverageReady = false
-          if !fatal && saved.isEmpty && !busy.get() then
-            message =
-              if Option(error.getMessage).exists(_.endsWith(": owner")) then
-                "Signer does not match the configured owner"
-              else "Waiting for market or account data"
+          if !fatal then
+            if Option(error.getMessage).exists(_.endsWith(": owner")) then
+              message = "Signer does not match the configured owner"
+            else if saved.isEmpty && !busy.get() then message = "Waiting for market or account data"
         }
 
   // Optional display reads run separately. Their failure or delay cannot hold
