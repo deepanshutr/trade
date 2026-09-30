@@ -4,7 +4,7 @@ import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
 class LiveReadinessAuditSpec extends TempDirectorySuite:
-  private val root = suiteDirectory("desk-live-readiness-")
+  private lazy val root = suiteDirectory("desk-live-readiness-")
   private val metadata = ujson.Obj(
     "universe" -> ujson.Arr(
       ujson.Obj("name" -> "XMR", "szDecimals" -> 3, "maxLeverage" -> 5)
