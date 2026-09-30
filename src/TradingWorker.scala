@@ -503,6 +503,9 @@ final class TradingWorker private[desk] (
     }
 
   private def refresh(): Unit =
+    if enabled && !config.configured then
+      synchronized { message = "Configure owner and delegated signer" }
+      return
     val (current, g, version) = synchronized((coin, generation, accountVersion))
     val startedAt = monotonic()
     try
@@ -529,7 +532,9 @@ final class TradingWorker private[desk] (
               "oid" -> p.id
             )
           )
-          Exchange.recovered(reply, p, wall()).foreach(text => complete(p, text))
+          Exchange
+            .recovered(reply, p, wall(), allowUnknown = synchronized(roleAt != Long.MinValue))
+            .foreach(text => complete(p, text))
         }
       val cached = synchronized {
         metadata.filter(_ => fresh(metadataAt, 60000L)).filter(Exchange.validMetadata(_, current))

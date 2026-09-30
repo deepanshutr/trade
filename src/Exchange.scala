@@ -441,8 +441,13 @@ object Exchange:
       }.toOption
     )
 
-  def recovered(reply: Option[ujson.Value], saved: SavedOrder, now: Long): Option[String] =
-    if status(reply).contains("unknownOid") &&
+  def recovered(
+      reply: Option[ujson.Value],
+      saved: SavedOrder,
+      now: Long,
+      allowUnknown: Boolean = true
+  ): Option[String] =
+    if allowUnknown && status(reply).contains("unknownOid") &&
       BigInt(now) > BigInt(saved.expiresAfter) + ExpiryMarginMs
     then return Some(saved.coin + " not placed")
     reply.flatMap(j =>
