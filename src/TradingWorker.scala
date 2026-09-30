@@ -228,7 +228,6 @@ final class TradingWorker private[desk] (
       accountAt = Long.MinValue
       leverageReady = false
       activeAt = Long.MinValue
-      usableMargin = None
       roleGeneration = None
       lastPlan = None
       metadata = metadata.filter(Exchange.validMetadata(_, coin))
@@ -262,7 +261,6 @@ final class TradingWorker private[desk] (
         accountAt = Long.MinValue
         leverageReady = false
         activeAt = Long.MinValue
-        usableMargin = None
         roleGeneration = None
       case Event.BookUpdate(c, b, _) if c == coin =>
         val better = exact.forall { old =>
@@ -397,7 +395,6 @@ final class TradingWorker private[desk] (
         accountVersion += 1
         accountAt = Long.MinValue
         activeAt = Long.MinValue
-        usableMargin = None
         activeFloor = monotonic()
         balance = None
       }
@@ -520,7 +517,6 @@ final class TradingWorker private[desk] (
           case None =>
             leverageReady = false
             activeAt = Long.MinValue
-            usableMargin = None
     }
 
   private def refresh(): Unit =
