@@ -537,7 +537,7 @@ final class TradingWorker private[desk] (
             reply,
             p,
             wall(),
-            allowUnknown = synchronized(fresh(roleAt, 60000L))
+            allowUnknown = synchronized(roleGeneration.contains(g) && fresh(roleAt, 60000L))
           )
           .foreach(text => complete(p, text))
       }
@@ -579,7 +579,6 @@ final class TradingWorker private[desk] (
             catch
               case error: Exception =>
                 synchronized {
-                  roleAt = Long.MinValue
                   failedRoleAt = monotonic()
                 }
                 throw error

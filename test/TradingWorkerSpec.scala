@@ -440,6 +440,31 @@ class TradingWorkerSpec extends TempDirectorySuite:
     }
   }
 
+  test("an unknown saved order stays saved before a failed role check on a new connection") {
+    val f = new Fixture(autoStart = false)
+    try
+      val saved = saveAtStartup(f)
+      f.clock.set(saved.expiresAfter + 60001L)
+      f.lookupFailure = true
+      f.worker.start()
+      Wait.until("matching role did not refresh the account")(
+        f.roleReads.get() == 1 && f.worker.view.position.nonEmpty
+      )
+      f.roleMatches = false
+      f.worker.observe(Event.SocketDown)
+      f.lookupFailure = false
+      f.fresh(f.worker, time = 2000L)
+      Wait.until("owner mismatch was not shown")(
+        f.worker.view.message == TradingWorker.ownerMismatchMessage
+      )
+      assertEquals(f.roleReads.get(), 2)
+      assertEquals(f.openedJournal.pending, Some(saved))
+      assert(f.worker.view.pending)
+      assertEquals(f.worker.view.outcome, None)
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
+
   test("a failed role check drops recent proof for releasing an unknown saved order") {
     val f = new Fixture(autoStart = false)
     try
