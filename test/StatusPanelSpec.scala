@@ -94,6 +94,81 @@ class StatusPanelSpec extends munit.FunSuite:
     assert(plainHeader.contains("mid 312.452123"), plainHeader)
   }
 
+  test("the smallest workspace keeps every shown header field whole beside both warnings") {
+    val ctx = Ctx("400", "401", "0.0001", "210160.16", "31202156.16", "300", Some("312.452123"))
+    val name = "X"
+    val s = snapshot.copy(coin = name, ctx = Some(ctx), feed = Health.Live(now))
+    val frame = draw(
+      TradingView("XMR", message = "Ready", ready = true),
+      cols = Layout.minCols,
+      logsUnavailable = true,
+      orderResultsUnavailable = true,
+      s = s
+    )
+    val header = frame.lines.head.takeWhile(_ != '|')
+    val expected = Vector(
+      "mid " + Trading.display(BigDecimal("312.452123"), 12),
+      "mark 400",
+      "oracle 401",
+      "24h -100.0%",
+      "fund 0.0100%",
+      "open interest 210.2k",
+      "volume 31.2M"
+    )
+    assert(header.contains("!logs") && header.contains("!results"), header)
+    assert(header.contains("connection active 0.0s"), header)
+    assert(header.contains(name), header)
+    val withoutWarnings = header.takeWhile(_ != '!').trim
+    val stats = withoutWarnings.drop(withoutWarnings.indexOf(name) + name.length).trim
+    val shown = if stats.isEmpty then Vector.empty else stats.split("  ").toVector
+    assert(shown.forall(expected.contains), s"cut or partial statistics field in: $header")
+    assert(
+      shown == Vector(expected(0)),
+      s"expected only the complete mid before the next field: $header"
+    )
+  }
+
+  test("the coin remains visible in long and warning constrained headers") {
+    val longName = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD"
+    for (name, feed, bad) <- Vector(
+        (longName, Health.Live(now), 0),
+        ("ABCDEFGHIJKLMNOPQRST", Health.Live(now - 86_400_000L), 12)
+      )
+    do
+      val s = snapshot.copy(coin = name, feed = feed, bad = bad)
+      val header = draw(
+        TradingView(name, message = "Ready", ready = true),
+        cols = Layout.minCols,
+        logsUnavailable = true,
+        orderResultsUnavailable = true,
+        s = s
+      ).lines.head.takeWhile(_ != '|')
+      val age = (now - State.lastMsgAt(feed)).max(0L) / 1000.0
+      val health = if age > 5 then "stale" else "active"
+      val badText = if bad > 0 then s" bad $bad" else ""
+      val status = f"connection $health $age%.1fs$badText"
+      val headerWidth = Layout.workspaceChartWidth(Layout.minCols) - 15
+      val marketWidth = (headerWidth - status.length - 2).min(Layout.marketLabelWidth).max(3)
+      val shortened =
+        if name.length <= marketWidth then name else name.take(marketWidth - 3) + "..."
+      assert(header.contains(name) || header.contains(shortened), header)
+  }
+
+  test("a market prompt stays visible when status and warnings leave little room") {
+    val s = snapshot.copy(
+      prompt = Some("ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+      feed = Health.Live(now - 86_400_000L),
+      bad = 12
+    )
+    val header = draw(
+      TradingView("XMR", message = "Ready", ready = true),
+      cols = Layout.minCols,
+      logsUnavailable = true,
+      s = s
+    ).lines.head.takeWhile(_ != '|')
+    assert(header.contains("market: "), header)
+  }
+
   private def failingReceipt(receipt: String): (DeskController, OrderResultLog.Writer) =
     val failed = new java.util.concurrent.CountDownLatch(1)
     lazy val controller: DeskController = new DeskController(

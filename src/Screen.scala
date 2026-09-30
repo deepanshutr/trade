@@ -35,18 +35,17 @@ object Screen:
     val status = f"connection $health $age%.1fs$bad"
     val promptRoom = if s.prompt.nonEmpty then 24 else 0
     val marketWidth = (cols - status.length - 2 - promptRoom).min(Layout.marketLabelWidth).max(3)
-    val coin =
-      if s.prompt.nonEmpty && s.coin.length > marketWidth then s.coin.take(marketWidth - 3) + "..."
-      else s.coin
+    val coin = if s.coin.length <= marketWidth then s.coin else s.coin.take(marketWidth - 3) + "..."
+    val prefix = status + "  " + coin
     val mid = s.book.flatMap(midOf).orElse(s.ctx.flatMap(_.mid))
     val fields = s.prompt match
       case Some(p) =>
-        val width = (cols - status.length - coin.length - 13).max(0)
+        val width = (cols - prefix.length - 11).max(0)
         val shown = if p.length <= width then p else "..." + p.takeRight((width - 3).max(0))
         Vector(s"market: ${shown}_")
       case None =>
         Vector(
-          "mid " + mid.map(v => Trading.displayExact(BigDecimal(v))).getOrElse("unavailable")
+          "mid " + mid.map(v => Trading.display(BigDecimal(v), 12)).getOrElse("unavailable")
         ) ++
           s.ctx.toVector.flatMap { c =>
             val pct = mid.map(m => (m.toDouble / c.prevDayPx.toDouble - 1) * 100).getOrElse(0.0)
@@ -59,11 +58,9 @@ object Screen:
               "volume " + short(c.dayVolume.toDouble)
             )
           }
-    (Vector(status, coin) ++ fields)
-      .foldLeft(("", true)) { case ((line, open), field) =>
-        val separator = if line.isEmpty then "" else "  "
-        if open && line.length + separator.length + field.length <= cols then
-          (line + separator + field, true)
+    fields
+      .foldLeft((prefix, true)) { case ((line, open), field) =>
+        if open && line.length + field.length + 2 <= cols then (line + "  " + field, true)
         else (line, false)
       }
       ._1
