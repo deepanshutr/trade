@@ -30,6 +30,7 @@ final case class TradingView(
     else TradingView(current, message = "changing market", pending = true)
 
 object TradingWorker:
+  val ownerMismatchMessage: String = "Signer does not match the configured owner"
   val maximumReviewLifetimeMs: Long = 30000L
 
   def create(
@@ -520,22 +521,26 @@ final class TradingWorker private[desk] (
               message = saved.get.coin + " waiting for order result"
           }
         catch case _: Exception => storageFailure()
-      if config.owner.nonEmpty then
-        val unresolved = synchronized(
-          if !fatal && !executing.get() then saved else None
-        )
-        unresolved.foreach { p =>
-          val reply = exchange.info(
-            ujson.Obj(
-              "type" -> "orderStatus",
-              "user" -> config.owner.get,
-              "oid" -> p.id
-            )
+      val unresolved = synchronized(
+        if !fatal && !executing.get() then saved else None
+      )
+      unresolved.foreach { p =>
+        val reply = exchange.info(
+          ujson.Obj(
+            "type" -> "orderStatus",
+            "user" -> config.owner.get,
+            "oid" -> p.id
           )
-          Exchange
-            .recovered(reply, p, wall(), allowUnknown = synchronized(roleAt != Long.MinValue))
-            .foreach(text => complete(p, text))
-        }
+        )
+        Exchange
+          .recovered(
+            reply,
+            p,
+            wall(),
+            allowUnknown = synchronized(roleGeneration.nonEmpty && fresh(roleAt, 60000L))
+          )
+          .foreach(text => complete(p, text))
+      }
       val cached = synchronized {
         metadata.filter(_ => fresh(metadataAt, 60000L)).filter(Exchange.validMetadata(_, current))
       }
@@ -579,6 +584,8 @@ final class TradingWorker private[desk] (
               if generation == g then
                 roleGeneration = Some(g)
                 roleAt = startedAt
+                if message == TradingWorker.ownerMismatchMessage then
+                  message = saved.fold("Preparing trading")(_.coin + " waiting for order result")
             }
           initializeSigning()
         exchange.watchTimed(
@@ -624,7 +631,7 @@ final class TradingWorker private[desk] (
           leverageReady = false
           if !fatal then
             if Option(error.getMessage).exists(_.endsWith(": owner")) then
-              message = "Signer does not match the configured owner"
+              message = TradingWorker.ownerMismatchMessage
             else if saved.isEmpty && !busy.get() then message = "Waiting for market or account data"
         }
 

@@ -6,7 +6,7 @@ class WorkspaceSpec extends munit.FunSuite:
   private val view = TradingView("XMR", message = "View only")
 
   test("pending owner mismatch is visible at the smallest workspace size") {
-    val message = "Signer does not match the configured owner"
+    val message = TradingWorker.ownerMismatchMessage
     val frame = Workspace.draw(
       s,
       view.copy(pending = true, message = message),

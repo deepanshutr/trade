@@ -140,10 +140,10 @@ object Workspace:
       else if view.pending then
         val stage = "(?i).*\\b(queued|checking|saving) (\\d+s).*".r
         raw match
-          case "Signer does not match the configured owner" => raw
-          case stage(name, age)                             => name.capitalize + " " + age
-          case _ if lower.contains("result")                => "Confirming result"
-          case _                                            => "Sending"
+          case TradingWorker.ownerMismatchMessage => raw
+          case stage(name, age)                   => name.capitalize + " " + age
+          case _ if lower.contains("result")      => "Confirming result"
+          case _                                  => "Sending"
       else if lower.contains("partial") then "Part filled"
       else if lower.contains(" filled ") then
         if lower.contains(" buy ") then "Bought"

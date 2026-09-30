@@ -352,7 +352,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.worker.observe(Event.SocketDown)
       f.fresh(f.worker, time = 2000L)
       Wait.until("owner mismatch was not shown")(
-        f.worker.view.message == "Signer does not match the configured owner"
+        f.worker.view.message == TradingWorker.ownerMismatchMessage
       )
       f.roleMatches = true
       f.position = "1"
@@ -361,6 +361,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
       Wait.until("account did not refresh after the role matched")(
         f.worker.view.position.contains(BigDecimal(1)) && f.worker.view.block.isEmpty
       )
+      assertNotEquals(f.worker.view.message, TradingWorker.ownerMismatchMessage)
+      assertEquals(f.worker.view.message, "XMR waiting for order result")
       assertEquals(f.openedJournal.pending, saved)
       assert(f.worker.view.pending)
       val before = writes.get()
@@ -412,7 +414,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
           )
           assertEquals(f.openedJournal.pending, Some(saved))
           assert(f.worker.view.pending)
-          assertEquals(f.worker.view.message, "Signer does not match the configured owner")
+          assertEquals(f.worker.view.message, TradingWorker.ownerMismatchMessage)
           assertEquals(f.worker.view.outcome, None)
         assertEquals(f.posts.get(), 0)
       finally f.close()
@@ -898,6 +900,32 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assertEquals(f.openedJournal.pending, None)
       assertEquals(f.orderPosts.get(), 1)
       assert(f.worker.view.outcome.contains("XMR not placed"))
+    finally f.close()
+  }
+
+  test("an expired unknown order stays saved after a successful role check goes stale") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.lose = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("lookup missing")(f.recoveryReads.get() > 0)
+      val saved = f.openedJournal.pending.get
+      val roles = f.roleReads.get()
+      f.roleMatches = false
+      f.clock.set(saved.expiresAfter + 60001L)
+      Wait.until("stale role was not checked again")(
+        f.roleReads.get() > roles &&
+          f.worker.view.message == TradingWorker.ownerMismatchMessage
+      )
+      val reads = f.recoveryReads.get()
+      Wait.until("unknown lookup after failed role check not completed")(
+        f.recoveryReads.get() > reads + 1
+      )
+      assertEquals(f.openedJournal.pending, Some(saved))
+      assert(f.worker.view.pending)
+      assertEquals(f.worker.view.outcome, None)
+      assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }
 
