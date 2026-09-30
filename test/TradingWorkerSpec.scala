@@ -96,6 +96,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     @volatile var holdRecovery = false
     @volatile var recoverFilled = false
     @volatile var publishActive = true
+    @volatile var maximums = Vector("100", "100")
     @volatile var activeCoin = "XMR"
     @volatile var activeReceive: Option[ujson.Value] => Unit = _ => ()
     def sendActive(): Unit = activeReceive(
@@ -104,7 +105,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
           "user" -> owner,
           "coin" -> activeCoin,
           "leverage" -> ujson.Obj("type" -> activeMode, "value" -> leverage),
-          "maxTradeSzs" -> ujson.Arr("100", "100")
+          "maxTradeSzs" -> ujson.Arr.from(maximums)
         )
       )
     )
@@ -335,6 +336,54 @@ class TradingWorkerSpec extends TempDirectorySuite:
       worker.close()
 
   private val buy = OrderIntent(Side.Buy, OrderKind.Hard)
+
+  private def completeWithoutActive(f: Fixture): Unit =
+    f.ready()
+    f.publishActive = false
+    assert(f.worker.submit(buy, "XMR"))
+    Wait.until("completion and fresh account snapshot missing")(!f.worker.view.pending)
+    assertEquals(
+      f.worker.view.outcome,
+      Some(if f.reject then "XMR order rejected" else "XMR filled 1 at 100")
+    )
+
+  test("a fill needs new active data even after a fresh account snapshot") {
+    val f = new Fixture()
+    try
+      completeWithoutActive(f)
+      assert(!f.worker.view.ready)
+    finally f.close()
+  }
+
+  test("renewed active data restores readiness and replaces pre-fill maximums") {
+    val f = new Fixture()
+    try
+      completeWithoutActive(f)
+      assert(!f.worker.view.ready)
+      f.maximums = Vector("0", "100")
+      f.sendActive()
+      f.ready()
+      assert(!f.worker.submit(buy, "XMR"))
+      assertEquals(f.worker.view.message, "Requested quantity exceeds confirmed account capacity")
+      assertEquals(f.orderPosts.get(), 1)
+      assert(f.worker.submit(buy.copy(side = Side.Sell), "XMR"))
+      Wait.until("renewed sell capacity was not used")(f.orderPosts.get() == 2)
+    finally f.close()
+  }
+
+  test("a rejected order resumes after unchanged active data is renewed") {
+    val f = new Fixture()
+    try
+      f.reject = true
+      completeWithoutActive(f)
+      assert(!f.worker.view.ready)
+      assertEquals(f.worker.view.position, Some(BigDecimal(0)))
+      f.sendActive()
+      f.ready()
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("order after rejection did not reach the exchange")(f.orderPosts.get() == 2)
+    finally f.close()
+  }
 
   test("an owner mismatch clears after the role matches with no saved order") {
     val f = new Fixture(roleMatches = false)

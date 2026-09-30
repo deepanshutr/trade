@@ -389,6 +389,7 @@ final class TradingWorker private[desk] (
         waitingRefresh = true
         accountVersion += 1
         accountAt = Long.MinValue
+        activeAt = Long.MinValue
         balance = None
       }
       wakeAccount()
