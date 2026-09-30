@@ -21,6 +21,24 @@ class OutlookWorkerSpec extends munit.FunSuite:
     quote(Snapshot.initial("XMR", now).copy(candles = Map("5m" -> bars)), bars.last.c, now)
   private def short(view: OutlookView): HorizonOutlook = view.columns.last
 
+  test("calculation and cached refresh retain the requested coin across market switches") {
+    var market = initial
+    var shown = Outlook.empty("")
+    val worker = new OutlookWorker(() => market, () => now, value => shown = value)
+    try
+      for
+        coin <- Vector("XMR", "BTC", "PAXG", "XMR", "")
+        history <- Vector(Map.empty[String, Vector[Candle]], initial.candles)
+      do
+        market = initial.copy(coin = coin, candles = history)
+        assertEquals(Outlook.compute(market, now).coin, coin)
+        worker.refresh()
+        assertEquals(shown.coin, coin)
+        worker.refresh()
+        assertEquals(shown.coin, coin)
+    finally worker.close()
+  }
+
   test("unchanged closed history is cached while an older repair recomputes the rates") {
     var market = initial
     var time = now
