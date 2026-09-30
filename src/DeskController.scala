@@ -46,6 +46,9 @@ final class DeskController(
   def outlook(value: OutlookView): Unit = synchronized {
     current = current.copy(outlook = value)
   }
+  def orderResultNotSaved(): Unit = synchronized {
+    current = current.copy(actionNotice = Some("Order result not saved"))
+  }
   def addMessage(kind: String, text: String): Unit = synchronized {
     if kind == "order" then result(Workspace.safeText(text))
     current = current.copy(

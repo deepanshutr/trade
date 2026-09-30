@@ -6,13 +6,36 @@ import java.nio.file.{Files, LinkOption, Path, StandardOpenOption}
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
+import scala.util.control.NonFatal
 
 /** Replay receipts only. Each append owns the lock, so viewing processes may coexist. */
 object OrderResultLog:
   final class Writer(write: String => Unit, failure: Throwable => Unit) extends AutoCloseable:
     private val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val retryWindowNanos = TimeUnit.SECONDS.toNanos(5)
+
+    private def writeWithRetry(text: String): Unit =
+      val began = System.nanoTime()
+      var saved = false
+      var failed = Option.empty[Throwable]
+      while !saved && failed.isEmpty do
+        try
+          write(text)
+          saved = true
+        catch
+          case error: java.io.IOException if error.getMessage == "order result lock timed out" =>
+            if System.nanoTime() - began >= retryWindowNanos then failed = Some(error)
+            else
+              try Thread.sleep(10L)
+              catch
+                case interrupted: InterruptedException =>
+                  Thread.currentThread().interrupt()
+                  failed = Some(interrupted)
+          case NonFatal(error) => failed = Some(error)
+      failed.foreach(failure)
+
     def append(text: String): Unit =
-      try executor.execute(() => write(text))
+      try executor.execute(() => writeWithRetry(text))
       catch case error: java.util.concurrent.RejectedExecutionException => failure(error)
     def close(): Unit = executor.close()
 

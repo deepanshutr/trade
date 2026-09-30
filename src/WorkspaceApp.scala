@@ -260,12 +260,13 @@ object WorkspaceApp:
       val routed: MarketFeed =
         onchain.fold[MarketFeed](feed)(o => new CompositeFeed(feed, o, () => state.get().coin))
       val announcements = Main.announcements(args, NativeAnnouncementOutput.create())
+      var reportOrderResultFailure: () => Unit = () => ()
       val results = new OrderResultLog.Writer(
-        text =>
-          Try(OrderResultLog.append(directory, now(), text)).failed.foreach(error =>
-            diagnostics.failure(DiagnosticPart.OrderResults, error)
-          ),
-        error => diagnostics.failure(DiagnosticPart.OrderResults, error)
+        text => OrderResultLog.append(directory, now(), text),
+        error => {
+          diagnostics.failure(DiagnosticPart.OrderResults, error)
+          reportOrderResultFailure()
+        }
       )
       val controller = new DeskController(
         PanelView(
@@ -280,6 +281,7 @@ object WorkspaceApp:
         announcements.setMuted,
         results.append
       )
+      reportOrderResultFailure = () => controller.orderResultNotSaved()
       val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
       val alerts = new AlertPolicy
       def closeAll(): Unit =

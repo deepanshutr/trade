@@ -137,6 +137,7 @@ object Workspace:
         case BlockCode.Blocked => None
     val text =
       if !view.pending && coded.nonEmpty then coded.get
+      else if lower.contains("order result not saved") then "Order result not saved"
       else if view.pending then
         val stage = "(?i).*\\b(queued|checking|saving) (\\d+s).*".r
         raw match

@@ -3,6 +3,25 @@ package desk
 import java.nio.file.Files
 
 class OrderResultLogSpec extends TempDirectorySuite:
+  private def writingLock: java.util.concurrent.locks.ReentrantLock =
+    val field = OrderResultLog.getClass.getDeclaredFields.find(_.getName == "writing").get
+    field.setAccessible(true)
+    field.get(OrderResultLog).asInstanceOf[java.util.concurrent.locks.ReentrantLock]
+
+  private def holdWritingLock(): (Thread, java.util.concurrent.CountDownLatch) =
+    val entered = new java.util.concurrent.CountDownLatch(1)
+    val release = new java.util.concurrent.CountDownLatch(1)
+    val thread = new Thread(() => {
+      writingLock.lock()
+      try
+        entered.countDown()
+        release.await()
+      finally writingLock.unlock()
+    })
+    thread.start()
+    assert(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+    (thread, release)
+
   private def appendExpired(directory: java.nio.file.Path): Unit =
     val method = OrderResultLog.getClass.getDeclaredMethods.find(_.getName == "appendLocked").get
     method.setAccessible(true)
@@ -141,25 +160,50 @@ class OrderResultLogSpec extends TempDirectorySuite:
 
   test("two controllers append all 600 order results without keeping general messages") {
     val directory = tempDirectory("desk-order-results")
-    def controller = new DeskController(
+    val failures = new java.util.concurrent.CopyOnWriteArrayList[Throwable]()
+    val resultWriters = Vector.fill(2)(
+      new OrderResultLog.Writer(
+        text => OrderResultLog.append(directory, 123L, text),
+        error => { failures.add(error); () }
+      )
+    )
+    val first = new DeskController(
       PanelView(),
       () => 123L,
       _ => Left("unused"),
       _ => false,
       _ => Left("unused"),
-      result = text => OrderResultLog.append(directory, 123L, text)
+      result = text => resultWriters.head.append(text)
     )
-    val first = controller
-    val second = controller
-    val writers = Vector(first, second).map { c =>
-      new Thread(() => {
-        for i <- 1 to 300 do
-          c.addMessage("analysis", "ignored")
-          c.addMessage("order", s"Order pending $i")
-      })
-    }
-    writers.foreach(_.start())
-    writers.foreach(_.join())
+    val second = new DeskController(
+      PanelView(),
+      () => 123L,
+      _ => Left("unused"),
+      _ => false,
+      _ => Left("unused"),
+      result = text => resultWriters(1).append(text)
+    )
+    val (holder, release) = holdWritingLock()
+    try
+      val producers = Vector(
+        new Thread(() =>
+          for i <- 1 to 300 do
+            first.addMessage("analysis", "ignored")
+            first.addMessage("order", s"Order pending $i")
+        ),
+        new Thread(() =>
+          for i <- 1 to 300 do
+            second.addMessage("analysis", "ignored")
+            second.addMessage("order", s"Order pending $i")
+        )
+      )
+      producers.foreach(_.start())
+      producers.foreach(_.join())
+      Thread.sleep(150L)
+    finally
+      release.countDown()
+      holder.join()
+      resultWriters.foreach(_.close())
     val lines = Files.readAllLines(directory.resolve("order-results.jsonl"))
     import scala.jdk.CollectionConverters.*
     val records = lines.asScala.map(ujson.read(_)).toVector
@@ -168,7 +212,29 @@ class OrderResultLogSpec extends TempDirectorySuite:
     assert(records.forall(_("kind").str == "order"))
     assertEquals(first.panel.actionNumber, 300L)
     assertEquals(second.panel.actionNumber, 300L)
+    assertEquals(failures.size(), 0)
     assert(!Files.exists(directory.resolve("messages")))
+  }
+
+  test("a result held past the retry deadline reaches the failure callback once") {
+    val directory = tempDirectory("desk-order-timeout")
+    val failures = new java.util.concurrent.CopyOnWriteArrayList[Throwable]()
+    val writer = new OrderResultLog.Writer(
+      text => OrderResultLog.append(directory, 123L, text),
+      error => { failures.add(error); () }
+    )
+    val (holder, release) = holdWritingLock()
+    try
+      writer.append("not saved")
+      Thread.sleep(5200L)
+    finally
+      release.countDown()
+      holder.join()
+      writer.close()
+    assert(!Files.exists(directory.resolve("order-results.jsonl")))
+    assertEquals(failures.size(), 1)
+    assert(failures.get(0).isInstanceOf[java.io.IOException])
+    assertEquals(failures.get(0).getMessage, "order result lock timed out")
   }
 
   test("an append starts a new line after a torn record") {
