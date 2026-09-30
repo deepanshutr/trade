@@ -80,6 +80,19 @@ class FeedSpec extends munit.FunSuite:
     assertEquals(j.append("ng\"}", last = true), Some("""{"channel":"pong"}"""))
     assertEquals(j.append("x", last = true), Some("x"))
   }
+  test("the joiner never delivers fragments past two million characters") {
+    for last <- Vector(false, true) do
+      val j = new Joiner
+      val fragment = "x" * 1_000_000
+      assertEquals(j.append(fragment, last = false), None)
+      assertEquals(j.append(fragment, last = false), None)
+      assert(j.append("x", last).isEmpty)
+      assert(j.append("tail", last = true).isEmpty)
+    val fresh = new Joiner
+    val limit = "x" * 2_000_000
+    assertEquals(fresh.append(limit, last = true), Some(limit))
+    assertEquals(fresh.append("normal", last = true), Some("normal"))
+  }
   test(
     "on open subscriptions and connection-up finish before the separate history repair"
   ) {

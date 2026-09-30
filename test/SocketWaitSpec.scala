@@ -48,10 +48,11 @@ class SocketWaitSpec extends munit.FunSuite:
     def connect(text: String => Unit, closed: () => Unit): Socket =
       connector.connectWith(
         text,
-        closed,
         listener =>
           val _ = listeners.add(listener)
           Option(replies.poll()).getOrElse(fail("unexpected dial"))
+        ,
+        _ => closed()
       )
 
   private final class Running(feed: Feed):
@@ -173,3 +174,33 @@ class SocketWaitSpec extends munit.FunSuite:
     socket.close()
     assertEquals(wire.aborted.get(), 1)
   }
+
+  for last <- Vector(false, true) do
+    test(s"oversized market fragments abort and allow a fresh connection, final=$last") {
+      val boundary = new Boundary
+      val wire = new Wire
+      val _ = boundary.replies.add(CompletableFuture.completedFuture(wire))
+      val received = new ConcurrentLinkedQueue[String]()
+      var closes = 0
+      val socket = boundary.connect(text => { val _ = received.add(text) }, () => closes += 1)
+      val listener = boundary.listeners.peek()
+      val fragment = "x" * 1_000_000
+      val _ = listener.onText(wire, fragment, false)
+      val _ = listener.onText(wire, fragment, false)
+      assertEquals(wire.aborted.get(), 0)
+      val _ = listener.onText(wire, "x", last)
+      assert(received.isEmpty)
+      assertEquals(wire.aborted.get(), 1)
+      assertEquals(closes, 1)
+      val _ = listener.onText(wire, "tail", true)
+      assert(received.isEmpty)
+      val replacement = new Wire
+      val _ = boundary.replies.add(CompletableFuture.completedFuture(replacement))
+      val fresh = boundary.connect(text => { val _ = received.add(text) }, () => ())
+      try
+        val _ = boundary.listeners.asScala.last.onText(replacement, Feed.ping, true)
+        assertEquals(received.asScala.toVector, Vector(Feed.ping))
+      finally
+        fresh.close()
+        socket.close()
+    }
