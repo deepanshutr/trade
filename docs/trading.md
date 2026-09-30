@@ -129,8 +129,17 @@ separated by network and delegated signer. One process holds each account lock.
 The captured quantity, limit and account settings are compared with the current
 full plan before queuing and immediately before signing. An uncertain response
 blocks further orders while status is checked. The pending order is not resent.
-Do not delete saved recovery state to release this block. Resolve it using the
-account's order history.
+A parsed top-level `err` reply is taken to mean the venue did not apply the action
+and releases the saved order immediately as rejected. A parsed `unknownOid` lookup
+releases it as "not placed" only when local wall time is past the signed
+`expiresAfter` plus a fixed 60-second margin. This assumes the venue refuses an
+action after its `expiresAfter`, which is unproven until a test-network order.
+It also assumes the local clock is within the margin of the venue's clock: the
+venue checks expiry on its own clock, and Desk checks on the local clock. Finally,
+it assumes the venue's order status lookup reflects any action applied before
+expiry within the margin. Failed lookups keep the order saved regardless of time,
+and known order statuses retain their existing handling. Do not delete recovery
+state manually. Resolve any remaining block using the account's order history.
 
 A wallet change pauses live orders for that owner and network across Desk processes
 sharing the same home directory, including ones using another state directory.

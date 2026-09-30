@@ -327,6 +327,11 @@ final class JdkExchange(
     orders.shutdownNow()
 
 object Exchange:
+  // Assumes the venue refuses actions after expiresAfter (unproven until a test-network order).
+  // Local and venue clocks are within this margin: the venue checks expiry on its clock, Desk on local time.
+  // Assumes order status lookup reflects every action applied before expiry within this margin.
+  private val ExpiryMarginMs = 60000L
+
   private val terminal = Set(
     "filled",
     "canceled",
@@ -404,7 +409,11 @@ object Exchange:
     "grouping" -> "na"
   )
 
+  private def status(reply: Option[ujson.Value]): Option[String] =
+    reply.flatMap(_.objOpt.flatMap(_.get("status")).flatMap(_.strOpt))
+
   def outcome(reply: Option[ujson.Value], saved: SavedOrder): Option[String] =
+    if status(reply).contains("err") then return Some(saved.coin + " order rejected")
     reply.flatMap(j =>
       Try {
         require(j("status").str == "ok" && j("response")("type").str == "order")
@@ -432,7 +441,10 @@ object Exchange:
       }.toOption
     )
 
-  def recovered(reply: Option[ujson.Value], saved: SavedOrder): Option[String] =
+  def recovered(reply: Option[ujson.Value], saved: SavedOrder, now: Long): Option[String] =
+    if status(reply).contains("unknownOid") &&
+      BigInt(now) > BigInt(saved.expiresAfter) + ExpiryMarginMs
+    then return Some(saved.coin + " not placed")
     reply.flatMap(j =>
       Try {
         require(j("status").str == "order")

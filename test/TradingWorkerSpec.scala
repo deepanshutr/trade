@@ -74,6 +74,9 @@ class TradingWorkerSpec extends TempDirectorySuite:
     val lastPost = new AtomicReference[ujson.Value](ujson.Null)
     @volatile var hold = false
     @volatile var lose = false
+    @volatile var reject = false
+    @volatile var lookupFailure = false
+    var openedJournal: OrderJournal = null
     @volatile var position = "0"
     @volatile var readFailure = false
     @volatile var holdAccount = false
@@ -197,7 +200,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
               if holdRecovery then
                 recoveryEntered.countDown()
                 recoveryRelease.await()
-              if recoverFilled then
+              if lookupFailure then None
+              else if recoverFilled then
                 val order = lastPost.get()("action")("orders")(0)
                 Some(
                   ujson.Obj(
@@ -233,6 +237,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
                 "response" -> ujson.Obj("type" -> "default")
               )
             )
+        else if reject then Some(ujson.Obj("status" -> "err", "response" -> "x"))
         else if lose then None
         else
           Some(
@@ -283,8 +288,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
       ,
       () =>
         journalOpens.incrementAndGet()
-        OrderJournal
-          .open(directory, config.identity, beforeReplace, afterReplace)
+        openedJournal = OrderJournal.open(directory, config.identity, beforeReplace, afterReplace)
+        openedJournal
       ,
       () => clock.get(),
       () => clock.get(),
@@ -670,6 +675,83 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally
       restarted.foreach(_.close())
       f.close()
+  }
+
+  test("a top-level err releases immediately without a second post") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.reject = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("err did not release saved order")(!f.worker.view.pending)
+      assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.orderPosts.get(), 1)
+      assert(f.worker.view.outcome.contains("XMR order rejected"))
+    finally f.close()
+  }
+
+  test("a failed post stays saved until unknownOid is past expiry and never resends") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.lose = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("lookup missing")(f.recoveryReads.get() > 0)
+      val saved = f.openedJournal.pending.get
+      f.clock.set(saved.expiresAfter + 60000L)
+      val reads = f.recoveryReads.get()
+      // Lookups run serially, so the second start proves the first boundary lookup completed.
+      Wait.until("boundary lookup not completed")(f.recoveryReads.get() > reads + 1)
+      assert(f.worker.view.pending)
+      assertEquals(f.openedJournal.pending, Some(saved))
+      f.clock.incrementAndGet()
+      Wait.until("expired unknown order not released")(!f.worker.view.pending)
+      assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.orderPosts.get(), 1)
+      assert(f.worker.view.outcome.contains("XMR not placed"))
+    finally f.close()
+  }
+
+  test("restart releases an expired unknown order without resending") {
+    val f = new Fixture()
+    var restarted = Option.empty[TradingWorker]
+    try
+      f.ready()
+      f.lose = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("lookup missing")(f.recoveryReads.get() > 0)
+      f.worker.close()
+      f.clock.set(f.openedJournal.pending.get.expiresAfter + 60001L)
+      val again = f.create()
+      restarted = Some(again)
+      again.start()
+      Wait.until("restart did not release expired order")(
+        again.view.outcome.contains("XMR not placed")
+      )
+      Wait.until("restart remained busy")(!again.view.pending)
+      assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.orderPosts.get(), 1)
+    finally
+      restarted.foreach(_.close())
+      f.close()
+  }
+
+  test("failed lookup after expiry keeps the order saved") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.lose = true
+      f.lookupFailure = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("lookup missing")(f.recoveryReads.get() > 0)
+      val saved = f.openedJournal.pending.get
+      f.clock.set(saved.expiresAfter + 60001L)
+      val reads = f.recoveryReads.get()
+      Wait.until("late lookup missing")(f.recoveryReads.get() > reads + 1)
+      assert(f.worker.view.pending)
+      assertEquals(f.openedJournal.pending, Some(saved))
+      assertEquals(f.orderPosts.get(), 1)
+    finally f.close()
   }
 
   test(

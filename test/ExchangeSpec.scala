@@ -25,6 +25,13 @@ class ExchangeSpec extends munit.FunSuite:
     assertEquals(order("r").bool, false)
   }
 
+  test("a top-level err rejects the saved order") {
+    assertEquals(
+      Exchange.outcome(Some(ujson.Obj("status" -> "err", "response" -> "x")), saved),
+      Some("XMR order rejected")
+    )
+  }
+
   test("outer success does not turn an inner error into a fill") {
     assertEquals(
       Exchange.outcome(reply(ujson.Obj("error" -> "rejected")), saved),
@@ -45,7 +52,7 @@ class ExchangeSpec extends munit.FunSuite:
     assertEquals(Exchange.outcome(reply(tooMuch), saved), None)
   }
 
-  test("recovery needs a matching terminal order and unknown never completes it") {
+  test("recovery preserves known status handling after expiry") {
     def status(state: String, id: String = saved.id): ujson.Value = ujson.Obj(
       "status" -> "order",
       "order" -> ujson.Obj(
@@ -59,14 +66,85 @@ class ExchangeSpec extends munit.FunSuite:
         )
       )
     )
-    assertEquals(Exchange.recovered(Some(ujson.Obj("status" -> "unknownOid")), saved), None)
-    assertEquals(Exchange.recovered(Some(status("open")), saved), None)
-    assertEquals(Exchange.recovered(Some(status("filled", "wrong")), saved), None)
-    assertEquals(Exchange.recovered(Some(status("filled")), saved), Some("XMR recovered filled"))
     assertEquals(
-      Exchange.recovered(Some(status("iocCancelRejected")), saved),
+      Exchange.recovered(Some(status("canceled")), saved, 66001L),
+      Some("XMR recovered canceled")
+    )
+    assertEquals(Exchange.recovered(Some(status("futureStatus")), saved, 66001L), None)
+    assertEquals(Exchange.recovered(Some(status("open")), saved, 66001L), None)
+    assertEquals(Exchange.recovered(Some(status("filled", "wrong")), saved, 66001L), None)
+    assertEquals(
+      Exchange.recovered(Some(status("filled")), saved, 66001L),
+      Some("XMR recovered filled")
+    )
+    assertEquals(
+      Exchange.recovered(Some(status("iocCancelRejected")), saved, 66001L),
       Some("XMR recovered iocCancelRejected")
     )
+  }
+
+  test("unknownOid releases only strictly past signed expiry plus sixty seconds") {
+    val unknown = Some(ujson.Obj("status" -> "unknownOid"))
+    assertEquals(Exchange.recovered(unknown, saved, 65999L), None)
+    assertEquals(Exchange.recovered(unknown, saved, 66000L), None)
+    assertEquals(Exchange.recovered(unknown, saved, 66001L), Some("XMR not placed"))
+  }
+
+  test("failed and malformed lookups never release after expiry") {
+    Vector(
+      None,
+      Some(ujson.Obj()),
+      Some(ujson.Str("unknownOid")),
+      Some(ujson.Obj("status" -> "err"))
+    ).foreach { reply =>
+      assertEquals(Exchange.recovered(reply, saved, 66001L), None)
+    }
+  }
+
+  test("HTTP failures and unparsable bodies are neither refusals nor unknown orders") {
+    val server = com.sun.net.httpserver.HttpServer.create(
+      new java.net.InetSocketAddress("127.0.0.1", 0),
+      0
+    )
+    val response = new java.util.concurrent.atomic.AtomicReference((200, ""))
+    server.createContext(
+      "/",
+      request => {
+        request.getRequestBody.close()
+        val (code, body) = response.get()
+        val bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        request.sendResponseHeaders(code, bytes.length.toLong)
+        request.getResponseBody.write(bytes)
+        request.close()
+      }
+    )
+    server.start()
+    val exchange = new JdkExchange(s"http://127.0.0.1:${server.getAddress.getPort}")
+    def unresolved(): Unit =
+      val post = exchange.post(ujson.Obj())
+      val lookup = exchange.info(ujson.Obj())
+      assertEquals(post, None)
+      assertEquals(lookup, None)
+      assertEquals(Exchange.outcome(post, saved), None)
+      assertEquals(Exchange.recovered(lookup, saved, 66001L), None)
+    try
+      val refusal = """{"status":"err","response":"x"}"""
+      val unknown = """{"status":"unknownOid"}"""
+      response.set((200, refusal))
+      assertEquals(exchange.post(ujson.Obj()), Some(ujson.read(refusal)))
+      response.set((200, unknown))
+      assertEquals(exchange.info(ujson.Obj()), Some(ujson.read(unknown)))
+      for status <- Vector(429, 500, 503); body <- Vector(refusal, unknown) do
+        response.set((status, body))
+        unresolved()
+      for invalid <- Vector("not json", "") do
+        response.set((200, invalid))
+        unresolved()
+      server.stop(0)
+      unresolved()
+    finally
+      exchange.close()
+      server.stop(0)
   }
 
   test("metadata resolves the current index and rejects unsupported markets") {
@@ -113,7 +191,8 @@ class ExchangeSpec extends munit.FunSuite:
           "order" -> ujson.Obj("status" -> "filled", "order" -> order)
         )
       ),
-      saved
+      saved,
+      66001L
     )
 
   test(
