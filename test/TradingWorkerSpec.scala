@@ -499,7 +499,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally journal.close()
 
   test("a saved order of another owner keeps one message across failed role checks and recovery") {
-    val f = new Fixture(autoStart = false, roleMatches = false)
+    val f = new Fixture(autoStart = false)
     try
       val saved = saveAtStartup(f)
       val file = f.directory.resolve(f.config.identity + ".json")
@@ -508,19 +508,24 @@ class TradingWorkerSpec extends TempDirectorySuite:
       Files.writeString(file, ujson.write(data))
       f.clock.set(saved.expiresAfter + 60001L)
       f.worker.start()
-      Wait.until("saved order and role were not checked")(f.roleReads.get() > 0)
+      Wait.until("first refresh did not complete")(f.worker.view.position.nonEmpty)
+      assertEquals(f.worker.view.message, TradingWorker.savedOwnerMismatchMessage)
+      f.roleMatches = false
+      f.worker.observe(Event.SocketDown)
+      Wait.until("saved order and role were not checked")(f.roleReads.get() > 1)
       for round <- 1 to 3 do
         f.clock.addAndGet(10001L)
         val reads = f.recoveryReads.get()
         Wait.until(s"refresh $round did not complete") {
           assertEquals(f.worker.view.message, TradingWorker.savedOwnerMismatchMessage)
-          f.roleReads.get() >= round && f.recoveryReads.get() >= reads + 2
+          f.roleReads.get() >= round + 2 && f.recoveryReads.get() >= reads + 2
         }
+      f.position = "1"
       f.roleMatches = true
       f.clock.addAndGet(10001L)
       Wait.until("matching role did not refresh the account") {
         assertEquals(f.worker.view.message, TradingWorker.savedOwnerMismatchMessage)
-        f.worker.view.position.nonEmpty
+        f.worker.view.position.contains(BigDecimal(1))
       }
       assert(f.worker.view.pending)
       assertEquals(f.openedJournal.pending.map(_.id), Some(saved.id))

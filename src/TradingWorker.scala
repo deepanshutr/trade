@@ -532,8 +532,6 @@ final class TradingWorker private[desk] (
         if !fatal && !executing.get() then saved else None
       )
       unresolved.foreach { p =>
-        if p.owner.exists(owner => !config.owner.contains(owner)) then
-          synchronized { message = TradingWorker.savedOwnerMismatchMessage }
         val reply = exchange.info(
           ujson.Obj(
             "type" -> "orderStatus",

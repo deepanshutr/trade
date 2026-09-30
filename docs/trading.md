@@ -142,14 +142,17 @@ and known order statuses retain their existing handling. Do not delete recovery
 state manually. Resolve any remaining block using the account's order history.
 
 A saved order records its owner. Releasing an unknown order requires the saved
-owner to equal the configured owner. A saved order from an older version without
-an owner, or with another owner, is never released by time and settles only when
-the venue reports a matching final status under the configured owner.
-Until then it blocks trading for that signer, and an order of another owner settles
-once that owner is configured again and the venue reports a final status.
-An order saved by an older version without an owner that the venue never received
-stays blocked, so check the account's order history before upgrading with an
-unresolved order.
+owner to equal the configured owner. While the saved owner differs from the
+configured owner, the order is never released by time and blocks trading for that
+signer. Once the saved owner is configured again, the order can settle when the
+venue reports a matching final status. It can also be released as "not placed"
+after the expiry margin when the venue reports `unknownOid` and a fresh role check
+confirms the signer belongs to that owner.
+A saved order from an older version without an owner settles only when the venue
+reports a matching final status under the configured owner. If the venue never
+received it, it shows "waiting for order result", blocks trading for that signer
+and never releases by time. Check the account's order history before upgrading
+with an unresolved order.
 
 A wallet change pauses live orders for that owner and network across Desk processes
 sharing the same home directory, including ones using another state directory.
