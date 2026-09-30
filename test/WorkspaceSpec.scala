@@ -22,6 +22,23 @@ class WorkspaceSpec extends munit.FunSuite:
     assert(!text.contains("Sending"), text)
   }
 
+  test("pending saved-owner mismatch is visible at the smallest workspace size") {
+    val message = TradingWorker.savedOwnerMismatchMessage
+    val frame = Workspace.draw(
+      s,
+      view.copy(pending = true, message = message),
+      PanelView(mode = "LIVE"),
+      Layout.minCols,
+      Layout.minRows,
+      now,
+      java.time.ZoneOffset.UTC,
+      Style.mono
+    )
+    val text = frame.lines.mkString("\n")
+    assert(text.contains(message), text)
+    assert(!text.contains("Sending"), text)
+  }
+
   test("paper limit precision errors retain their reason in the trade status") {
     val notice = "Paper limit does not match market precision"
     val frame = Workspace.draw(

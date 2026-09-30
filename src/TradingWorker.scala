@@ -31,6 +31,7 @@ final case class TradingView(
 
 object TradingWorker:
   val ownerMismatchMessage: String = "Signer does not match the configured owner"
+  val savedOwnerMismatchMessage: String = "Saved order belongs to another owner"
   val maximumReviewLifetimeMs: Long = 30000L
 
   def create(
@@ -412,7 +413,7 @@ final class TradingWorker private[desk] (
 
   private def executeOrder(press: Press): Unit =
     val p = try
-      val reserved = journal.get.reserve(press.plan, wall())
+      val reserved = journal.get.reserve(press.plan, config.owner.get, wall())
       afterReserve()
       reserved
     catch
@@ -521,7 +522,10 @@ final class TradingWorker private[desk] (
             saved = opened.pending
             if saved.nonEmpty then
               busy.set(true)
-              message = saved.get.coin + " waiting for order result"
+              message =
+                if saved.get.owner.exists(owner => !config.owner.contains(owner)) then
+                  TradingWorker.savedOwnerMismatchMessage
+                else saved.get.coin + " waiting for order result"
           }
         catch case _: Exception => storageFailure()
       val unresolved = synchronized(
@@ -540,7 +544,8 @@ final class TradingWorker private[desk] (
             reply,
             p,
             wall(),
-            allowUnknown = synchronized(roleGeneration.contains(g) && fresh(roleAt, 60000L))
+            allowUnknown = p.owner.nonEmpty && p.owner == config.owner &&
+              synchronized(roleGeneration.contains(g) && fresh(roleAt, 60000L))
           )
           .foreach(text => complete(p, text))
       }
@@ -636,7 +641,10 @@ final class TradingWorker private[desk] (
           leverageReady = false
           if !fatal then
             if Option(error.getMessage).exists(_.endsWith(": owner")) then
-              message = TradingWorker.ownerMismatchMessage
+              message =
+                if saved.exists(p => p.owner.exists(owner => !config.owner.contains(owner))) then
+                  TradingWorker.savedOwnerMismatchMessage
+                else TradingWorker.ownerMismatchMessage
             else if saved.isEmpty && !busy.get() then message = "Waiting for market or account data"
         }
 

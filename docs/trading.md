@@ -141,6 +141,18 @@ expiry within the margin. Failed lookups keep the order saved regardless of time
 and known order statuses retain their existing handling. Do not delete recovery
 state manually. Resolve any remaining block using the account's order history.
 
+A saved order records its owner. A matching final status reported under the
+configured owner settles the order whatever its saved owner. Release as "not
+placed" after the expiry margin requires `unknownOid`, the saved owner to equal
+the configured owner and a fresh role check confirming the signer belongs to that
+owner. While the owners differ, the order is never released by time and blocks
+trading for that signer.
+A saved order from an older version without an owner settles only when the venue
+reports a matching final status under the configured owner. If the venue never
+received it, it shows "waiting for order result", blocks trading for that signer
+and never releases by time. Check the account's order history before upgrading
+with an unresolved order.
+
 A wallet change pauses live orders for that owner and network across Desk processes
 sharing the same home directory, including ones using another state directory.
 The marker is `~/.local/state/desk/accounts/<network>-<owner-without-0x>.paused`,

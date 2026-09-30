@@ -493,10 +493,120 @@ class TradingWorkerSpec extends TempDirectorySuite:
       .get
     val journal = OrderJournal.open(f.directory, f.config.identity)
     try
-      val saved = journal.reserve(plan, f.clock.get())
+      val saved = journal.reserve(plan, f.owner, f.clock.get())
       f.lastPost.set(ujson.Obj("action" -> Exchange.action(saved)))
       saved
     finally journal.close()
+
+  test("a saved order of another owner keeps one message across failed role checks and recovery") {
+    val f = new Fixture(autoStart = false)
+    try
+      val saved = saveAtStartup(f)
+      val file = f.directory.resolve(f.config.identity + ".json")
+      val data = ujson.read(Files.readString(file))
+      data("pending")("owner") = "0x" + "3" * 40
+      Files.writeString(file, ujson.write(data))
+      f.clock.set(saved.expiresAfter + 60001L)
+      f.worker.start()
+      Wait.until("first refresh did not complete")(f.worker.view.position.nonEmpty)
+      assertEquals(f.worker.view.message, TradingWorker.savedOwnerMismatchMessage)
+      f.roleMatches = false
+      f.worker.observe(Event.SocketDown)
+      Wait.until("saved order and role were not checked")(f.roleReads.get() > 1)
+      for round <- 1 to 3 do
+        f.clock.addAndGet(10001L)
+        val reads = f.recoveryReads.get()
+        Wait.until(s"refresh $round did not complete") {
+          assertEquals(f.worker.view.message, TradingWorker.savedOwnerMismatchMessage)
+          f.roleReads.get() >= round + 2 && f.recoveryReads.get() >= reads + 2
+        }
+      f.position = "1"
+      f.roleMatches = true
+      f.clock.addAndGet(10001L)
+      Wait.until("matching role did not refresh the account") {
+        assertEquals(f.worker.view.message, TradingWorker.savedOwnerMismatchMessage)
+        f.worker.view.position.contains(BigDecimal(1))
+      }
+      assert(f.worker.view.pending)
+      assertEquals(f.openedJournal.pending.map(_.id), Some(saved.id))
+    finally f.close()
+  }
+
+  Vector(Some("0x" + "3" * 40), None).foreach { owner =>
+    test(s"expired unknown order stays saved with a different or missing owner: $owner") {
+      val f = new Fixture(autoStart = false)
+      try
+        val saved = saveAtStartup(f)
+        val file = f.directory.resolve(f.config.identity + ".json")
+        val data = ujson.read(Files.readString(file))
+        owner match
+          case Some(value) => data("pending")("owner") = value
+          case None        => data("pending").obj.remove("owner")
+        Files.writeString(file, ujson.write(data))
+        f.clock.set(saved.expiresAfter + 60001L)
+        f.worker.start()
+        Wait.until("matching role did not refresh the account")(
+          f.roleReads.get() > 0 && f.worker.view.position.nonEmpty
+        )
+        val reads = f.recoveryReads.get()
+        Wait.until("lookup after role check did not complete")(
+          f.recoveryReads.get() >= reads + 2 || f.worker.view.outcome.nonEmpty
+        )
+        assertEquals(f.openedJournal.pending.map(_.id), Some(saved.id))
+        assert(f.worker.view.pending)
+        assert(!f.worker.submit(buy, "XMR"))
+        assertEquals(f.posts.get(), 0)
+        assertEquals(f.worker.view.outcome, None)
+        if owner.nonEmpty then
+          assertEquals(f.worker.view.message, TradingWorker.savedOwnerMismatchMessage)
+        else assertEquals(f.worker.view.message, "XMR waiting for order result")
+      finally f.close()
+    }
+  }
+
+  test("an owner-less saved order stays saved and clears a recovered signer mismatch") {
+    val f = new Fixture(autoStart = false, roleMatches = false)
+    try
+      val saved = saveAtStartup(f)
+      val file = f.directory.resolve(f.config.identity + ".json")
+      val data = ujson.read(Files.readString(file))
+      data("pending").obj.remove("owner")
+      Files.writeString(file, ujson.write(data))
+      f.clock.set(saved.expiresAfter + 60001L)
+      f.worker.start()
+      Wait.until("signer mismatch was not shown")(
+        f.worker.view.message == TradingWorker.ownerMismatchMessage
+      )
+      f.roleMatches = true
+      f.clock.addAndGet(10001L)
+      Wait.until("matching role did not refresh the account")(f.worker.view.position.nonEmpty)
+      assertEquals(f.worker.view.message, "XMR waiting for order result")
+      assertEquals(f.openedJournal.pending.map(_.id), Some(saved.id))
+      assertEquals(f.openedJournal.pending.flatMap(_.owner), None)
+      assert(f.worker.view.pending)
+      assert(!f.worker.submit(buy, "XMR"))
+    finally f.close()
+  }
+
+  test("startup matching fill settles a saved order belonging to another owner") {
+    val f = new Fixture(autoStart = false)
+    try
+      val saved = saveAtStartup(f)
+      val file = f.directory.resolve(f.config.identity + ".json")
+      val data = ujson.read(Files.readString(file))
+      data("pending")("owner") = "0x" + "3" * 40
+      Files.writeString(file, ujson.write(data))
+      f.clock.set(saved.expiresAfter + 60001L)
+      f.recoverFilled = true
+      f.worker.start()
+      Wait.until("fill not recovered")(
+        f.worker.view.outcome.contains("XMR recovered filled")
+      )
+      assertEquals(f.openedJournal.pending, None)
+      assert(!f.worker.view.pending)
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
 
   Vector(false, true).foreach { roleMatches =>
     test(s"startup expired unknown order releases only after matching role: $roleMatches") {
