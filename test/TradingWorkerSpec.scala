@@ -97,6 +97,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     @volatile var recoverFilled = false
     @volatile var publishActive = true
     @volatile var maximums = Vector("100", "100")
+    @volatile var available = Vector("123.45", "123.45")
     @volatile var activeCoin = "XMR"
     @volatile var activeReceive: Option[ujson.Value] => Unit = _ => ()
     @volatile var timedActiveReceive: (Option[ujson.Value], Long) => Unit = (_, _) => ()
@@ -107,7 +108,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
         "user" -> owner,
         "coin" -> activeCoin,
         "leverage" -> ujson.Obj("type" -> activeMode, "value" -> leverage),
-        "maxTradeSzs" -> ujson.Arr.from(maximums)
+        "maxTradeSzs" -> ujson.Arr.from(maximums),
+        "availableToTrade" -> ujson.Arr.from(available)
       )
     )
     def sendActive(): Unit = activeReceive(activePayload)
@@ -358,6 +360,140 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.worker.view.outcome,
       Some(if f.reject then "XMR order rejected" else "XMR filled 1 at 100")
     )
+
+  private def assertUsable(f: Fixture, expected: Option[String], cash: Boolean = false): Unit =
+    val view = f.worker.view
+    for (cols, rows) <- Vector((100, 30), (360, 99)) do
+      val frame = Workspace.draw(
+        Snapshot.initial("XMR", f.clock.get()),
+        view,
+        PanelView(mode = "LIVE"),
+        cols,
+        rows,
+        f.clock.get(),
+        java.time.ZoneOffset.UTC,
+        Style.mono
+      )
+      assertEquals(frame.lines.size, rows)
+      assert(frame.lines.forall(_.length <= cols), s"frame exceeds $cols columns")
+      val text = frame.lines.mkString("\n")
+      expected match
+        case Some(value) =>
+          assert(text.contains("Usable"), s"${cols}x$rows: missing Usable label")
+          assert(text.contains(value), s"${cols}x$rows: missing usable $value")
+        case None =>
+          assert(!text.contains("Usable"))
+          assert(!text.contains("123.45"))
+      if cash then
+        assert(text.contains("Stables"))
+        assert(text.contains("1000"))
+
+  test("live usable margin appears beside cash and fits both frame sizes") {
+    val f = new Fixture()
+    try
+      f.ready()
+      Wait.until("cash missing")(f.worker.view.portfolio.stables.contains(BigDecimal(1000)))
+      assertUsable(f, Some("123.45"), cash = true)
+    finally f.close()
+  }
+
+  test("usable margin disappears after completion until new active data") {
+    val f = new Fixture()
+    try
+      f.ready()
+      assertUsable(f, Some("123.45"))
+      val receive = f.timedActiveReceive
+      val at = f.clock.get()
+      f.clock.incrementAndGet()
+      completeWithoutActive(f)
+      assertUsable(f, None)
+      receive(f.activePayload, at)
+      assertUsable(f, None)
+      f.sendActive()
+      assertUsable(f, Some("123.45"))
+    finally f.close()
+  }
+
+  test("stale active data hides usable margin") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.pauseActive()
+      assertUsable(f, Some("123.45"))
+      f.clock.addAndGet(f.config.positionAgeMs + 1)
+      assertUsable(f, None)
+    finally f.close()
+  }
+
+  test("usable margin takes the smaller side in either order") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.pauseActive()
+      for sides <- Vector(Vector("123.45", "987.65"), Vector("987.65", "123.45")) do
+        f.available = sides
+        f.sendActive()
+        assertUsable(f, Some("123.45"))
+    finally f.close()
+  }
+
+  test("usable margin clears on invalid data, disconnect and market change") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.pauseActive()
+      assertUsable(f, Some("123.45"))
+      f.activeReceive(None)
+      assertUsable(f, None)
+      f.sendActive()
+      assertUsable(f, Some("123.45"))
+      val oldReceive = f.activeReceive
+      f.worker.observe(Event.SocketDown)
+      oldReceive(f.activePayload)
+      assertUsable(f, None)
+      f.worker.select("BTC")
+      oldReceive(f.activePayload)
+      assertUsable(f, None)
+    finally f.close()
+  }
+
+  test("unavailable usable margin does not change order capacity") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.pauseActive()
+      f.available = Vector.empty
+      f.sendActive()
+      assertUsable(f, None)
+      assert(f.worker.view.ready)
+      f.available = Vector("0", "0")
+      f.sendActive()
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("display margin blocked the order")(f.orderPosts.get() == 1)
+    finally f.close()
+  }
+
+  test("paper and view panels ignore live usable margin") {
+    val f = new Fixture()
+    try
+      f.ready()
+      val view = f.worker.view
+      for mode <- Vector("PAPER", "VIEW") do
+        val frame = Workspace.draw(
+          Snapshot.initial("XMR", f.clock.get()),
+          view,
+          PanelView(mode = mode),
+          100,
+          30,
+          f.clock.get(),
+          java.time.ZoneOffset.UTC,
+          Style.mono
+        )
+        val text = frame.lines.mkString("\n")
+        assert(!text.contains("Usable"))
+        assert(!text.contains("123.45"))
+    finally f.close()
+  }
 
   test("a fill needs new active data even after a fresh account snapshot") {
     val f = new Fixture()
