@@ -25,13 +25,21 @@ trait Rest:
 
 final class Joiner:
   private val buffer = new StringBuilder
+  private var overflow = false
+  def oversized: Boolean = overflow
   def append(piece: String, last: Boolean): Option[String] =
-    buffer.append(piece)
-    if last then
-      val whole = buffer.toString
+    if overflow then None
+    else if piece.length > 2_000_000 - buffer.length then
+      overflow = true
       buffer.clear()
-      Some(whole)
-    else None
+      None
+    else
+      buffer.append(piece)
+      if last then
+        val whole = buffer.toString
+        buffer.clear()
+        Some(whole)
+      else None
 
 object Feed:
   val unknownMarket = "Unknown market. Press m to retry"
@@ -394,20 +402,11 @@ final class SocketConnector(val url: String, waitMs: Long = 5000L) extends Conne
     HttpClient.newBuilder().connectTimeout(java.time.Duration.ofMillis(waitMs)).build()
 
   def connect(onText: String => Unit, onClose: () => Unit): Socket =
-    connectWith(
-      onText,
-      onClose,
-      listener =>
-        client
-          .newWebSocketBuilder()
-          .connectTimeout(java.time.Duration.ofMillis(waitMs))
-          .buildAsync(URI.create(url), listener)
-    )
+    connectReporting(onText, _ => onClose())
 
   override def connectReporting(onText: String => Unit, onClose: String => Unit): Socket =
     connectWith(
       onText,
-      () => (),
       listener =>
         client
           .newWebSocketBuilder()
@@ -420,23 +419,24 @@ final class SocketConnector(val url: String, waitMs: Long = 5000L) extends Conne
 
   private[desk] def connectWith(
       deliver: String => Unit,
-      closed: () => Unit,
       open: WebSocket.Listener => CompletableFuture[WebSocket],
-      report: String => Unit = _ => ()
+      report: String => Unit
   ): Socket =
     val joiner = new Joiner
     val listener = new WebSocket.Listener:
       override def onText(ws: WebSocket, data: CharSequence, last: Boolean): CompletionStage[?] =
-        joiner.append(data.toString, last).foreach(deliver)
-        ws.request(1)
+        if !joiner.oversized then
+          joiner.append(data.toString, last).foreach(deliver)
+          if joiner.oversized then
+            ws.abort()
+            report("Socket message too large")
+          else ws.request(1)
         null
       override def onClose(ws: WebSocket, code: Int, reason: String): CompletionStage[?] =
         report(s"Server closed connection ($code)")
-        closed()
         null
       override def onError(ws: WebSocket, error: Throwable): Unit =
         report(Feed.failure(error))
-        closed()
     val pending = open(listener)
     var accepted = false
     try

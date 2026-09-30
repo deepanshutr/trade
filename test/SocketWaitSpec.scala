@@ -1,6 +1,11 @@
 package desk
 
-import java.net.http.WebSocket
+import java.net.{Authenticator, CookieHandler, ProxySelector, URI}
+import java.net.http.{HttpClient, HttpRequest, HttpResponse, WebSocket}
+import java.time.Duration
+import java.util.Optional
+import java.util.concurrent.Executor
+import javax.net.ssl.{SSLContext, SSLParameters}
 import java.nio.ByteBuffer
 import java.util.concurrent.{
   CompletableFuture,
@@ -41,6 +46,80 @@ class SocketWaitSpec extends munit.FunSuite:
     def isOutputClosed(): Boolean = aborted.get() > 0
     def abort(): Unit = { val _ = aborted.incrementAndGet() }
 
+  private final class Opener extends HttpClient:
+    val wire = new Wire
+    var listener: WebSocket.Listener = null
+    override def newWebSocketBuilder(): WebSocket.Builder = new WebSocket.Builder:
+      def header(name: String, value: String): WebSocket.Builder = this
+      def subprotocols(first: String, rest: String*): WebSocket.Builder = this
+      def connectTimeout(timeout: Duration): WebSocket.Builder = this
+      def buildAsync(uri: URI, target: WebSocket.Listener): CompletableFuture[WebSocket] =
+        assertEquals(uri, URI.create("wss://example.invalid/ws"))
+        listener = target
+        CompletableFuture.completedFuture(wire)
+    def cookieHandler(): Optional[CookieHandler] = Optional.empty()
+    def connectTimeout(): Optional[Duration] = Optional.empty()
+    def followRedirects(): HttpClient.Redirect = HttpClient.Redirect.NEVER
+    def proxy(): Optional[ProxySelector] = Optional.empty()
+    def sslContext(): SSLContext = SSLContext.getDefault()
+    def sslParameters(): SSLParameters = new SSLParameters
+    def authenticator(): Optional[Authenticator] = Optional.empty()
+    def version(): HttpClient.Version = HttpClient.Version.HTTP_1_1
+    def executor(): Optional[Executor] = Optional.empty()
+    def send[T](request: HttpRequest, handler: HttpResponse.BodyHandler[T]): HttpResponse[T] =
+      fail("unexpected HTTP request")
+    def sendAsync[T](
+        request: HttpRequest,
+        handler: HttpResponse.BodyHandler[T]
+    ): CompletableFuture[HttpResponse[T]] = fail("unexpected HTTP request")
+    def sendAsync[T](
+        request: HttpRequest,
+        handler: HttpResponse.BodyHandler[T],
+        push: HttpResponse.PushPromiseHandler[T]
+    ): CompletableFuture[HttpResponse[T]] = fail("unexpected HTTP request")
+
+  for reporting <- Vector(false, true) do
+    test(s"public connect reports each close, error and overflow once, reporting=$reporting") {
+      val opener = new Opener
+      val connector = new SocketConnector("wss://example.invalid/ws")
+      // Replace only the network opener so both public methods and listener wiring run.
+      val client = classOf[SocketConnector].getDeclaredField("client")
+      client.setAccessible(true)
+      client.set(connector, opener)
+      val received = new ConcurrentLinkedQueue[String]()
+      val reports = new ConcurrentLinkedQueue[String]()
+      val receive: String => Unit = text => { val _ = received.add(text) }
+      val socket =
+        if reporting then
+          connector.connectReporting(receive, reason => { val _ = reports.add(reason) })
+        else connector.connect(receive, () => { val _ = reports.add("closed") })
+      val listener = opener.listener
+      val wire = opener.wire
+      val expected = if reporting then
+        Vector(
+          "Server closed connection (1000)",
+          "Network error",
+          "Socket message too large"
+        )
+      else Vector.fill(3)("closed")
+      try
+        assert(reports.isEmpty)
+        val _ = listener.onText(wire, Feed.ping, true)
+        assertEquals(received.asScala.toVector, Vector(Feed.ping))
+        val _ = listener.onClose(wire, 1000, "done")
+        assertEquals(reports.asScala.toVector, expected.take(1))
+        listener.onError(wire, new java.io.IOException("broken"))
+        assertEquals(reports.asScala.toVector, expected.take(2))
+        val _ = listener.onText(wire, "x" * 2_000_001, false)
+        assertEquals(reports.asScala.toVector, expected)
+        assertEquals(wire.aborted.get(), 1)
+        val _ = listener.onText(wire, "tail", true)
+        assertEquals(reports.asScala.toVector, expected)
+        assertEquals(wire.aborted.get(), 1)
+        assertEquals(received.asScala.toVector, Vector(Feed.ping))
+      finally socket.close()
+    }
+
   private final class Boundary(waitMs: Long = 40L) extends Connector:
     val replies = new ConcurrentLinkedQueue[CompletableFuture[WebSocket]]()
     val listeners = new ConcurrentLinkedQueue[WebSocket.Listener]()
@@ -48,10 +127,11 @@ class SocketWaitSpec extends munit.FunSuite:
     def connect(text: String => Unit, closed: () => Unit): Socket =
       connector.connectWith(
         text,
-        closed,
         listener =>
           val _ = listeners.add(listener)
           Option(replies.poll()).getOrElse(fail("unexpected dial"))
+        ,
+        _ => closed()
       )
 
   private final class Running(feed: Feed):
@@ -173,3 +253,35 @@ class SocketWaitSpec extends munit.FunSuite:
     socket.close()
     assertEquals(wire.aborted.get(), 1)
   }
+
+  for last <- Vector(false, true) do
+    test(s"oversized market fragments abort and allow a fresh connection, final=$last") {
+      val boundary = new Boundary
+      val wire = new Wire
+      val _ = boundary.replies.add(CompletableFuture.completedFuture(wire))
+      val received = new ConcurrentLinkedQueue[String]()
+      var closes = 0
+      val socket = boundary.connect(text => { val _ = received.add(text) }, () => closes += 1)
+      val listener = boundary.listeners.peek()
+      val fragment = "x" * 1_000_000
+      val _ = listener.onText(wire, fragment, false)
+      val _ = listener.onText(wire, fragment, false)
+      assertEquals(wire.aborted.get(), 0)
+      val _ = listener.onText(wire, "x", last)
+      assert(received.isEmpty)
+      assertEquals(wire.aborted.get(), 1)
+      assertEquals(closes, 1)
+      val _ = listener.onText(wire, "tail", true)
+      assertEquals(closes, 1)
+      assertEquals(wire.aborted.get(), 1)
+      assert(received.isEmpty)
+      val replacement = new Wire
+      val _ = boundary.replies.add(CompletableFuture.completedFuture(replacement))
+      val fresh = boundary.connect(text => { val _ = received.add(text) }, () => ())
+      try
+        val _ = boundary.listeners.asScala.last.onText(replacement, Feed.ping, true)
+        assertEquals(received.asScala.toVector, Vector(Feed.ping))
+      finally
+        fresh.close()
+        socket.close()
+    }
