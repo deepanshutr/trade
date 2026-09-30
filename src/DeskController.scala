@@ -47,7 +47,11 @@ final class DeskController(
     current = current.copy(outlook = value)
   }
   def orderResultNotSaved(): Unit = synchronized {
-    current = current.copy(actionNotice = Some("Order result not saved"))
+    val notice = current.actionNotice match
+      case Some(text) if text.endsWith(" (not saved)") => text
+      case Some(text)                                  => s"$text (not saved)"
+      case None                                        => "Order result not saved"
+    current = current.copy(actionNotice = Some(notice))
   }
   def addMessage(kind: String, text: String): Unit = synchronized {
     if kind == "order" then result(Workspace.safeText(text))

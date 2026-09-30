@@ -37,6 +37,13 @@ object WorkspaceApp:
       finally if restoration.owner eq thread then stop()
     else if !restoration.started && restoration.restore() then stop()
 
+  private[desk] def orderResultFailureHandler(
+      diagnostics: Diagnostics,
+      reportNotice: () => Unit
+  ): Throwable => Unit = error =>
+    diagnostics.failure(DiagnosticPart.OrderResults, error)
+    if !error.isInstanceOf[OrderResultLog.SavedRecordFailure] then reportNotice()
+
   private[desk] def closeAll(
       outlook: AutoCloseable,
       announcements: AutoCloseable,
@@ -260,15 +267,11 @@ object WorkspaceApp:
       val routed: MarketFeed =
         onchain.fold[MarketFeed](feed)(o => new CompositeFeed(feed, o, () => state.get().coin))
       val announcements = Main.announcements(args, NativeAnnouncementOutput.create())
-      var reportOrderResultFailure: () => Unit = () => ()
-      val results = new OrderResultLog.Writer(
+      lazy val results: OrderResultLog.Writer = new OrderResultLog.Writer(
         text => OrderResultLog.append(directory, now(), text),
-        error => {
-          diagnostics.failure(DiagnosticPart.OrderResults, error)
-          reportOrderResultFailure()
-        }
+        orderResultFailureHandler(diagnostics, () => controller.orderResultNotSaved())
       )
-      val controller = new DeskController(
+      lazy val controller: DeskController = new DeskController(
         PanelView(
           mode = mode,
           sizes = config.sizes,
@@ -281,7 +284,6 @@ object WorkspaceApp:
         announcements.setMuted,
         results.append
       )
-      reportOrderResultFailure = () => controller.orderResultNotSaved()
       val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
       val alerts = new AlertPolicy
       def closeAll(): Unit =

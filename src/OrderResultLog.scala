@@ -10,9 +10,17 @@ import scala.util.control.NonFatal
 
 /** Replay receipts only. Each append owns the lock, so viewing processes may coexist. */
 object OrderResultLog:
-  final class Writer(write: String => Unit, failure: Throwable => Unit) extends AutoCloseable:
+  final class LockTimeout extends java.io.IOException("order result lock timed out")
+  private[desk] final class SavedRecordFailure(cause: Throwable)
+      extends java.io.IOException("order result was saved but later work failed", cause)
+
+  final class Writer(
+      write: String => Unit,
+      failure: Throwable => Unit,
+      retryWindowNanos: Long = TimeUnit.SECONDS.toNanos(5)
+  ) extends AutoCloseable:
     private val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
-    private val retryWindowNanos = TimeUnit.SECONDS.toNanos(5)
+    private val closing = new java.util.concurrent.atomic.AtomicBoolean(false)
 
     private def writeWithRetry(text: String): Unit =
       val began = System.nanoTime()
@@ -23,8 +31,9 @@ object OrderResultLog:
           write(text)
           saved = true
         catch
-          case error: java.io.IOException if error.getMessage == "order result lock timed out" =>
-            if System.nanoTime() - began >= retryWindowNanos then failed = Some(error)
+          case error: LockTimeout =>
+            if closing.get() || System.nanoTime() - began >= retryWindowNanos then
+              failed = Some(error)
             else
               try Thread.sleep(10L)
               catch
@@ -37,7 +46,9 @@ object OrderResultLog:
     def append(text: String): Unit =
       try executor.execute(() => writeWithRetry(text))
       catch case error: java.util.concurrent.RejectedExecutionException => failure(error)
-    def close(): Unit = executor.close()
+    def close(): Unit =
+      closing.set(true)
+      executor.close()
 
   private[desk] def trim(path: Path, beforeReplace: () => Unit = () => ()): Unit =
     val lines = new String(
@@ -71,46 +82,62 @@ object OrderResultLog:
       try lease = channel.tryLock()
       catch case _: OverlappingFileLockException => ()
       if lease == null then
-        if System.nanoTime() - began >= 50000000L then
-          throw new java.io.IOException("order result lock timed out")
+        if System.nanoTime() - began >= 50000000L then throw new LockTimeout
         Thread.sleep(1L)
     lease
 
   def append(directory: Path, at: Long, text: String): Unit =
+    appendAfterForce(directory, at, text, () => ())
+
+  private[desk] def appendAfterForce(
+      directory: Path,
+      at: Long,
+      text: String,
+      afterForce: () => Unit
+  ): Unit =
     val began = System.nanoTime()
-    if !writing.tryLock(50L, TimeUnit.MILLISECONDS) then
-      throw new java.io.IOException("order result lock timed out")
-    try appendLocked(directory, at, text, began)
+    if !writing.tryLock(50L, TimeUnit.MILLISECONDS) then throw new LockTimeout
+    try appendLocked(directory, at, text, began, afterForce)
     finally writing.unlock()
 
-  private def appendLocked(directory: Path, at: Long, text: String, began: Long): Unit = {
-    LocalFiles.directory(directory)
-    val channel = open(directory.resolve("order-results.lock"), false)
+  private def appendLocked(
+      directory: Path,
+      at: Long,
+      text: String,
+      began: Long,
+      afterForce: () => Unit
+  ): Unit =
+    var forced = false
     try
-      val lease = lock(channel, began)
+      LocalFiles.directory(directory)
+      val channel = open(directory.resolve("order-results.lock"), false)
       try
-        val log = open(directory.resolve("order-results.jsonl"), true)
+        val lease = lock(channel, began)
         try
-          val record = ujson.Obj(
-            "id" -> java.util.UUID.randomUUID().toString,
-            "at" -> at,
-            "kind" -> "order",
-            "text" -> text
-          )
-          val end = log.size()
-          val last = ByteBuffer.allocate(1)
-          val separator = if end > 0 then
-            log.read(last, end - 1)
-            if last.get(0) == '\n'.toByte then "" else "\n"
-          else ""
-          log.position(end)
-          val bytes = ByteBuffer.wrap(
-            (separator + record.toString + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)
-          )
-          while bytes.hasRemaining do log.write(bytes)
-          log.force(true)
-        finally log.close()
-        trim(directory.resolve("order-results.jsonl"))
-      finally lease.release()
-    finally channel.close()
-  }
+          val log = open(directory.resolve("order-results.jsonl"), true)
+          try
+            val record = ujson.Obj(
+              "id" -> java.util.UUID.randomUUID().toString,
+              "at" -> at,
+              "kind" -> "order",
+              "text" -> text
+            )
+            val end = log.size()
+            val last = ByteBuffer.allocate(1)
+            val separator = if end > 0 then
+              log.read(last, end - 1)
+              if last.get(0) == '\n'.toByte then "" else "\n"
+            else ""
+            log.position(end)
+            val bytes = ByteBuffer.wrap(
+              (separator + record.toString + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)
+            )
+            while bytes.hasRemaining do log.write(bytes)
+            log.force(true)
+            forced = true
+            afterForce()
+          finally log.close()
+          trim(directory.resolve("order-results.jsonl"))
+        finally lease.release()
+      finally channel.close()
+    catch case NonFatal(error) if forced => throw new SavedRecordFailure(error)

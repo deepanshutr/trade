@@ -74,6 +74,21 @@ class StatusPanelSpec extends munit.FunSuite:
     assert(frame.lines.exists(_.contains("Order result not saved")), frame.lines.mkString("\n"))
   }
 
+  test("an unsaved order result preserves the outcome and adds its suffix only once") {
+    val controller = new DeskController(
+      panel.copy(actionNotice = Some("Bought #7")),
+      () => now,
+      _ => Left("unused"),
+      _ => false,
+      _ => Left("unused")
+    )
+    controller.orderResultNotSaved()
+    controller.orderResultNotSaved()
+    assertEquals(controller.panel.actionNotice, Some("Bought #7 (not saved)"))
+    val frame = draw(TradingView("XMR", message = "Ready", ready = true), controller.panel)
+    assert(frame.lines.exists(_.contains("Bought #7 (not saved)")), frame.lines.mkString("\n"))
+  }
+
   test("a fill without a reported side cannot be labelled as a sale") {
     for (result, expected) <- Vector(
         "PAPER XMR buy filled 1" -> "Bought",

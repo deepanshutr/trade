@@ -31,7 +31,8 @@ class OrderResultLogSpec extends TempDirectorySuite:
         directory,
         Long.box(2L),
         "second",
-        Long.box(System.nanoTime() - 1000000000L)
+        Long.box(System.nanoTime() - 1000000000L),
+        () => ()
       )
     catch case error: java.lang.reflect.InvocationTargetException => throw error.getCause
 
@@ -237,6 +238,57 @@ class OrderResultLogSpec extends TempDirectorySuite:
     assertEquals(failures.get(0).getMessage, "order result lock timed out")
   }
 
+  test("a held lock retries until the configured window") {
+    val directory = tempDirectory("desk-order-short-window")
+    val failures = new java.util.concurrent.CopyOnWriteArrayList[Throwable]()
+    val failed = new java.util.concurrent.CountDownLatch(1)
+    val window = java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(250L)
+    val writer = new OrderResultLog.Writer(
+      text => OrderResultLog.append(directory, 123L, text),
+      error => { failures.add(error); failed.countDown(); () },
+      retryWindowNanos = window
+    )
+    val (holder, release) = holdWritingLock()
+    val began = System.nanoTime()
+    try
+      writer.append("not saved")
+      assert(failed.await(2, java.util.concurrent.TimeUnit.SECONDS))
+    finally
+      release.countDown()
+      holder.join()
+      writer.close()
+    val elapsed = System.nanoTime() - began
+    assert(elapsed >= window, s"failed after only $elapsed ns")
+    assert(elapsed <= window + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(150L))
+    assertEquals(failures.size(), 1)
+  }
+
+  test("closing stops retries for queued records") {
+    val directory = tempDirectory("desk-order-close-retries")
+    val firstAttempt = new java.util.concurrent.CountDownLatch(1)
+    val failures = new java.util.concurrent.CopyOnWriteArrayList[Throwable]()
+    val writer = new OrderResultLog.Writer(
+      text => {
+        firstAttempt.countDown()
+        OrderResultLog.append(directory, 123L, text)
+      },
+      error => { failures.add(error); () },
+      retryWindowNanos = java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(400L)
+    )
+    val (holder, release) = holdWritingLock()
+    try
+      (1 to 4).foreach(i => writer.append(s"result $i"))
+      assert(firstAttempt.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      val began = System.nanoTime()
+      writer.close()
+      val elapsed = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began)
+      assert(elapsed < 800L, s"close waited $elapsed ms for four queued records")
+      assertEquals(failures.size(), 4)
+    finally
+      release.countDown()
+      holder.join()
+  }
+
   test("an append starts a new line after a torn record") {
     val directory = tempDirectory("desk-order-torn")
     OrderResultLog.append(directory, 1L, "first")
@@ -273,6 +325,7 @@ class OrderResultLogSpec extends TempDirectorySuite:
         assert(elapsed < 250, s"lock blocked the caller for $elapsed ms")
         val error = result.failed.get
         assert(error.isInstanceOf[java.io.IOException])
+        assertEquals(error.getClass.getSimpleName, "LockTimeout")
         assertEquals(error.getMessage, "order result lock timed out")
         diagnostics.failure(DiagnosticPart.OrderResults, error)
       diagnostics.close()
@@ -284,7 +337,7 @@ class OrderResultLogSpec extends TempDirectorySuite:
         .filter(_("event").str == "exception")
       assertEquals(failures.size, 2)
       assert(failures.forall(_("part").str == "OrderResults"))
-      assert(failures.forall(_("class").str == "IOException"))
+      assert(failures.forall(_("class").str == "LockTimeout"))
       assertEquals(Files.readAllLines(directory.resolve("order-results.jsonl")).size(), 1)
     finally
       diagnostics.close()
