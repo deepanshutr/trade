@@ -522,7 +522,10 @@ final class TradingWorker private[desk] (
             saved = opened.pending
             if saved.nonEmpty then
               busy.set(true)
-              message = saved.get.coin + " waiting for order result"
+              message =
+                if saved.get.owner.exists(owner => !config.owner.contains(owner)) then
+                  TradingWorker.savedOwnerMismatchMessage
+                else saved.get.coin + " waiting for order result"
           }
         catch case _: Exception => storageFailure()
       val unresolved = synchronized(
@@ -593,9 +596,8 @@ final class TradingWorker private[desk] (
               if generation == g then
                 roleGeneration = Some(g)
                 roleAt = startedAt
-                if message == TradingWorker.ownerMismatchMessage &&
-                  !saved.exists(p => p.owner.exists(owner => !config.owner.contains(owner)))
-                then message = saved.fold("Preparing trading")(_.coin + " waiting for order result")
+                if message == TradingWorker.ownerMismatchMessage then
+                  message = saved.fold("Preparing trading")(_.coin + " waiting for order result")
             }
           initializeSigning()
         exchange.watchTimed(

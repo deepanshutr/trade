@@ -554,8 +554,33 @@ class TradingWorkerSpec extends TempDirectorySuite:
         assertEquals(f.worker.view.outcome, None)
         if owner.nonEmpty then
           assertEquals(f.worker.view.message, TradingWorker.savedOwnerMismatchMessage)
+        else assertEquals(f.worker.view.message, "XMR waiting for order result")
       finally f.close()
     }
+  }
+
+  test("an owner-less saved order stays saved and clears a recovered signer mismatch") {
+    val f = new Fixture(autoStart = false, roleMatches = false)
+    try
+      val saved = saveAtStartup(f)
+      val file = f.directory.resolve(f.config.identity + ".json")
+      val data = ujson.read(Files.readString(file))
+      data("pending").obj.remove("owner")
+      Files.writeString(file, ujson.write(data))
+      f.clock.set(saved.expiresAfter + 60001L)
+      f.worker.start()
+      Wait.until("signer mismatch was not shown")(
+        f.worker.view.message == TradingWorker.ownerMismatchMessage
+      )
+      f.roleMatches = true
+      f.clock.addAndGet(10001L)
+      Wait.until("matching role did not refresh the account")(f.worker.view.position.nonEmpty)
+      assertEquals(f.worker.view.message, "XMR waiting for order result")
+      assertEquals(f.openedJournal.pending.map(_.id), Some(saved.id))
+      assertEquals(f.openedJournal.pending.flatMap(_.owner), None)
+      assert(f.worker.view.pending)
+      assert(!f.worker.submit(buy, "XMR"))
+    finally f.close()
   }
 
   test("startup matching fill settles a saved order belonging to another owner") {
