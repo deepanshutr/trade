@@ -16,7 +16,8 @@ final case class SavedOrder(
     limit: String,
     reference: String,
     expiresAfter: Long,
-    createdAt: Long
+    createdAt: Long,
+    owner: Option[String] = None
 )
 
 final class OrderJournal private (
@@ -49,7 +50,8 @@ final class OrderJournal private (
           p("limit").str,
           p("reference").str,
           p("expiresAfter").str.toLong,
-          p("createdAt").str.toLong
+          p("createdAt").str.toLong,
+          p.obj.get("owner").flatMap(_.strOpt)
         )
       )
       require(saved.get.id.matches("0x[0-9a-f]{32}") && saved.get.nonce <= lastNonce)
@@ -68,7 +70,8 @@ final class OrderJournal private (
         "limit" -> p.limit,
         "reference" -> p.reference,
         "expiresAfter" -> p.expiresAfter.toString,
-        "createdAt" -> p.createdAt.toString
+        "createdAt" -> p.createdAt.toString,
+        "owner" -> p.owner.fold[ujson.Value](ujson.Null)(ujson.Str(_))
       )
     }
     val bytes = ujson
@@ -111,7 +114,7 @@ final class OrderJournal private (
     next
   }
 
-  def reserve(plan: OrderPlan, now: Long): SavedOrder = synchronized {
+  def reserve(plan: OrderPlan, owner: String, now: Long): SavedOrder = synchronized {
     require(now >= 0)
     if saved.nonEmpty then throw new IllegalStateException("an order is unresolved")
     val nonce = now.max(Math.addExact(lastNonce, 1L))
@@ -125,7 +128,8 @@ final class OrderJournal private (
       Trading.format(plan.limit),
       Trading.format(plan.reference),
       Math.addExact(now, 5000L),
-      now
+      now,
+      Some(owner)
     )
     persist(nonce, Some(p))
     p

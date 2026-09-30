@@ -412,7 +412,7 @@ final class TradingWorker private[desk] (
 
   private def executeOrder(press: Press): Unit =
     val p = try
-      val reserved = journal.get.reserve(press.plan, wall())
+      val reserved = journal.get.reserve(press.plan, config.owner.get, wall())
       afterReserve()
       reserved
     catch
@@ -528,6 +528,8 @@ final class TradingWorker private[desk] (
         if !fatal && !executing.get() then saved else None
       )
       unresolved.foreach { p =>
+        if p.owner.exists(owner => !config.owner.contains(owner)) then
+          synchronized { message = "Saved order belongs to another owner" }
         val reply = exchange.info(
           ujson.Obj(
             "type" -> "orderStatus",
@@ -540,7 +542,8 @@ final class TradingWorker private[desk] (
             reply,
             p,
             wall(),
-            allowUnknown = synchronized(roleGeneration.contains(g) && fresh(roleAt, 60000L))
+            allowUnknown = p.owner.nonEmpty && p.owner == config.owner &&
+              synchronized(roleGeneration.contains(g) && fresh(roleAt, 60000L))
           )
           .foreach(text => complete(p, text))
       }
