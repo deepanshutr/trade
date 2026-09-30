@@ -336,6 +336,25 @@ class TradingWorkerSpec extends TempDirectorySuite:
 
   private val buy = OrderIntent(Side.Buy, OrderKind.Hard)
 
+  test("an owner mismatch clears after the role matches with no saved order") {
+    val f = new Fixture(roleMatches = false)
+    try
+      Wait.until("owner mismatch was not shown")(
+        f.worker.view.message == TradingWorker.ownerMismatchMessage
+      )
+      assertEquals(f.openedJournal.pending, None)
+      f.roleMatches = true
+      f.clock.addAndGet(10001L)
+      f.fresh(f.worker, time = 12001L)
+      Wait.until("account did not refresh after the role matched")(
+        f.worker.view.position.nonEmpty && f.worker.view.block.isEmpty
+      )
+      assertNotEquals(f.worker.view.message, TradingWorker.ownerMismatchMessage)
+      assert(Set("Preparing trading", "Ready").contains(f.worker.view.message))
+      assertEquals(f.openedJournal.pending, None)
+    finally f.close()
+  }
+
   test("a saved order stays busy after an owner mismatch and successful account refresh") {
     val writes = new AtomicInteger()
     val f = new Fixture(beforeReplace = () => { writes.incrementAndGet(); () })

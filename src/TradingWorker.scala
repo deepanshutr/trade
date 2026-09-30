@@ -537,7 +537,7 @@ final class TradingWorker private[desk] (
             reply,
             p,
             wall(),
-            allowUnknown = synchronized(roleGeneration.nonEmpty && fresh(roleAt, 60000L))
+            allowUnknown = synchronized(fresh(roleAt, 60000L))
           )
           .foreach(text => complete(p, text))
       }
