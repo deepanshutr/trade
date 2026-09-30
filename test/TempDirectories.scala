@@ -36,6 +36,7 @@ abstract class TempDirectorySuite extends munit.FunSuite:
     directories += ((path, keepOnFailure))
     path
 
+  // Store shared folders in lazy vals: filtered-out suites never run afterAll.
   protected def suiteDirectory(prefix: String): Path =
     val path = tempDirectory(prefix)
     directories.remove(directories.size - 1)

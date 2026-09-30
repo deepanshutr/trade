@@ -4,7 +4,7 @@ import java.nio.file.{Files, Path}
 
 class TempDirectoriesSpec extends TempDirectorySuite:
   private var testFolder = Option.empty[Path]
-  private val sharedFolder = suiteDirectory("suite-")
+  private lazy val sharedFolder = suiteDirectory("suite-")
 
   test("successful cleanup removes nested files and links without following links") {
     val outside = tempDirectory("outside-")
