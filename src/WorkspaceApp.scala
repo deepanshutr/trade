@@ -2,7 +2,7 @@ package desk
 
 import java.nio.file.Path
 import java.util.concurrent.{CountDownLatch, LinkedBlockingQueue, TimeUnit}
-import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
 import scala.util.Try
 
 object WorkspaceApp:
@@ -39,10 +39,22 @@ object WorkspaceApp:
 
   private[desk] def orderResultFailureHandler(
       diagnostics: Diagnostics,
-      reportNotice: Long => Unit
+      reportNotice: Long => Unit,
+      markUnavailable: () => Unit
   ): (Long, Throwable) => Unit = (number, error) =>
     diagnostics.failure(DiagnosticPart.OrderResults, error)
-    if !error.isInstanceOf[OrderResultLog.SavedRecordFailure] then reportNotice(number)
+    if !error.isInstanceOf[OrderResultLog.SavedRecordFailure] then
+      markUnavailable()
+      reportNotice(number)
+
+  private[desk] def orderResultHandler(
+      writer: OrderResultLog.Writer,
+      diagnostics: Diagnostics,
+      reportNotice: Long => Unit,
+      markUnavailable: () => Unit
+  ): (Long, String) => Unit =
+    val failed = orderResultFailureHandler(diagnostics, reportNotice, markUnavailable)
+    (number, text) => writer.append(text, error => failed(number, error))
 
   private[desk] def closeAll(
       outlook: AutoCloseable,
@@ -94,7 +106,8 @@ object WorkspaceApp:
       zone: java.time.ZoneId,
       style: Style,
       outlook: OutlookWorker,
-      logsUnavailable: Boolean = false
+      logsUnavailable: Boolean = false,
+      orderResultsUnavailable: Boolean = false
   ): WorkspaceFrame =
     val visible = outlook.forDisplay(panel.outlook, market, now)
     Workspace.draw(
@@ -106,7 +119,8 @@ object WorkspaceApp:
       now,
       zone,
       style,
-      logsUnavailable
+      logsUnavailable,
+      orderResultsUnavailable
     )
 
   private[desk] def announce(
@@ -267,6 +281,7 @@ object WorkspaceApp:
       val routed: MarketFeed =
         onchain.fold[MarketFeed](feed)(o => new CompositeFeed(feed, o, () => state.get().coin))
       val announcements = Main.announcements(args, NativeAnnouncementOutput.create())
+      val orderResultsUnavailable = new AtomicBoolean(false)
       lazy val results: OrderResultLog.Writer = new OrderResultLog.Writer(
         text => OrderResultLog.append(directory, now(), text),
         error => diagnostics.failure(DiagnosticPart.OrderResults, error)
@@ -282,12 +297,12 @@ object WorkspaceApp:
         worker.submitReviewed,
         worker.switchMode,
         announcements.setMuted,
-        (number, text) =>
-          results.append(
-            text,
-            error =>
-              orderResultFailureHandler(diagnostics, controller.orderResultNotSaved)(number, error)
-          )
+        orderResultHandler(
+          results,
+          diagnostics,
+          controller.orderResultNotSaved,
+          () => orderResultsUnavailable.set(true)
+        )
       )
       val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
       val alerts = new AlertPolicy
@@ -448,7 +463,8 @@ object WorkspaceApp:
               zone,
               style,
               outlook,
-              diagnostics.status.nonEmpty
+              diagnostics.status.nonEmpty,
+              orderResultsUnavailable.get()
             )
           diagnostics.slow(DiagnosticPart.Build, System.nanoTime() - building)
           val waiting = System.nanoTime()

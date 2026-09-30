@@ -9,7 +9,8 @@ class StatusPanelSpec extends munit.FunSuite:
       p: PanelView = panel,
       cols: Int = 100,
       rows: Int = 30,
-      logsUnavailable: Boolean = false
+      logsUnavailable: Boolean = false,
+      orderResultsUnavailable: Boolean = false
   ): WorkspaceFrame =
     Workspace.draw(
       snapshot,
@@ -20,7 +21,8 @@ class StatusPanelSpec extends munit.FunSuite:
       now,
       java.time.ZoneOffset.UTC,
       Style.mono,
-      logsUnavailable = logsUnavailable
+      logsUnavailable = logsUnavailable,
+      orderResultsUnavailable = orderResultsUnavailable
     )
 
   test("current connection and account blocks replace old success immediately") {
@@ -107,6 +109,52 @@ class StatusPanelSpec extends munit.FunSuite:
           frame.lines.mkString("\n")
         )
       finally writer.close()
+  }
+
+  test("unsaved order notices yield to pending progress and current blocks") {
+    val failed = panel.copy(actionNotice = Some("Order result #1 not saved"), actionNumber = 1)
+    val unsaved = draw(
+      TradingView("XMR", message = "Ready", ready = true),
+      failed.copy(mode = "VIEW"),
+      Layout.minCols,
+      Layout.minRows
+    )
+    assert(
+      unsaved.lines.exists(_.contains("Order result #1 not saved")),
+      unsaved.lines.mkString("\n")
+    )
+    assert(!unsaved.lines.exists(_.contains("not saved #1")), unsaved.lines.mkString("\n"))
+
+    val pending = draw(
+      TradingView("XMR", message = "PAPER saving 3s | XMR", pending = true),
+      failed,
+      Layout.minCols,
+      Layout.minRows,
+      orderResultsUnavailable = true
+    )
+    assert(pending.lines.exists(_.contains("Saving 3s")), pending.lines.mkString("\n"))
+    assert(
+      !pending.lines.exists(_.contains("Order result #1 not saved")),
+      pending.lines.mkString("\n")
+    )
+    assert(pending.lines.head.contains("!results"), pending.lines.head)
+
+    val blocked = draw(
+      TradingView("XMR", message = "Trading stopped", block = Some("Trading stopped")),
+      failed,
+      Layout.minCols,
+      Layout.minRows,
+      orderResultsUnavailable = true
+    )
+    assert(blocked.lines.exists(_.contains("Trading stopped")), blocked.lines.mkString("\n"))
+    assert(
+      !blocked.lines.exists(_.contains("Order result #1 not saved")),
+      blocked.lines.mkString("\n")
+    )
+    assert(blocked.lines.head.contains("!results"), blocked.lines.head)
+
+    val healthy = draw(TradingView("XMR", message = "Ready", ready = true), panel)
+    assert(!healthy.lines.head.contains("!results"), healthy.lines.head)
   }
 
   test("a failed earlier order keeps its number after a newer order notice") {

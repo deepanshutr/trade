@@ -123,10 +123,8 @@ object Workspace:
 
   private def orderStatus(view: TradingView, panel: PanelView): String =
     val unsaved = panel.actionNotice.filter(_.toLowerCase.matches("order result #[0-9]+ not saved"))
-    val raw = unsaved.getOrElse(
-      if view.pending then view.message
-      else view.block.orElse(panel.actionNotice).getOrElse("")
-    )
+    val raw =
+      if view.pending then view.message else view.block.orElse(panel.actionNotice).getOrElse("")
     val lower = raw.toLowerCase
     val coded = if view.block.isEmpty || panel.mode == "VIEW" then None
     else
@@ -139,8 +137,7 @@ object Workspace:
         // Dynamic action notices and uncoded router blocks retain their existing labels.
         case BlockCode.Blocked => None
     val text =
-      if unsaved.nonEmpty then safeText(raw)
-      else if !view.pending && coded.nonEmpty then coded.get
+      if !view.pending && coded.nonEmpty then coded.get
       else if view.pending then
         val stage = "(?i).*\\b(queued|checking|saving) (\\d+s).*".r
         raw match
@@ -166,6 +163,7 @@ object Workspace:
           .contains("quote")
       then "Waiting for prices"
       else if lower.contains("pending") then "Sending"
+      else if unsaved.nonEmpty then safeText(raw)
       else if panel.mode == "VIEW" then "View only"
       else if raw.nonEmpty then safeText(raw).takeWhile(_ != '\n')
       else ""
@@ -182,10 +180,22 @@ object Workspace:
       now: Long,
       zone: java.time.ZoneId,
       style: Style,
-      logsUnavailable: Boolean = false
+      logsUnavailable: Boolean = false,
+      orderResultsUnavailable: Boolean = false
   ): WorkspaceFrame =
     if view.coin != s.coin then
-      return draw(s, view.forMarket(s.coin), panel, cols, rows, now, zone, style, logsUnavailable)
+      return draw(
+        s,
+        view.forMarket(s.coin),
+        panel,
+        cols,
+        rows,
+        now,
+        zone,
+        style,
+        logsUnavailable,
+        orderResultsUnavailable
+      )
     if cols < Layout.minCols || rows < Layout.minRows then
       WorkspaceFrame(
         Vector(s"need ${Layout.minCols}x${Layout.minRows}, have ${cols}x$rows"),
@@ -337,7 +347,8 @@ object Workspace:
                 content.slice(start, start + b.width)
               ) + content.drop(start + b.width)
             }
-        val warnings = if logsUnavailable then " !logs" else ""
+        val warnings = (if logsUnavailable then " !logs" else "") +
+          (if orderResultsUnavailable then " !results" else "")
         val publicLine = if i == 0 && warnings.nonEmpty then
           Chart
             .fit(left, Chart.plain(left).length - warnings.length) + style.wrap(style.ask, warnings)

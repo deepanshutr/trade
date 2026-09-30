@@ -3,6 +3,8 @@ package desk
 class WorkspaceOrderResultSpec extends TempDirectorySuite:
   test("order result writer failure reaches diagnostics and the controller notice") {
     val records = new java.util.concurrent.CopyOnWriteArrayList[String]()
+    val marked = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val reported = new java.util.concurrent.CountDownLatch(1)
     val diagnostics = new Diagnostics(
       () =>
         new Diagnostics.Sink:
@@ -19,14 +21,25 @@ class WorkspaceOrderResultSpec extends TempDirectorySuite:
       _ => false,
       _ => Left("unused")
     )
+    val writer = new OrderResultLog.Writer(
+      _ => throw new java.io.IOException("private detail"),
+      _ => ()
+    )
+    val handle = WorkspaceApp.orderResultHandler(
+      writer,
+      diagnostics,
+      number => { controller.orderResultNotSaved(number); reported.countDown() },
+      () => marked.set(true)
+    )
     diagnostics.start()
     try
-      WorkspaceApp.orderResultFailureHandler(diagnostics, controller.orderResultNotSaved)(
-        1,
-        new java.io.IOException("private detail")
-      )
-    finally diagnostics.close()
+      handle(1, "order result")
+      assert(reported.await(2, java.util.concurrent.TimeUnit.SECONDS))
+    finally
+      writer.close()
+      diagnostics.close()
     assertEquals(controller.panel.actionNotice, Some("Order result #1 not saved"))
+    assert(marked.get())
     val failures = records.toArray.toVector
       .map(_.toString)
       .map(ujson.read(_))
@@ -58,9 +71,11 @@ class WorkspaceOrderResultSpec extends TempDirectorySuite:
       _ => Left("unused")
     )
     val reported = new java.util.concurrent.CountDownLatch(1)
+    val marked = new java.util.concurrent.atomic.AtomicBoolean(false)
     val handler = WorkspaceApp.orderResultFailureHandler(
       diagnostics,
-      controller.orderResultNotSaved
+      controller.orderResultNotSaved,
+      () => marked.set(true)
     )
     val writer = new OrderResultLog.Writer(
       text =>
@@ -80,6 +95,7 @@ class WorkspaceOrderResultSpec extends TempDirectorySuite:
       writer.close()
       diagnostics.close()
     assertEquals(controller.panel.actionNotice, None)
+    assert(!marked.get())
     assertEquals(
       java.nio.file.Files.readAllLines(directory.resolve("order-results.jsonl")).size(),
       1
