@@ -79,6 +79,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     var openedJournal: OrderJournal = null
     @volatile var position = "0"
     @volatile var readFailure = false
+    @volatile var failedRead = ""
     @volatile var holdAccount = false
     @volatile var holdBalance = false
     @volatile var holdSecondBalance = false
@@ -109,11 +110,12 @@ class TradingWorkerSpec extends TempDirectorySuite:
           generation: Long,
           receive: Option[ujson.Value] => Unit
       ): Unit =
+        require(failedRead != "socket", "account socket failed")
         activeCoin = coin
         activeReceive = receive
         if publishActive then sendActive()
       def info(body: ujson.Value): Option[ujson.Value] =
-        if readFailure then None
+        if readFailure || body("type").str == failedRead then None
         else
           body("type").str match
             case "meta" =>
@@ -325,6 +327,79 @@ class TradingWorkerSpec extends TempDirectorySuite:
       worker.close()
 
   private val buy = OrderIntent(Side.Buy, OrderKind.Hard)
+
+  private def saveAtStartup(f: Fixture): SavedOrder =
+    val plan = Trading
+      .plan(
+        "XMR",
+        MarketRules(0, 3, 5),
+        Book(Vector(Level("99.99", "20", 1)), Vector(Level("100", "20", 1)), 1000L),
+        BigDecimal(100),
+        BigDecimal(0),
+        buy,
+        f.config.sizes
+      )
+      .toOption
+      .get
+    val journal = OrderJournal.open(f.directory, f.config.identity)
+    try
+      val saved = journal.reserve(plan, f.clock.get())
+      f.lastPost.set(ujson.Obj("action" -> Exchange.action(saved)))
+      saved
+    finally journal.close()
+
+  Vector("meta", "socket", "userRole").foreach { failure =>
+    test(s"startup settles a saved order while $failure fails and waits for account data") {
+      val f = new Fixture(autoStart = false)
+      try
+        saveAtStartup(f)
+        f.failedRead = failure
+        f.recoverFilled = true
+        f.holdRecovery = true
+        f.worker.start()
+        assert(f.recoveryEntered.await(3, TimeUnit.SECONDS), "startup status lookup missing")
+        assert(f.worker.view.pending)
+        assertEquals(f.loads.get(), 0)
+        intercept[Exception](OrderJournal.open(f.directory, f.config.identity))
+        f.recoveryRelease.countDown()
+        Wait.until("saved order was not settled")(
+          f.worker.view.outcome.contains("XMR recovered filled")
+        )
+        assertEquals(f.openedJournal.pending, None)
+        assert(f.worker.view.pending)
+        assert(!f.worker.view.ready)
+        assert(!f.worker.submit(buy, "XMR"))
+        assertEquals(f.coreReads.get(), 0)
+        if failure == "userRole" then assertEquals(f.loads.get(), 0)
+        f.failedRead = ""
+        f.clock.addAndGet(10001L)
+        f.fresh(f.worker, time = 1001L)
+        f.ready()
+        assert(!f.worker.view.pending)
+        assertEquals(f.worker.view.outcome, Some("XMR recovered filled"))
+        assertEquals(f.posts.get(), 0)
+      finally f.close()
+    }
+  }
+
+  test("startup failed status lookup keeps the saved order while metadata fails") {
+    val f = new Fixture(autoStart = false)
+    try
+      val saved = saveAtStartup(f)
+      f.failedRead = "meta"
+      f.lookupFailure = true
+      f.worker.start()
+      Wait.until("startup status lookup missing")(f.recoveryReads.get() >= 2)
+      assertEquals(f.openedJournal.pending, Some(saved))
+      assert(f.worker.view.pending)
+      assertEquals(f.worker.view.outcome, None)
+      assertEquals(f.posts.get(), 0)
+      f.worker.close()
+      val reopened = OrderJournal.open(f.directory, f.config.identity)
+      try assertEquals(reopened.pending, Some(saved))
+      finally reopened.close()
+    finally f.close()
+  }
 
   test(
     "optional held spot balance cannot delay readiness or publish a pre-fill balance after completion"

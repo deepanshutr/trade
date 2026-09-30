@@ -444,17 +444,6 @@ final class TradingWorker private[desk] (
           synchronized { message = p.coin + " waiting for order result" }
 
   private def initializeSigning(): Unit =
-    if journal.isEmpty then
-      try
-        val opened = openJournal()
-        journal = Some(opened)
-        synchronized {
-          saved = opened.pending
-          if saved.nonEmpty then
-            busy.set(true)
-            message = saved.get.coin + " waiting for order result"
-        }
-      catch case _: Exception => storageFailure()
     if !accountPaused() && !synchronized(
         fatal || saved.nonEmpty || secret.nonEmpty
       )
@@ -517,6 +506,31 @@ final class TradingWorker private[desk] (
     val (current, g, version) = synchronized((coin, generation, accountVersion))
     val startedAt = monotonic()
     try
+      if enabled && config.configured && !synchronized(fatal) && journal.isEmpty then
+        try
+          val opened = openJournal()
+          journal = Some(opened)
+          synchronized {
+            saved = opened.pending
+            if saved.nonEmpty then
+              busy.set(true)
+              message = saved.get.coin + " waiting for order result"
+          }
+        catch case _: Exception => storageFailure()
+      if config.owner.nonEmpty then
+        val unresolved = synchronized(
+          if !fatal && !executing.get() then saved else None
+        )
+        unresolved.foreach { p =>
+          val reply = exchange.info(
+            ujson.Obj(
+              "type" -> "orderStatus",
+              "user" -> config.owner.get,
+              "oid" -> p.id
+            )
+          )
+          Exchange.recovered(reply, p, wall()).foreach(text => complete(p, text))
+        }
       val cached = synchronized {
         metadata.filter(_ => fresh(metadataAt, 60000L)).filter(Exchange.validMetadata(_, current))
       }
@@ -598,19 +612,6 @@ final class TradingWorker private[desk] (
               busy.set(false)
             if message == "Preparing trading" && leverageReady && secret.nonEmpty
             then message = "Ready"
-        }
-        val unresolved = synchronized(
-          if !fatal && !executing.get() then saved else None
-        )
-        unresolved.foreach { p =>
-          val reply = exchange.info(
-            ujson.Obj(
-              "type" -> "orderStatus",
-              "user" -> config.owner.get,
-              "oid" -> p.id
-            )
-          )
-          Exchange.recovered(reply, p, wall()).foreach(text => complete(p, text))
         }
       else if enabled then synchronized { message = "Configure owner and delegated signer" }
     catch
