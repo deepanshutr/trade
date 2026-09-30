@@ -141,6 +141,11 @@ expiry within the margin. Failed lookups keep the order saved regardless of time
 and known order statuses retain their existing handling. Do not delete recovery
 state manually. Resolve any remaining block using the account's order history.
 
+A saved order records its owner. Releasing an unknown order requires the saved
+owner to equal the configured owner. A saved order from an older version without
+an owner, or with another owner, is never released by time and settles only when
+the venue reports a matching final status under the configured owner.
+
 A wallet change pauses live orders for that owner and network across Desk processes
 sharing the same home directory, including ones using another state directory.
 The marker is `~/.local/state/desk/accounts/<network>-<owner-without-0x>.paused`,

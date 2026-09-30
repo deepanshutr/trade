@@ -498,6 +498,35 @@ class TradingWorkerSpec extends TempDirectorySuite:
       saved
     finally journal.close()
 
+  test("a saved order of another owner keeps one message across failed role checks and recovery") {
+    val f = new Fixture(autoStart = false, roleMatches = false)
+    try
+      val saved = saveAtStartup(f)
+      val file = f.directory.resolve(f.config.identity + ".json")
+      val data = ujson.read(Files.readString(file))
+      data("pending")("owner") = "0x" + "3" * 40
+      Files.writeString(file, ujson.write(data))
+      f.clock.set(saved.expiresAfter + 60001L)
+      f.worker.start()
+      Wait.until("saved order and role were not checked")(f.roleReads.get() > 0)
+      for round <- 1 to 3 do
+        f.clock.addAndGet(10001L)
+        val reads = f.recoveryReads.get()
+        Wait.until(s"refresh $round did not complete") {
+          assertEquals(f.worker.view.message, TradingWorker.savedOwnerMismatchMessage)
+          f.roleReads.get() >= round && f.recoveryReads.get() >= reads + 2
+        }
+      f.roleMatches = true
+      f.clock.addAndGet(10001L)
+      Wait.until("matching role did not refresh the account") {
+        assertEquals(f.worker.view.message, TradingWorker.savedOwnerMismatchMessage)
+        f.worker.view.position.nonEmpty
+      }
+      assert(f.worker.view.pending)
+      assertEquals(f.openedJournal.pending.map(_.id), Some(saved.id))
+    finally f.close()
+  }
+
   Vector(Some("0x" + "3" * 40), None).foreach { owner =>
     test(s"expired unknown order stays saved with a different or missing owner: $owner") {
       val f = new Fixture(autoStart = false)
@@ -524,7 +553,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         assertEquals(f.posts.get(), 0)
         assertEquals(f.worker.view.outcome, None)
         if owner.nonEmpty then
-          assertEquals(f.worker.view.message, "Saved order belongs to another owner")
+          assertEquals(f.worker.view.message, TradingWorker.savedOwnerMismatchMessage)
       finally f.close()
     }
   }

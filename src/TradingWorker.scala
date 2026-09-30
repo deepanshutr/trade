@@ -31,6 +31,7 @@ final case class TradingView(
 
 object TradingWorker:
   val ownerMismatchMessage: String = "Signer does not match the configured owner"
+  val savedOwnerMismatchMessage: String = "Saved order belongs to another owner"
   val maximumReviewLifetimeMs: Long = 30000L
 
   def create(
@@ -529,7 +530,7 @@ final class TradingWorker private[desk] (
       )
       unresolved.foreach { p =>
         if p.owner.exists(owner => !config.owner.contains(owner)) then
-          synchronized { message = "Saved order belongs to another owner" }
+          synchronized { message = TradingWorker.savedOwnerMismatchMessage }
         val reply = exchange.info(
           ujson.Obj(
             "type" -> "orderStatus",
@@ -592,8 +593,9 @@ final class TradingWorker private[desk] (
               if generation == g then
                 roleGeneration = Some(g)
                 roleAt = startedAt
-                if message == TradingWorker.ownerMismatchMessage then
-                  message = saved.fold("Preparing trading")(_.coin + " waiting for order result")
+                if message == TradingWorker.ownerMismatchMessage &&
+                  !saved.exists(p => p.owner.exists(owner => !config.owner.contains(owner)))
+                then message = saved.fold("Preparing trading")(_.coin + " waiting for order result")
             }
           initializeSigning()
         exchange.watchTimed(
@@ -639,7 +641,10 @@ final class TradingWorker private[desk] (
           leverageReady = false
           if !fatal then
             if Option(error.getMessage).exists(_.endsWith(": owner")) then
-              message = TradingWorker.ownerMismatchMessage
+              message =
+                if saved.exists(p => p.owner.exists(owner => !config.owner.contains(owner))) then
+                  TradingWorker.savedOwnerMismatchMessage
+                else TradingWorker.ownerMismatchMessage
             else if saved.isEmpty && !busy.get() then message = "Waiting for market or account data"
         }
 
