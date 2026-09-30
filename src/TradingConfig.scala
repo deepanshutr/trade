@@ -46,7 +46,15 @@ object TradingConfig:
   private val endpoint = "https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?"
 
   private[desk] def onchainMarkets(j: ujson.Value): Vector[OnchainMarket] =
+    require(j.obj.get("onchain").forall(_.arrOpt.isDefined), "onchain must be a list")
     val markets = j.obj.get("onchain").map(_.arr.toVector).getOrElse(Vector.empty).map { m =>
+      require(
+        m.objOpt.exists(o =>
+          Vector("name", "pair", "quotePool").forall(n => o.get(n).exists(_.strOpt.isDefined)) &&
+            o.get("rpc").exists(_.arrOpt.exists(_.forall(_.strOpt.isDefined)))
+        ),
+        "onchain market name, pair and quotePool must be strings and rpc must be a list of strings"
+      )
       val name = m("name").str
       require(name.matches(marketName) && State.validMarket(name), "invalid on-chain market name")
       def address(field: String): String =
@@ -109,6 +117,19 @@ object TradingConfig:
         require(shallowJson(text))
         val j = ujson.read(text)
         require(j.obj.keySet.forall(fields.contains), "unknown setting")
+        def stringFields(names: String*): Boolean =
+          names.forall(name => j.obj.get(name).forall(_.strOpt.isDefined))
+        require(stringFields("owner", "agent"), "owner and agent must be strings")
+        require(stringFields("network", "keyService"), "network and keyService must be strings")
+        require(
+          stringFields("paperBalance", "paperFee"),
+          "paperBalance and paperFee must be strings"
+        )
+        require(stringFields("small", "big", "target"), "small, big and target must be strings")
+        require(
+          stringFields("quoteAgeMs", "positionAgeMs"),
+          "quoteAgeMs and positionAgeMs must be strings"
+        )
         def decimal(name: String, fallback: BigDecimal): BigDecimal =
           j.obj.get(name).map(v => BigDecimal(v.str)).getOrElse(fallback)
         def string(name: String, fallback: String): String =

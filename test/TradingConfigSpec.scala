@@ -159,6 +159,83 @@ class TradingConfigSpec extends munit.FunSuite:
       finally Files.deleteIfExists(p)
   }
 
+  for field <- Vector(
+      "owner",
+      "agent",
+      "small",
+      "big",
+      "target",
+      "quoteAgeMs",
+      "positionAgeMs",
+      "network",
+      "keyService",
+      "paperBalance",
+      "paperFee",
+      "onchain"
+    )
+  do
+    test(s"wrong JSON types name $field without including supplied values") {
+      val values = Vector(
+        ujson.Num(5),
+        ujson.Bool(true),
+        ujson.Null,
+        ujson.Arr("private-type-canary"),
+        ujson.Obj("private-type-canary" -> "private-type-canary")
+      )
+      for value <- values do
+        val p = setting(ujson.Obj(field -> value).render())
+        try
+          val error = TradingConfig.load(Some(p)).swap.toOption.get
+          assert(error.contains(field), error)
+          assert(!error.contains("private-type-canary"), error)
+          assert(!error.contains("5"), error)
+          assert(!error.contains("true"), error)
+        finally Files.deleteIfExists(p)
+    }
+
+  test("wrong onchain market types name onchain without including supplied values") {
+    val values = Vector(
+      ujson.Num(5),
+      ujson.Bool(true),
+      ujson.Null,
+      ujson.Arr("private-type-canary"),
+      ujson.Obj("private-type-canary" -> "private-type-canary")
+    )
+    val markets = values ++ Vector(ujson.Obj("name" -> 5)) ++
+      (for
+        field <- Vector("name", "pair", "quotePool", "rpc")
+        value <- values
+      yield
+        val market = ujson.Obj(
+          "name" -> "DEMO",
+          "pair" -> ("0x" + "1" * 40),
+          "quotePool" -> ("0x" + "2" * 40),
+          "rpc" -> ujson.Arr("https://rpc.example.com")
+        )
+        market(field) =
+          if field == "rpc" && value.arrOpt.isDefined then
+            ujson.Arr(ujson.Obj("private-type-canary" -> true))
+          else value
+        market)
+      ++ Vector(
+        ujson.Obj(
+          "name" -> "DEMO",
+          "pair" -> ("0x" + "1" * 40),
+          "quotePool" -> ("0x" + "2" * 40),
+          "rpc" -> ujson.Arr(5)
+        )
+      )
+    for market <- markets do
+      val p = setting(ujson.Obj("onchain" -> ujson.Arr(market)).render())
+      try
+        val error = TradingConfig.load(Some(p)).swap.toOption.get
+        assert(error.contains("onchain"), error)
+        assert(!error.contains("private-type-canary"), error)
+        assert(!error.contains("5"), error)
+        assert(!error.contains("true"), error)
+      finally Files.deleteIfExists(p)
+  }
+
   // Tokenize strings and comments before looking for require calls. Delimiters inside
   // conditions or quoted text must not be mistaken for the message argument.
   private def fixedRequireMessages(source: String): Boolean =
