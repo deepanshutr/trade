@@ -7,7 +7,7 @@ final class DeskController(
     submit: OrderReview => Boolean,
     switchMode: String => Either[String, Unit],
     mute: Boolean => Unit = _ => (),
-    result: String => Unit = _ => ()
+    result: (Long, String) => Unit = (_, _) => ()
 ):
   private var current = initial
   private var shown = Option.empty[WorkspaceFrame]
@@ -46,14 +46,19 @@ final class DeskController(
   def outlook(value: OutlookView): Unit = synchronized {
     current = current.copy(outlook = value)
   }
+  def orderResultNotSaved(number: Long): Unit = synchronized {
+    current = current.copy(actionNotice = Some(s"Order result #$number not saved"))
+  }
   def addMessage(kind: String, text: String): Unit = synchronized {
-    if kind == "order" then result(Workspace.safeText(text))
+    val number = current.actionNumber + 1
+    val safe = Workspace.safeText(text)
     current = current.copy(
-      actionNotice = if kind == "order" || kind == "mode" then Some(Workspace.safeText(text))
+      actionNotice = if kind == "order" || kind == "mode" then Some(safe)
       else current.actionNotice,
-      actionNumber = if kind == "order" || kind == "mode" then current.actionNumber + 1
+      actionNumber = if kind == "order" || kind == "mode" then number
       else current.actionNumber
     )
+    if kind == "order" then result(number, safe)
   }
 
   private def cancel(): Unit =

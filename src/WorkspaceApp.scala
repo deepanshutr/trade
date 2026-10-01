@@ -6,6 +6,11 @@ import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
 import scala.util.Try
 
 object WorkspaceApp:
+  private[desk] final case class OrderResultHandling(
+      handle: (Long, String) => Unit,
+      unavailable: () => Boolean
+  )
+
   private[desk] final class Restoration(closeAll: () => Unit, terminal: () => Unit):
     @volatile private var restored = false
     @volatile private var restoreOwner: Thread = null
@@ -36,6 +41,28 @@ object WorkspaceApp:
       try if !restoration.started then restoration.restore()
       finally if restoration.owner eq thread then stop()
     else if !restoration.started && restoration.restore() then stop()
+
+  private[desk] def orderResultFailureHandler(
+      diagnostics: Diagnostics,
+      reportNotice: Long => Unit,
+      markUnavailable: () => Unit
+  ): (Long, Throwable) => Unit = (number, error) =>
+    diagnostics.failure(DiagnosticPart.OrderResults, error)
+    if !error.isInstanceOf[OrderResultLog.SavedRecordFailure] then
+      markUnavailable()
+      reportNotice(number)
+
+  private[desk] def orderResultHandler(
+      writer: OrderResultLog.Writer,
+      diagnostics: Diagnostics,
+      reportNotice: Long => Unit
+  ): OrderResultHandling =
+    val unavailable = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val failed = orderResultFailureHandler(diagnostics, reportNotice, () => unavailable.set(true))
+    OrderResultHandling(
+      (number, text) => writer.append(text, error => failed(number, error)),
+      () => unavailable.get()
+    )
 
   private[desk] def closeAll(
       outlook: AutoCloseable,
@@ -87,7 +114,8 @@ object WorkspaceApp:
       zone: java.time.ZoneId,
       style: Style,
       outlook: OutlookWorker,
-      logsUnavailable: Boolean = false
+      logsUnavailable: Boolean = false,
+      orderResultsUnavailable: Boolean = false
   ): WorkspaceFrame =
     val visible = outlook.forDisplay(panel.outlook, market, now)
     Workspace.draw(
@@ -99,7 +127,8 @@ object WorkspaceApp:
       now,
       zone,
       style,
-      logsUnavailable
+      logsUnavailable,
+      orderResultsUnavailable
     )
 
   private[desk] def announce(
@@ -260,14 +289,16 @@ object WorkspaceApp:
       val routed: MarketFeed =
         onchain.fold[MarketFeed](feed)(o => new CompositeFeed(feed, o, () => state.get().coin))
       val announcements = Main.announcements(args, NativeAnnouncementOutput.create())
-      val results = new OrderResultLog.Writer(
-        text =>
-          Try(OrderResultLog.append(directory, now(), text)).failed.foreach(error =>
-            diagnostics.failure(DiagnosticPart.OrderResults, error)
-          ),
+      val results: OrderResultLog.Writer = new OrderResultLog.Writer(
+        text => OrderResultLog.append(directory, now(), text),
         error => diagnostics.failure(DiagnosticPart.OrderResults, error)
       )
-      val controller = new DeskController(
+      lazy val orderResults = orderResultHandler(
+        results,
+        diagnostics,
+        number => controller.orderResultNotSaved(number)
+      )
+      lazy val controller: DeskController = new DeskController(
         PanelView(
           mode = mode,
           sizes = config.sizes,
@@ -278,7 +309,7 @@ object WorkspaceApp:
         worker.submitReviewed,
         worker.switchMode,
         announcements.setMuted,
-        results.append
+        orderResults.handle
       )
       val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
       val alerts = new AlertPolicy
@@ -439,7 +470,8 @@ object WorkspaceApp:
               zone,
               style,
               outlook,
-              diagnostics.status.nonEmpty
+              diagnostics.status.nonEmpty,
+              orderResults.unavailable()
             )
           diagnostics.slow(DiagnosticPart.Build, System.nanoTime() - building)
           val waiting = System.nanoTime()

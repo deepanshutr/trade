@@ -61,6 +61,18 @@ class ScreenSpec extends munit.FunSuite:
     val withBook = Screen.stats(s.copy(book = Some(book)), t0, 110)
     assert(withBook.contains("mid 500.15"), withBook)
   }
+  test("the stats mid uses the trading width format") {
+    for value <- Vector("0.000012345678", "123456789.123") do
+      val s = Snapshot
+        .initial("XMR", t0)
+        .copy(ctx =
+          Some(
+            Ctx("400", "401", "0.0001", "1", "1", "300", Some(value))
+          )
+        )
+      val line = Screen.stats(s, t0, 100)
+      assert(line.contains("mid " + Trading.display(BigDecimal(value), 12)), line)
+  }
   test("the feed is stale past five seconds, not six") {
     val s = Snapshot.initial("XMR", t0).copy(feed = Health.Live(t0 - 5500))
     val line = Screen.stats(s, t0, 100)

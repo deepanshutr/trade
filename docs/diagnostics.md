@@ -30,6 +30,9 @@ disk. Lost records are counted, and a stopped writer is reported as unavailable.
 Shutdown drains for at most 500 ms. An incomplete drain marks logging unavailable.
 The small `!logs` header warning appears when logging fails, including when another
 interactive process owns the lock. This is a diagnostic signal, not an order result.
+Short order result lock contention is retried without recording a diagnostic. Any order
+result failure before its record is saved is recorded, shown as "Order result #n not saved",
+and marked by `!results` for the rest of the session. Failures after saving are diagnostic only.
 
 Records contain fixed event names, counts, durations, validated public market names
 and the running archive hash. They contain no account identifiers, balances, order

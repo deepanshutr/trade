@@ -122,8 +122,9 @@ object Workspace:
     )
 
   private def orderStatus(view: TradingView, panel: PanelView): String =
-    val raw = if view.pending then view.message
-    else view.block.orElse(panel.actionNotice).getOrElse("")
+    val raw =
+      if view.pending then view.message else view.block.orElse(panel.actionNotice).getOrElse("")
+    val unsaved = raw.toLowerCase.matches("order result #[0-9]+ not saved")
     val lower = raw.toLowerCase
     val coded = if view.block.isEmpty || panel.mode == "VIEW" then None
     else
@@ -162,10 +163,12 @@ object Workspace:
           .contains("quote")
       then "Waiting for prices"
       else if lower.contains("pending") then "Sending"
+      else if unsaved then safeText(raw)
       else if panel.mode == "VIEW" then "View only"
       else if raw.nonEmpty then safeText(raw).takeWhile(_ != '\n')
       else ""
-    if text.nonEmpty && panel.actionNumber > 0 && !view.pending then s"$text #${panel.actionNumber}"
+    if text.nonEmpty && panel.actionNumber > 0 && !view.pending && !unsaved
+    then s"$text #${panel.actionNumber}"
     else text
 
   def draw(
@@ -177,10 +180,22 @@ object Workspace:
       now: Long,
       zone: java.time.ZoneId,
       style: Style,
-      logsUnavailable: Boolean = false
+      logsUnavailable: Boolean = false,
+      orderResultsUnavailable: Boolean = false
   ): WorkspaceFrame =
     if view.coin != s.coin then
-      return draw(s, view.forMarket(s.coin), panel, cols, rows, now, zone, style, logsUnavailable)
+      return draw(
+        s,
+        view.forMarket(s.coin),
+        panel,
+        cols,
+        rows,
+        now,
+        zone,
+        style,
+        logsUnavailable,
+        orderResultsUnavailable
+      )
     if cols < Layout.minCols || rows < Layout.minRows then
       WorkspaceFrame(
         Vector(s"need ${Layout.minCols}x${Layout.minRows}, have ${cols}x$rows"),
@@ -194,6 +209,8 @@ object Workspace:
       val rightWidth = cols - leftWidth - 1
       val chartWidth = Layout.workspaceChartWidth(cols)
       val tradeTop = rows - 15
+      val warnings = (if logsUnavailable then " !logs" else "") +
+        (if orderResultsUnavailable then " !results" else "")
       val marketFrame = Screen.renderMarket(
         s,
         chartWidth,
@@ -203,7 +220,8 @@ object Workspace:
         now = now,
         zone = zone,
         style = style,
-        portfolio = view.portfolio
+        portfolio = view.portfolio,
+        headerWidth = Some(chartWidth - warnings.length)
       )
       val gauges = indicatorRows(s, now, (leftWidth - 1) / 2, style).map(Chart.fit(_, leftWidth))
       val market = marketFrame.lines.padTo(tradeTop, " " * chartWidth) ++
@@ -337,11 +355,9 @@ object Workspace:
                 content.slice(start, start + b.width)
               ) + content.drop(start + b.width)
             }
-        val warnings = if logsUnavailable then " !logs" else ""
-        val publicLine = if i == 0 && warnings.nonEmpty then
-          Chart
-            .fit(left, Chart.plain(left).length - warnings.length) + style.wrap(style.ask, warnings)
-        else left
+        val publicLine =
+          if i == 0 && warnings.nonEmpty then left + style.wrap(style.ask, warnings)
+          else left
         (if style.colour then publicLine else Chart.plain(publicLine)) + "|" + content
       }
       WorkspaceFrame(
