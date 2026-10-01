@@ -479,24 +479,40 @@ object Exchange:
     )
 
 object ProtectedKey:
-  def read(config: TradingConfig): Array[Byte] =
-    val process = new ProcessBuilder(
-      "/usr/bin/security",
-      "find-generic-password",
-      "-s",
-      config.keyService,
-      "-a",
-      config.agent.get,
-      "-w"
+  // Desk waits 120 seconds at start for the Keychain prompt. A worker built
+  // without a session key waits 8.
+  def read(config: TradingConfig, waitSeconds: Int): Array[Byte] =
+    readWith(
+      config,
+      waitSeconds,
+      command =>
+        new ProcessBuilder(command*)
+          .redirectError(ProcessBuilder.Redirect.DISCARD)
+          .start()
     )
-      .redirectError(ProcessBuilder.Redirect.DISCARD)
-      .start()
+
+  private[desk] def readWith(
+      config: TradingConfig,
+      waitSeconds: Int,
+      start: Seq[String] => Process
+  ): Array[Byte] =
+    val process = start(
+      Seq(
+        "/usr/bin/security",
+        "find-generic-password",
+        "-s",
+        config.keyService,
+        "-a",
+        config.agent.get,
+        "-w"
+      )
+    )
     var raw = Array.emptyByteArray
     var key = Array.emptyByteArray
     var success = false
     try
       require(
-        process.waitFor(8, TimeUnit.SECONDS) && process.exitValue() == 0,
+        process.waitFor(waitSeconds, TimeUnit.SECONDS) && process.exitValue() == 0,
         "protected signing key is unavailable"
       )
       raw = process.getInputStream.readNBytes(129)

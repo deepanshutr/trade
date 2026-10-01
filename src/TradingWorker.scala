@@ -35,18 +35,52 @@ object TradingWorker:
   val savedOwnerMismatchMessage: String = "Saved order belongs to another owner"
   val maximumReviewLifetimeMs: Long = 30000L
 
+  // The four argument form keeps the single worker read with its 8 second wait.
   def create(
       config: TradingConfig,
       enabled: Boolean,
       coin: String,
       journalDirectory: Path
   ): TradingWorker =
+    create(
+      config,
+      enabled,
+      coin,
+      journalDirectory,
+      () => ProtectedKey.read(config, 8)
+    )
+
+  // The loader hands this worker its own copy of the key. The worker wipes it on close.
+  def create(
+      config: TradingConfig,
+      enabled: Boolean,
+      coin: String,
+      journalDirectory: Path,
+      loadKey: () => Array[Byte]
+  ): TradingWorker =
+    withExchange(
+      config,
+      enabled,
+      coin,
+      journalDirectory,
+      loadKey,
+      new JdkExchange(config.baseUrl)
+    )
+
+  private[desk] def withExchange(
+      config: TradingConfig,
+      enabled: Boolean,
+      coin: String,
+      journalDirectory: Path,
+      loadKey: () => Array[Byte],
+      exchange: Exchange
+  ): TradingWorker =
     new TradingWorker(
       config,
       enabled,
       coin,
-      new JdkExchange(config.baseUrl),
-      () => ProtectedKey.read(config),
+      exchange,
+      loadKey,
       () => OrderJournal.open(journalDirectory, config.identity),
       () => System.currentTimeMillis(),
       () => TimeUnit.NANOSECONDS.toMillis(System.nanoTime()),
