@@ -121,6 +121,31 @@ object Workspace:
       "$" + Trading.display(n.setScale(2, BigDecimal.RoundingMode.HALF_UP), width - 1)
     )
 
+  private def mappedOrderStatus(raw: String, panel: PanelView, unsaved: Boolean): String =
+    val lower = raw.toLowerCase
+    if lower.contains("partial") then "Part filled"
+    else if lower.contains(" filled ") then
+      if lower.contains(" buy ") then "Bought"
+      else if lower.contains(" sell ") then "Sold"
+      else "Filled"
+    else if lower.contains("no fill") then "No fill"
+    else if lower.contains("not enough") || lower.contains("funds") then "Insufficient funds"
+    else if lower.contains("storage") || lower.contains("save failed") then "Save failed"
+    else if lower.contains("unknown") || lower.contains("unresolved") then "Confirming result"
+    else if lower.contains("disconnect") || lower.contains("reconnect") then "Reconnecting"
+    else if lower.contains("reject") || lower.contains("not sent") || lower.contains("cancel")
+    then "Not sent"
+    else if lower.contains("account") || lower.contains("setup") || lower.contains("signer") then
+      "Account unavailable"
+    else if lower.contains("stale") || lower.contains("price") || lower.contains("depth") || lower
+        .contains("quote")
+    then "Waiting for prices"
+    else if lower.contains("pending") then "Sending"
+    else if unsaved then safeText(raw)
+    else if panel.mode == "VIEW" then "View only"
+    else if raw.nonEmpty then safeText(raw).takeWhile(_ != '\n')
+    else ""
+
   private def orderStatus(view: TradingView, panel: PanelView): String =
     val raw =
       if view.pending then view.message else view.block.orElse(panel.actionNotice).getOrElse("")
@@ -142,31 +167,11 @@ object Workspace:
         val stage = "(?i).*\\b(queued|checking|saving) (\\d+s).*".r
         raw match
           case TradingWorker.ownerMismatchMessage | TradingWorker.savedOwnerMismatchMessage => raw
-          case stage(name, age)              => name.capitalize + " " + age
-          case _ if lower.contains("result") => "Confirming result"
-          case _                             => "Sending"
-      else if lower.contains("partial") then "Part filled"
-      else if lower.contains(" filled ") then
-        if lower.contains(" buy ") then "Bought"
-        else if lower.contains(" sell ") then "Sold"
-        else "Filled"
-      else if lower.contains("no fill") then "No fill"
-      else if lower.contains("not enough") || lower.contains("funds") then "Insufficient funds"
-      else if lower.contains("storage") || lower.contains("save failed") then "Save failed"
-      else if lower.contains("unknown") || lower.contains("unresolved") then "Confirming result"
-      else if lower.contains("disconnect") || lower.contains("reconnect") then "Reconnecting"
-      else if lower.contains("reject") || lower.contains("not sent") || lower.contains("cancel")
-      then "Not sent"
-      else if lower.contains("account") || lower.contains("setup") || lower.contains("signer") then
-        "Account unavailable"
-      else if lower.contains("stale") || lower.contains("price") || lower.contains("depth") || lower
-          .contains("quote")
-      then "Waiting for prices"
-      else if lower.contains("pending") then "Sending"
-      else if unsaved then safeText(raw)
-      else if panel.mode == "VIEW" then "View only"
-      else if raw.nonEmpty then safeText(raw).takeWhile(_ != '\n')
-      else ""
+          case stage(name, age)                       => name.capitalize + " " + age
+          case _ if lower.contains("result")          => "Confirming result"
+          case _ if raw == s"${view.coin} submitting" => "Sending"
+          case _                                      => mappedOrderStatus(raw, panel, unsaved)
+      else mappedOrderStatus(raw, panel, unsaved)
     if text.nonEmpty && panel.actionNumber > 0 && !view.pending && !unsaved
     then s"$text #${panel.actionNumber}"
     else text
