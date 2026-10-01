@@ -739,7 +739,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         f.worker.view.outcome.contains("XMR recovered filled")
       )
       assertEquals(f.openedJournal.pending, None)
-      assert(!f.worker.view.pending)
+      Wait.until("settled order remained pending")(!f.worker.view.pending)
       assertEquals(f.posts.get(), 0)
     finally f.close()
   }
