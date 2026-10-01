@@ -142,9 +142,10 @@ object Workspace:
         val stage = "(?i).*\\b(queued|checking|saving) (\\d+s).*".r
         raw match
           case TradingWorker.ownerMismatchMessage | TradingWorker.savedOwnerMismatchMessage => raw
-          case stage(name, age)              => name.capitalize + " " + age
-          case _ if lower.contains("result") => "Confirming result"
-          case _                             => "Sending"
+          case stage(name, age)                       => name.capitalize + " " + age
+          case _ if lower.contains("result")          => "Confirming result"
+          case _ if raw == s"${view.coin} submitting" => "Sending"
+          case _                                      => safeText(raw).takeWhile(_ != '\n')
       else if lower.contains("partial") then "Part filled"
       else if lower.contains(" filled ") then
         if lower.contains(" buy ") then "Bought"

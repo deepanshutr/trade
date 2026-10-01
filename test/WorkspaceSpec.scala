@@ -39,6 +39,33 @@ class WorkspaceSpec extends munit.FunSuite:
     assert(!text.contains("Sending"), text)
   }
 
+  test("pending order status shows terminal and save messages at the smallest workspace size") {
+    val submitting = "XMR submitting"
+    val messages = Vector(
+      "XMR filled 0.5 at 300" -> "XMR filled 0.5 at 300",
+      "XMR canceled before sending" -> "XMR canceled before sending",
+      "Saved order state failed. Restart to recover" -> "Saved order state failed. Restart to recover",
+      submitting -> "Sending"
+    )
+    messages.foreach { (message, expected) =>
+      val frame = Workspace.draw(
+        s,
+        view.copy(pending = true, message = message),
+        PanelView(mode = "LIVE"),
+        100,
+        30,
+        now,
+        java.time.ZoneOffset.UTC,
+        Style.mono
+      )
+      val text = frame.lines.mkString("\n")
+      assert(text.contains(expected), text)
+      if message != submitting then assert(!text.contains("Sending"), text)
+      assertEquals(frame.lines.size, 30)
+      assert(frame.lines.forall(_.length == 100), text)
+    }
+  }
+
   test("paper limit precision errors retain their reason in the trade status") {
     val notice = "Paper limit does not match market precision"
     val frame = Workspace.draw(
