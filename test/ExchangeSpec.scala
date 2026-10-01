@@ -13,6 +13,20 @@ class ExchangeSpec extends munit.FunSuite:
     )
   )
 
+  private def lookup(state: String, id: String = saved.id): ujson.Value = ujson.Obj(
+    "status" -> "order",
+    "order" -> ujson.Obj(
+      "status" -> state,
+      "order" -> ujson.Obj(
+        "cloid" -> id,
+        "coin" -> "XMR",
+        "side" -> "B",
+        "limitPx" -> "100.1",
+        "origSz" -> "5"
+      )
+    )
+  )
+
   test("an immediate action preserves exact strings and client identity") {
     val action = Exchange.action(saved)
     assertEquals(action.obj.keys.toVector, Vector("type", "orders", "grouping"))
@@ -32,17 +46,36 @@ class ExchangeSpec extends munit.FunSuite:
     )
   }
 
-  test("an unknownOid confirms an err reply without expiry permission") {
+  test("an err reply plus unknownOid releases only strictly past the signed expiry") {
+    val unknown = Some(ujson.Obj("status" -> "unknownOid"))
+    assertEquals(
+      Exchange.recovered(unknown, saved, saved.expiresAfter, allowUnknown = false, errReply = true),
+      None
+    )
     assertEquals(
       Exchange.recovered(
-        Some(ujson.Obj("status" -> "unknownOid")),
+        unknown,
         saved,
-        1000L,
+        saved.expiresAfter + 1,
         allowUnknown = false,
         errReply = true
       ),
       Some("XMR order rejected")
     )
+  }
+
+  test("an err reply never releases on failed, malformed, open or other-order lookups") {
+    Vector(
+      None,
+      Some(ujson.Str("unknownOid")),
+      Some(lookup("open")),
+      Some(lookup("filled", "wrong"))
+    ).foreach { reply =>
+      assertEquals(
+        Exchange.recovered(reply, saved, 66001L, allowUnknown = false, errReply = true),
+        None
+      )
+    }
   }
 
   test("outer success does not turn an inner error into a fill") {
@@ -66,48 +99,65 @@ class ExchangeSpec extends munit.FunSuite:
   }
 
   test("recovery preserves known status handling after expiry") {
-    def status(state: String, id: String = saved.id): ujson.Value = ujson.Obj(
-      "status" -> "order",
-      "order" -> ujson.Obj(
-        "status" -> state,
-        "order" -> ujson.Obj(
-          "cloid" -> id,
-          "coin" -> "XMR",
-          "side" -> "B",
-          "limitPx" -> "100.1",
-          "origSz" -> "5"
-        )
-      )
-    )
     assertEquals(
-      Exchange.recovered(Some(status("canceled")), saved, 66001L, allowUnknown = true),
+      Exchange
+        .recovered(Some(lookup("canceled")), saved, 66001L, allowUnknown = true, errReply = false),
       Some("XMR recovered canceled")
     )
     assertEquals(
-      Exchange.recovered(Some(status("futureStatus")), saved, 66001L, allowUnknown = true),
+      Exchange.recovered(
+        Some(lookup("futureStatus")),
+        saved,
+        66001L,
+        allowUnknown = true,
+        errReply = false
+      ),
       None
     )
-    assertEquals(Exchange.recovered(Some(status("open")), saved, 66001L, allowUnknown = true), None)
     assertEquals(
-      Exchange.recovered(Some(status("filled", "wrong")), saved, 66001L, allowUnknown = true),
+      Exchange
+        .recovered(Some(lookup("open")), saved, 66001L, allowUnknown = true, errReply = false),
       None
     )
     assertEquals(
-      Exchange.recovered(Some(status("filled")), saved, 66001L, allowUnknown = true),
+      Exchange.recovered(
+        Some(lookup("filled", "wrong")),
+        saved,
+        66001L,
+        allowUnknown = true,
+        errReply = false
+      ),
+      None
+    )
+    assertEquals(
+      Exchange
+        .recovered(Some(lookup("filled")), saved, 66001L, allowUnknown = true, errReply = false),
       Some("XMR recovered filled")
     )
     assertEquals(
-      Exchange.recovered(Some(status("iocCancelRejected")), saved, 66001L, allowUnknown = true),
+      Exchange.recovered(
+        Some(lookup("iocCancelRejected")),
+        saved,
+        66001L,
+        allowUnknown = true,
+        errReply = false
+      ),
       Some("XMR recovered iocCancelRejected")
     )
   }
 
   test("unknownOid releases only strictly past signed expiry plus sixty seconds") {
     val unknown = Some(ujson.Obj("status" -> "unknownOid"))
-    assertEquals(Exchange.recovered(unknown, saved, 65999L, allowUnknown = true), None)
-    assertEquals(Exchange.recovered(unknown, saved, 66000L, allowUnknown = true), None)
     assertEquals(
-      Exchange.recovered(unknown, saved, 66001L, allowUnknown = true),
+      Exchange.recovered(unknown, saved, 65999L, allowUnknown = true, errReply = false),
+      None
+    )
+    assertEquals(
+      Exchange.recovered(unknown, saved, 66000L, allowUnknown = true, errReply = false),
+      None
+    )
+    assertEquals(
+      Exchange.recovered(unknown, saved, 66001L, allowUnknown = true, errReply = false),
       Some("XMR not placed")
     )
   }
@@ -118,7 +168,8 @@ class ExchangeSpec extends munit.FunSuite:
         Some(ujson.Obj("status" -> "unknownOid")),
         saved,
         saved.expiresAfter + 600000L,
-        allowUnknown = false
+        allowUnknown = false,
+        errReply = false
       ),
       None
     )
@@ -131,7 +182,10 @@ class ExchangeSpec extends munit.FunSuite:
       Some(ujson.Str("unknownOid")),
       Some(ujson.Obj("status" -> "err"))
     ).foreach { reply =>
-      assertEquals(Exchange.recovered(reply, saved, 66001L, allowUnknown = true), None)
+      assertEquals(
+        Exchange.recovered(reply, saved, 66001L, allowUnknown = true, errReply = false),
+        None
+      )
     }
   }
 
@@ -160,7 +214,10 @@ class ExchangeSpec extends munit.FunSuite:
       assertEquals(post, None)
       assertEquals(lookup, None)
       assertEquals(Exchange.outcome(post, saved), None)
-      assertEquals(Exchange.recovered(lookup, saved, 66001L, allowUnknown = true), None)
+      assertEquals(
+        Exchange.recovered(lookup, saved, 66001L, allowUnknown = true, errReply = false),
+        None
+      )
     try
       val refusal = """{"status":"err","response":"x"}"""
       val unknown = """{"status":"unknownOid"}"""
@@ -227,7 +284,8 @@ class ExchangeSpec extends munit.FunSuite:
       ),
       saved,
       66001L,
-      allowUnknown = true
+      allowUnknown = true,
+      errReply = false
     )
 
   test(

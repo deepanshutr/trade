@@ -140,7 +140,7 @@ final class TradingWorker private[desk] (
     metadata.filter(_ => fresh(metadataAt, 60000L)).map(_ -> metadataAt)
   }
   private var saved = Option.empty[SavedOrder]
-  private var errReply = false
+  private var errOrder = Option.empty[String]
   private var journal = Option.empty[OrderJournal]
   private var secret = Option.empty[Array[Byte]]
 
@@ -424,10 +424,7 @@ final class TradingWorker private[desk] (
       case _: Exception =>
         storageFailure()
         return
-    synchronized {
-      saved = Some(p)
-      errReply = false
-    }
+    synchronized { saved = Some(p) }
     val request = Try {
       beforeOrderSign()
       signed(Exchange.action(p), p.nonce, Some(p.expiresAfter))
@@ -452,7 +449,7 @@ final class TradingWorker private[desk] (
       val response = Try(exchange.post(request.get)).toOption.flatten
       if Exchange.isErrReply(response) then
         synchronized {
-          if saved.contains(p) then errReply = true
+          if saved.contains(p) then errOrder = Some(p.id)
         }
       Exchange.outcome(response, p) match
         case Some(text) => complete(p, text)
@@ -549,7 +546,7 @@ final class TradingWorker private[desk] (
           }
         catch case _: Exception => storageFailure()
       val unresolved = synchronized(
-        if !fatal && !executing.get() then saved.map(_ -> errReply) else None
+        if !fatal && !executing.get() then saved.map(p => p -> errOrder.contains(p.id)) else None
       )
       unresolved.foreach { case (p, gotErrReply) =>
         val reply = exchange.info(

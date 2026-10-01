@@ -447,10 +447,11 @@ object Exchange:
       saved: SavedOrder,
       now: Long,
       allowUnknown: Boolean,
-      errReply: Boolean = false
+      errReply: Boolean
   ): Option[String] =
-    if errReply && status(reply).contains("unknownOid") then
-      return Some(saved.coin + " order rejected")
+    if errReply && status(reply).contains("unknownOid") &&
+      BigInt(now) > BigInt(saved.expiresAfter)
+    then return Some(saved.coin + " order rejected")
     if allowUnknown && status(reply).contains("unknownOid") &&
       BigInt(now) > BigInt(saved.expiresAfter) + ExpiryMarginMs
     then return Some(saved.coin + " not placed")
