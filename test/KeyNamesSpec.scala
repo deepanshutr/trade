@@ -624,14 +624,14 @@ class KeyNamesSpec extends TempDirectorySuite:
 
   test("a switch with no current key is allowed and touches nothing") {
     val dir = home().resolve("state")
-    assertEquals(KeySetup.switchAllowed(dir, "testnet", None), Right(()))
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", None)(()), Right(()))
     assert(!Files.exists(dir))
   }
 
   test("a switch is allowed for an empty journal and the journal is closed again") {
     val dir = home().resolve("state")
-    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first)), Right(()))
-    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first)), Right(()))
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Right(()))
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Right(()))
     OrderJournal.open(dir, "testnet-" + first.drop(2)).close()
   }
 
@@ -641,13 +641,13 @@ class KeyNamesSpec extends TempDirectorySuite:
     val journal = OrderJournal.open(dir, identity)
     journal.reserve(plan, second, 1000L)
     journal.close()
-    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first)), Left(saved))
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Left(saved))
     val reopened = OrderJournal.open(dir, identity)
     try
       assert(reopened.pending.nonEmpty)
       reopened.finish(reopened.pending.get.id)
     finally reopened.close()
-    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first)), Right(()))
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Right(()))
   }
 
   test("a switch uses the same identity as the trading settings") {
@@ -656,20 +656,20 @@ class KeyNamesSpec extends TempDirectorySuite:
     val journal = OrderJournal.open(dir, config.identity)
     journal.reserve(plan, second, 1000L)
     journal.close()
-    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first)), Left(saved))
-    assertEquals(KeySetup.switchAllowed(dir, "mainnet", Some(first)), Right(()))
-    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(second)), Right(()))
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Left(saved))
+    assertEquals(KeySetup.switchAllowed(dir, "mainnet", Some(first))(()), Right(()))
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(second))(()), Right(()))
   }
 
   test("a switch is refused while this process holds the journal lock") {
     val dir = home().resolve("state")
     val journal = OrderJournal.open(dir, "testnet-" + first.drop(2))
     try
-      assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first)), Left(inUse))
-      assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first)), Left(inUse))
+      assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Left(inUse))
+      assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Left(inUse))
       assertEquals(journal.reserve(plan, second, 1000L).owner, Some(second))
     finally journal.close()
-    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first)), Left(saved))
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Left(saved))
   }
 
   test("a switch is refused while another process holds the journal lock") {
@@ -688,11 +688,11 @@ class KeyNamesSpec extends TempDirectorySuite:
       val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
       while !Files.exists(signal) && process.isAlive && System.nanoTime() < end do Thread.sleep(2)
       assert(Files.exists(signal), "Python did not take the journal lock")
-      assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first)), Left(inUse))
+      assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Left(inUse))
     finally
       process.getOutputStream.close()
       if !process.waitFor(3, TimeUnit.SECONDS) then process.destroyForcibly()
-    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first)), Right(()))
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Right(()))
   }
 
   test("a switch is refused with a fixed message when the saved state cannot be read") {
@@ -700,11 +700,61 @@ class KeyNamesSpec extends TempDirectorySuite:
     OrderJournal.open(dir, "testnet-" + first.drop(2)).close()
     val file = dir.resolve("testnet-" + first.drop(2) + ".json")
     put(file, "private-state-canary")
-    val result = KeySetup.switchAllowed(dir, "testnet", Some(first))
+    val result = KeySetup.switchAllowed(dir, "testnet", Some(first))(())
     assertEquals(result, Left("The saved state for the current key cannot be read"))
     assert(!result.swap.toOption.get.contains("private-state-canary"))
     assertEquals(
-      KeySetup.switchAllowed(dir, "testnet", Some("not an address")),
+      KeySetup.switchAllowed(dir, "testnet", Some("not an address"))(()),
       Left("The saved state for the current key cannot be read")
     )
+  }
+
+  test("the switch write runs once while the journal lock is held and the lock is free after") {
+    val dir = home().resolve("state")
+    var runs = 0
+    var inside = Option.empty[Either[String, Unit]]
+    val result = KeySetup.switchAllowed(dir, "testnet", Some(first)) {
+      runs += 1
+      inside = Some(KeySetup.switchAllowed(dir, "testnet", Some(first))(()))
+    }
+    assertEquals(result, Right(()))
+    assertEquals(runs, 1)
+    assertEquals(inside, Some(Left(inUse)))
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Right(()))
+  }
+
+  test("the switch write does not run when the switch is refused") {
+    val dir = home().resolve("state")
+    val identity = "testnet-" + first.drop(2)
+    var runs = 0
+    def attempt() = KeySetup.switchAllowed(dir, "testnet", Some(first)) { runs += 1 }
+    val journal = OrderJournal.open(dir, identity)
+    try assertEquals(attempt(), Left(inUse))
+    finally journal.close()
+    val reserved = OrderJournal.open(dir, identity)
+    reserved.reserve(plan, second, 1000L)
+    reserved.close()
+    assertEquals(attempt(), Left(saved))
+    put(dir.resolve(identity + ".json"), "private-state-canary")
+    assertEquals(attempt(), Left("The saved state for the current key cannot be read"))
+    assertEquals(runs, 0)
+  }
+
+  test("with no current key the switch write runs and no journal is opened") {
+    val dir = home().resolve("state")
+    var runs = 0
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", None) { runs += 1 }, Right(()))
+    assertEquals(runs, 1)
+    assert(!Files.exists(dir))
+  }
+
+  test("a switch write that fails reaches the caller and leaves the lock free") {
+    val dir = home().resolve("state")
+    val error = intercept[IllegalStateException](
+      KeySetup.switchAllowed(dir, "testnet", Some(first))(
+        throw new IllegalStateException("write broke")
+      )
+    )
+    assertEquals(error.getMessage, "write broke")
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Right(()))
   }

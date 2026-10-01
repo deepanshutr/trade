@@ -127,23 +127,39 @@ class KeyStoreSpec extends munit.FunSuite:
     assert(result.isInstanceOf[StoreResult.Failed])
   }
 
+  private val badEnvironments = Vector(
+    Map.empty[String, String],
+    Map("DESK_PYTHON" -> python),
+    Map("DESK_KEY_HELPER" -> helper),
+    Map("DESK_PYTHON" -> "python3", "DESK_KEY_HELPER" -> helper),
+    Map("DESK_PYTHON" -> python, "DESK_KEY_HELPER" -> "tools/keychain_wallet.py"),
+    Map("DESK_PYTHON" -> "", "DESK_KEY_HELPER" -> helper),
+    Map("DESK_PYTHON" -> python, "DESK_KEY_HELPER" -> ""),
+    Map("DESK_PYTHON" -> "./python3", "DESK_KEY_HELPER" -> helper),
+    Map("DESK_PYTHON" -> python, "DESK_KEY_HELPER" -> "~/.local/lib/desk-keychain.py")
+  )
+
   test("missing or relative helper paths fail before the runner is called") {
     val runner = new Runner(stored())
-    val bad = Vector(
-      Map.empty[String, String],
-      Map("DESK_PYTHON" -> python),
-      Map("DESK_KEY_HELPER" -> helper),
-      Map("DESK_PYTHON" -> "python3", "DESK_KEY_HELPER" -> helper),
-      Map("DESK_PYTHON" -> python, "DESK_KEY_HELPER" -> "tools/keychain_wallet.py"),
-      Map("DESK_PYTHON" -> "", "DESK_KEY_HELPER" -> helper),
-      Map("DESK_PYTHON" -> python, "DESK_KEY_HELPER" -> ""),
-      Map("DESK_PYTHON" -> "./python3", "DESK_KEY_HELPER" -> helper),
-      Map("DESK_PYTHON" -> python, "DESK_KEY_HELPER" -> "~/.local/lib/desk-keychain.py")
-    )
-    bad.foreach(environment =>
+    badEnvironments.foreach(environment =>
       assertEquals(store(runner, environment), StoreResult.Failed(missing))
     )
     assertEquals(runner.calls.size, 0)
+  }
+
+  test("the helper check accepts two absolute paths and refuses a missing or relative one") {
+    assert(KeyStore.helperReady(env))
+    assert(KeyStore.helperReady(env + ("DESK_EXTRA" -> "relative")))
+    badEnvironments.foreach(environment =>
+      assert(!KeyStore.helperReady(environment), environment.toString)
+    )
+  }
+
+  test("the helper check and store agree on every environment") {
+    (env +: badEnvironments).foreach { environment =>
+      val refused = store(new Runner(stored()), environment) == StoreResult.Failed(missing)
+      assertEquals(KeyStore.helperReady(environment), !refused, environment.toString)
+    }
   }
 
   test("a key of the wrong length fails before the runner is called") {

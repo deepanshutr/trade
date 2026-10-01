@@ -1,7 +1,7 @@
 package desk
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, IOException, InputStream, PrintStream}
-import java.nio.charset.StandardCharsets.{ISO_8859_1, US_ASCII}
+import java.nio.charset.StandardCharsets.{ISO_8859_1, US_ASCII, UTF_8}
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.PosixFilePermissions
 import java.security.{MessageDigest, SecureRandom}
@@ -111,7 +111,11 @@ class KeyScreenSpec extends TempDirectorySuite:
   private final class Fixture(
       network: String = "testnet",
       seeds: Vector[Array[Byte]] = Vector(seedOne),
-      derive: (Array[Byte], Array[Byte], Int) => Array[Byte] = fakeKey
+      derive: (Array[Byte], Array[Byte], Int) => Array[Byte] = fakeKey,
+      env: Map[String, String] = Map(
+        "DESK_PYTHON" -> "/usr/bin/python3",
+        "DESK_KEY_HELPER" -> "/opt/desk/helper.py"
+      )
   ):
     val home: Path = tempDirectory("desk-keyscreen")
     val names: Path = KeyNames.path(home)
@@ -128,16 +132,23 @@ class KeyScreenSpec extends TempDirectorySuite:
     val helperCalls = ArrayBuffer.empty[(Seq[String], Array[Byte])]
     val securityCalls = ArrayBuffer.empty[Seq[String]]
     val derivations = ArrayBuffer.empty[Derivation]
+    // The very arrays handed to the runners, so a test can see they are zeroed.
+    val clipboardInputs = ArrayBuffer.empty[Array[Byte]]
+    val helperInputs = ArrayBuffer.empty[Array[Byte]]
+    var writeActive: (Path, String, String) => Unit = (path, on, address) =>
+      ActiveKey.select(path, on, address)
 
     def output: String = bytes.toString("UTF-8")
     def kinds: Vector[String] = clipboardCalls.map(_.kind).toVector
 
     private val clipboard = (args: Seq[String], stdin: Array[Byte]) =>
       val kind = if stdin.nonEmpty then "copy" else "clear"
+      clipboardInputs += stdin
       clipboardCalls += Call(kind, stdin.clone(), derivations.size)
       ProcessRun(if kind == "copy" then copyExit else clearExit, Array.emptyByteArray)
 
     private val helper = (args: Seq[String], stdin: Array[Byte]) =>
+      helperInputs += stdin
       helperCalls += ((args, stdin.clone()))
       val key = java.util.HexFormat.of().parseHex(new String(stdin, 0, 64, US_ASCII))
       val account = OrderSigning.address(key)
@@ -191,8 +202,9 @@ class KeyScreenSpec extends TempDirectorySuite:
       clipboard,
       helper,
       security,
-      Map("DESK_PYTHON" -> "/usr/bin/python3", "DESK_KEY_HELPER" -> "/opt/desk/helper.py"),
-      recorded
+      env,
+      recorded,
+      (path, on, address) => writeActive(path, on, address)
     )
 
     def run(input: Array[Byte]): Option[String] =
@@ -535,7 +547,8 @@ class KeyScreenSpec extends TempDirectorySuite:
     f.run(script(paste("n"), paste("q"), "n", paste(enter), enter, interrupt))
     // The pasted n never started a flow and the pasted Enter never confirmed one.
     assertEquals(f.kinds.count(_ == "copy"), 1)
-    assertEquals(f.kinds, Vector("copy", "clear"))
+    // Each discarded paste clears the clipboard, so two come before the copy and one after it.
+    assertEquals(f.kinds, Vector("clear", "clear", "copy", "clear", "clear"))
   }
 
   test("a passphrase mismatch asks again") {
@@ -988,7 +1001,7 @@ class KeyScreenSpec extends TempDirectorySuite:
     val address = addressOf(seedOne, phrase)
     f.name(address, "Old")
     val before = f.namesText
-    val flow = script("s", paste(textOne), phrase, enter, enter, enter, "q")
+    val flow = script("s", paste(textOne), phrase, enter, phrase, enter, enter, enter, "q")
     assertEquals(f.run(flow), Some(address))
     assertEquals(f.namesText, before)
     assertEquals(f.helperCalls.size, 1)
@@ -1002,7 +1015,7 @@ class KeyScreenSpec extends TempDirectorySuite:
   test("a restore of a new key asks the name and writes one create record") {
     val f = new Fixture()
     val address = addressOf(seedOne, phrase)
-    val flow = script("s", textOne, phrase, enter, enter, "Back", enter, enter, "q")
+    val flow = script("s", textOne, phrase, enter, phrase, enter, enter, "Back", enter, enter, "q")
     assertEquals(f.run(flow), Some(address))
     assertEquals(f.nameLines.size, 1)
     assert(f.nameLines.head.contains(""""name":"Back""""))
@@ -1013,7 +1026,7 @@ class KeyScreenSpec extends TempDirectorySuite:
   test("a restore shows the address before it stores and escape stores nothing") {
     val f = new Fixture()
     val address = addressOf(seedOne, phrase)
-    f.run(script("s", textOne, phrase, enter, esc, "q"))
+    f.run(script("s", textOne, phrase, enter, phrase, enter, esc, "q"))
     assert(lines(f.output).exists(_.contains("Address: " + address)))
     assertEquals(f.helperCalls.size, 0)
     assertEquals(f.nameLines.size, 0)
@@ -1024,14 +1037,14 @@ class KeyScreenSpec extends TempDirectorySuite:
     val f = new Fixture()
     val address = addressOf(seedOne, phrase)
     f.name(address, "Old", on = "mainnet")
-    f.run(script("s", textOne, phrase, enter, "q"))
+    f.run(script("s", textOne, phrase, enter, phrase, enter, "q"))
     assert(lines(f.output).exists(_.contains("That key is named for mainnet.")))
     assertEquals(f.helperCalls.size, 0)
   }
 
   test("a restore passphrase that is too short is refused and asked again") {
     val f = new Fixture()
-    f.run(script("s", textOne, "short", enter, "123", enter, interrupt))
+    f.run(script("s", textOne, "short", enter, "123", enter, "short123", enter, interrupt))
     assert(lines(f.output).exists(_.contains("Use 8 to 128 characters.")))
     assertEquals(f.derivations.head.passValue.toSeq, "short123".getBytes(US_ASCII).toSeq)
   }
@@ -1182,7 +1195,8 @@ class KeyScreenSpec extends TempDirectorySuite:
     val vector = realVector
     val f = new Fixture(derive = AgentKey.derive)
     val expected = vector("address").str
-    val flow = script("s", vector("seedText").str, vector("passphrase").str, enter, enter)
+    val pass = vector("passphrase").str
+    val flow = script("s", vector("seedText").str, pass, enter, pass, enter, enter)
     assertEquals(f.run(flow ++ script("Back", enter, enter, "q")), Some(expected))
     assertEquals(new String(f.helperCalls.head._2, US_ASCII), vector("key").str + "\n")
     assert(f.nameLines.head.contains(expected))
@@ -1203,4 +1217,336 @@ class KeyScreenSpec extends TempDirectorySuite:
     assert(f.nameLines.head.contains(expected))
     assertEquals(f.derivations.size, 2)
     assertNoSecrets(f.output, vector("seedText").str, vector("seed").str, vector("key").str)
+  }
+
+  // Release review fixes
+
+  private val folderRule = "The folder for the key files must be private. Run chmod 700 on it."
+  private val helperRule = "The key helper is not installed. Run make install."
+  private val unknownAddress =
+    "This address is not in your key names. Check it against the address you saved before you store it."
+  private val asciiRule = "Only printable ASCII is accepted."
+  private val dormant = "Another Desk is using the current key"
+
+  private def mode(path: Path): String =
+    PosixFilePermissions.toString(Files.getPosixFilePermissions(path))
+
+  // The key files folder with group and other access, which the screen must refuse.
+  private def openFolder(f: Fixture): Path =
+    val folder = f.names.getParent
+    Files.createDirectories(folder)
+    Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwxr-xr-x"))
+    folder
+
+  // Runs the screen and makes one change to the files when the read at that index is asked for.
+  private def changing(f: Fixture, input: Array[Byte], at: Int)(change: => Unit): Option[String] =
+    var done = false
+    val spy = new Spy(
+      input,
+      index =>
+        if index == at && !done then
+          done = true
+          change
+    )
+    KeyScreen.run(f.context, spy, f.screen)
+
+  private def utf8(text: String): String = new String(text.getBytes(UTF_8), ISO_8859_1)
+
+  // Checks before any secret is made
+
+  test("a new key stops before any seed is made when the key files folder is not private") {
+    val f = new Fixture()
+    val folder = openFolder(f)
+    assertEquals(f.run(script("n", "q")), None)
+    assert(lines(f.output).contains(folderRule))
+    assertEquals(f.random.served, 0)
+    assertEquals(f.kinds, Vector.empty[String])
+    assertEquals(mode(folder), "rwxr-xr-x")
+  }
+
+  test("a new key makes a missing key files folder private before it makes a seed") {
+    val f = new Fixture()
+    assert(!Files.exists(f.names.getParent))
+    f.run(script("n", interrupt))
+    assertEquals(mode(f.names.getParent), "rwx------")
+    assertEquals(f.random.served, 1)
+  }
+
+  test("a new key stops before any seed is made when the key helper is not installed") {
+    val f = new Fixture(env = Map("DESK_PYTHON" -> "python3", "DESK_KEY_HELPER" -> "helper.py"))
+    assertEquals(f.run(script("n", "q")), None)
+    assert(lines(f.output).contains(helperRule))
+    assertEquals(f.random.served, 0)
+    assertEquals(f.kinds, Vector.empty[String])
+  }
+
+  test("a restore stops before the seed is asked when the key files folder is not private") {
+    val f = new Fixture()
+    openFolder(f)
+    assertEquals(f.run(script("s", "q")), None)
+    assert(lines(f.output).contains(folderRule))
+    assert(!frames(f.output).exists(_.headOption.contains("Restore a key")))
+    assertEquals(f.derivations.size, 0)
+  }
+
+  test("a restore stops before the seed is asked when the key helper is not installed") {
+    val f = new Fixture(env = Map.empty)
+    assertEquals(f.run(script("s", "q")), None)
+    assert(lines(f.output).contains(helperRule))
+    assert(!frames(f.output).exists(_.headOption.contains("Restore a key")))
+    assertEquals(f.derivations.size, 0)
+  }
+
+  test("the folder is checked before the helper") {
+    val f = new Fixture(env = Map.empty)
+    openFolder(f)
+    f.run(script("n", "q"))
+    assert(lines(f.output).contains(folderRule))
+    assert(!f.output.contains(helperRule))
+  }
+
+  // Storage errors
+
+  test("a failed write shows the fixed storage rule and nothing else from the error") {
+    val f = new Fixture()
+    two(f)
+    val folder = f.names.getParent
+    changing(f, script("r", "Daily", enter, "q"), 1)(
+      Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwxr-xr-x"))
+    )
+    val said = "The key files could not be updated (local storage must be private)"
+    assert(lines(f.output).contains(said))
+    assertEquals(f.nameLines.size, 2)
+  }
+
+  test("a symbolic link as the key files folder shows its fixed storage rule") {
+    val f = new Fixture()
+    two(f)
+    val folder = f.names.getParent
+    val moved = folder.resolveSibling("moved")
+    changing(f, script("r", "Daily", enter, "q"), 1) {
+      Files.move(folder, moved)
+      Files.createSymbolicLink(folder, moved)
+    }
+    val said = "The key files could not be updated (local storage cannot be a symbolic link)"
+    assert(lines(f.output).contains(said))
+  }
+
+  test("an error that is not a storage rule shows only its class name") {
+    val f = new Fixture()
+    two(f)
+    changing(f, script("r", "Daily", enter, "q"), 1)(Files.writeString(f.names, ""))
+    assert(
+      lines(f.output).contains("The key files could not be updated (IllegalArgumentException)")
+    )
+    assert(!f.output.contains("key is not named"))
+  }
+
+  // Restore asks the passphrase twice
+
+  test("a restore asks the passphrase twice and asks again when the two differ") {
+    val f = new Fixture()
+    f.run(
+      script(
+        "s",
+        textOne,
+        phrase,
+        enter,
+        "pass 124",
+        enter,
+        phrase,
+        enter,
+        phrase,
+        enter,
+        interrupt
+      )
+    )
+    assert(lines(f.output).contains("Again: " + "*" * 8))
+    assert(lines(f.output).exists(_.contains("The two did not match. Start again.")))
+    assertEquals(f.derivations.size, 1)
+    assertEquals(f.derivations.head.passValue.toSeq, phrase.getBytes(US_ASCII).toSeq)
+  }
+
+  test("a restore of an address that is not in key names warns before the store prompt") {
+    val f = new Fixture()
+    f.run(script("s", textOne, phrase, enter, phrase, enter, esc, "q"))
+    val frame = frames(f.output).find(_.exists(_.startsWith("Address: "))).get
+    val warning = frame.indexOf(unknownAddress)
+    assert(warning >= 0, "the warning is missing")
+    assert(frame.indexOf("Press Enter to store this key. Esc cancels.") > warning)
+  }
+
+  test("a restore of an address that is already in key names has no warning") {
+    val f = new Fixture()
+    f.name(addressOf(seedOne, phrase), "Old")
+    f.run(script("s", textOne, phrase, enter, phrase, enter, esc, "q"))
+    assert(lines(f.output).contains("It is already named Old."))
+    assert(!f.output.contains(unknownAddress))
+  }
+
+  // The clipboard after a paste anywhere
+
+  test("a paste outside a seed field clears the clipboard like a paste into a seed field") {
+    val f = new Fixture()
+    val flow = script(
+      "n",
+      enter,
+      paste("zzzzzzzzzz"),
+      phrase,
+      enter,
+      paste("yyyyyyyyyy"),
+      phrase,
+      enter,
+      enter,
+      paste(textOne),
+      phrase,
+      enter,
+      paste("Evil"),
+      "Main",
+      enter,
+      enter,
+      "q"
+    )
+    assertEquals(f.run(flow), Some(addressOf(seedOne, phrase)))
+    // One clear after the save confirmation and one after each of the four pastes.
+    assertEquals(f.kinds, Vector("copy") ++ Vector.fill(5)("clear"))
+    assert(!f.output.contains("zzzzzzzzzz"))
+  }
+
+  test("a refused paste outside a seed field clears the clipboard too") {
+    val f = new Fixture()
+    f.run(script("s", textOne, paste("zz\u0007zz"), paste("x" * 129), paste("fine"), interrupt))
+    assertEquals(f.kinds, Vector("clear", "clear", "clear"))
+    assert(!f.output.contains("fine"))
+  }
+
+  test("a clipboard clear that fails outside a seed field is told on the next screen") {
+    val f = new Fixture()
+    f.clearExit = 1
+    f.run(script("s", textOne, paste("zzzzzzzzzz"), interrupt))
+    assertEquals(f.kinds, Vector("clear"))
+    assert(lines(f.output).exists(_.contains("Clipboard clear failed. Clear it yourself.")))
+    assert(!f.output.contains("zzzzzzzzzz"))
+  }
+
+  // Printable ASCII only
+
+  test("a byte of 128 or more in a passphrase field is refused and the field is unchanged") {
+    val f = new Fixture()
+    // A two byte letter, a three byte sign and one lone byte of 255.
+    val typed = "pass " + utf8("\u00e9") + "1" + utf8("\u20ac") + "2" + "\u00ff" + "3"
+    f.run(script("n", enter, typed, enter, phrase, enter, interrupt))
+    assertEquals(f.derivations.head.passValue.toSeq, phrase.getBytes(US_ASCII).toSeq)
+    assert(lines(f.output).contains(asciiRule))
+    assert(lines(f.output).contains("Passphrase: ********"))
+    assert(!lines(f.output).exists(_.startsWith("Passphrase: *********")))
+  }
+
+  test("a byte of 128 or more in a name is refused and the name is unchanged") {
+    val f = new Fixture()
+    val (a, _) = two(f)
+    f.run(script("r", "Da", utf8("\u00e9"), "i", utf8("\u20ac"), "ly", enter, "q"))
+    assert(lines(f.output).contains(asciiRule))
+    assertEquals(
+      f.nameLines.last,
+      s"""{"kind":"rename","address":"$a","name":"Daily","time":$stamp}"""
+    )
+  }
+
+  test("a byte of 128 or more in the seed field changes nothing") {
+    val f = new Fixture()
+    f.run(script("n", enter, phrase, enter, phrase, enter, enter, utf8("\u00e9"), interrupt))
+    val last = frames(f.output).last
+    assert(last.contains("group 1 of 13"))
+    assert(!last.exists(_.contains("#")))
+  }
+
+  // Unbuffered terminal input
+
+  test("the real terminal path reads the file descriptor directly with no buffer") {
+    val defaults = KeyScreen.getClass.getMethods.filter(method =>
+      method.getName.startsWith("runOnTerminal$default$") &&
+        method.getReturnType == classOf[InputStream]
+    )
+    assertEquals(defaults.length, 1)
+    val stream = defaults.head.invoke(KeyScreen)
+    assert(stream.isInstanceOf[java.io.FileInputStream], "the default input is not a file stream")
+    assert(!stream.isInstanceOf[java.io.BufferedInputStream])
+    assert(!(stream eq System.in))
+  }
+
+  // The active key write holds the journal lock
+
+  test("the active key is written while the order journal of the old key is locked") {
+    val f = new Fixture()
+    val (a, b) = two(f)
+    var inside = Option.empty[Either[String, Unit]]
+    f.writeActive = (path, on, address) =>
+      inside = Some(KeySetup.switchAllowed(f.state, on, Some(a))(()))
+      ActiveKey.select(path, on, address)
+    assertEquals(f.run(script(down, enter, "q")), Some(b))
+    assertEquals(inside, Some(Left(dormant)))
+    assertEquals(f.activeText, s"""{"testnet":"$b"}""" + "\n")
+    assertEquals(KeySetup.switchAllowed(f.state, "testnet", Some(a))(()), Right(()))
+  }
+
+  test("a new key is made active while the order journal of the old key is locked") {
+    val f = new Fixture()
+    val old = "0x" + "a" * 40
+    f.name(old, "Old")
+    f.present += old
+    f.activate(old)
+    var inside = Option.empty[Either[String, Unit]]
+    f.writeActive = (path, on, address) =>
+      inside = Some(KeySetup.switchAllowed(f.state, on, Some(old))(()))
+      ActiveKey.select(path, on, address)
+    val address = addressOf(seedOne, phrase)
+    assertEquals(f.run(newKey()), Some(address))
+    assertEquals(inside, Some(Left(dormant)))
+    assertEquals(f.activeText, s"""{"testnet":"$address"}""" + "\n")
+  }
+
+  test("a failed active key write shows its class name, keeps the old key and frees the lock") {
+    val f = new Fixture()
+    val (a, _) = two(f)
+    f.writeActive = (_, _, _) => throw new IllegalStateException("canary-text")
+    assertEquals(f.run(script(down, enter, "q")), Some(a))
+    val said =
+      "The key files could not be updated (IllegalStateException). The current key stays active."
+    assert(lines(f.output).contains(said))
+    assert(!f.output.contains("canary-text"))
+    assertEquals(KeySetup.switchAllowed(f.state, "testnet", Some(a))(()), Right(()))
+  }
+
+  // Secrets after a flow
+
+  test("after a new key flow every secret buffer the screen used is all zeros") {
+    val f = new Fixture()
+    val kept = ArrayBuffer.empty[Array[Byte]]
+    var pasted = Array.emptyByteArray
+    val result = KeyScreen.run(
+      f.context,
+      new ByteArrayInputStream(newKey()),
+      f.screen,
+      handed => pasted = handed,
+      kept += _
+    )
+    assertEquals(result, Some(addressOf(seedOne, phrase)))
+    // The buffers held secrets while the flow ran, so the zeros below are a real result.
+    assertEquals(f.derivations.size, 2)
+    f.derivations.foreach { d =>
+      assert(d.seedValue.exists(_ != 0) && d.passValue.exists(_ != 0) && d.keyValue.exists(_ != 0))
+      assert(kept.exists(_ eq d.seed), "a seed buffer was not kept")
+      assert(kept.exists(_ eq d.pass), "a passphrase field was not kept")
+      assert(kept.exists(_ eq d.key), "a derived key was not kept")
+    }
+    assert(kept.exists(_ eq f.random.handed.head), "the new seed was not kept")
+    assert(kept.exists(_ eq pasted), "the paste buffer was not kept")
+    assert(kept.exists(_.length == 65), "the seed field was not kept")
+    assert(kept.count(_.length == 128) >= 4, "a passphrase field was not kept")
+    assertZero(kept.toSeq*)
+    assertZero(f.random.handed.toSeq*)
+    assertZero(f.clipboardInputs.toSeq*)
+    assertZero(f.helperInputs.toSeq*)
+    assert(f.clipboardInputs.exists(_.nonEmpty) && f.helperInputs.nonEmpty)
   }

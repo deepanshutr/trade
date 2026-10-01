@@ -5,12 +5,18 @@ import java.nio.file.Path
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import scala.util.Try
 import scala.util.control.{ControlThrowable, NonFatal}
 
 // The key screen. It runs before the workspace and has its own input loop, so no feed, event
 // queue, fold or diagnostics exist while a seed or a passphrase is typed. Secrets live in byte
 // arrays and fixed fields that are zeroed after use and on every way out. The screen shows masks,
 // group counts, the address and the approval name, and nothing else about a secret.
+//
+// Desk cannot clear two kinds of copy. Java keeps what is written to a child process in its own
+// pipe buffer, which holds the seed text sent to the clipboard tool and the key sent to the
+// helper. BouncyCastle keeps the final block and a copy of the salt inside its Argon2 code, and
+// the salt holds the passphrase. Both last until the process exits.
 object KeyScreen:
   final case class Context(
       network: String,
@@ -24,7 +30,9 @@ object KeyScreen:
       helper: (Seq[String], Array[Byte]) => ProcessRun,
       security: Seq[String] => Int,
       env: Map[String, String],
-      derive: (Array[Byte], Array[Byte], Int) => Array[Byte] = AgentKey.derive
+      derive: (Array[Byte], Array[Byte], Int) => Array[Byte] = AgentKey.derive,
+      // Writes the active key. A test swaps it to look at the journal lock during the write.
+      writeActive: (Path, String, String) => Unit = ActiveKey.select
   )
 
   private val helperVariables = Set("DESK_PYTHON", "DESK_KEY_HELPER")
@@ -50,24 +58,26 @@ object KeyScreen:
     run(context, input, output, _ => ())
 
   // The same, and the buffer where a paste waits is handed over once, so a test can see that it
-  // is wiped at once.
+  // is wiped at once. Every other buffer the screen keeps to wipe is handed over as it is made.
   private[desk] def run(
       context: Context,
       input: InputStream,
       output: PrintStream,
-      pasteBuffer: Array[Byte] => Unit
+      pasteBuffer: Array[Byte] => Unit,
+      kept: Array[Byte] => Unit = _ => ()
   ): Option[String] =
-    runWith(new Cleanup(context), context, input, output, pasteBuffer)
+    runWith(new Cleanup(context, kept), context, input, output, pasteBuffer)
 
   // Runs on the real terminal. The terminal and the clipboard are put right on every way out,
-  // including a kill, which runs the shutdown hook.
+  // including a kill, which runs the shutdown hook. The input is the file descriptor itself, so
+  // no buffered stream keeps a copy of pasted seed bytes.
   def runOnTerminal(
       context: Context,
       enter: () => String = () => Term.enterRaw(),
       leave: String => Unit = saved => Term.restore(saved),
       addHook: Thread => Unit = hook => Runtime.getRuntime.addShutdownHook(hook),
       removeHook: Thread => Unit = hook => { val _ = Runtime.getRuntime.removeShutdownHook(hook) },
-      input: InputStream = System.in,
+      input: InputStream = new java.io.FileInputStream(java.io.FileDescriptor.in),
       output: PrintStream = System.out
   ): Option[String] =
     val cleanup = new Cleanup(context)
@@ -111,15 +121,17 @@ object KeyScreen:
   private object Cancelled extends ControlThrowable
 
   // Everything to put right when the screen closes. It can run from the shutdown hook too.
-  private final class Cleanup(context: Context):
+  private final class Cleanup(context: Context, kept: Array[Byte] => Unit = _ => ()):
     private val wipers = new ConcurrentLinkedQueue[() => Unit]()
     private val copied = new AtomicBoolean(false)
 
     def keep(bytes: Array[Byte]): Array[Byte] =
+      kept(bytes)
       wipers.add(() => java.util.Arrays.fill(bytes, 0.toByte))
       bytes
 
     def keep(field: SecretField): SecretField =
+      kept(field.bytes)
       wipers.add(() => field.wipe())
       field
 
@@ -141,7 +153,8 @@ object KeyScreen:
       try wipeAll()
       finally clearIfPending()
 
-  // Turns terminal bytes into key codes. A code below 256 is a printable ASCII byte. A paste
+  // Turns terminal bytes into key codes. A code below 256 is a printable ASCII byte. Every byte of
+  // 128 or more is one NotAscii code, so no part of a multi-byte character is ever typed. A paste
   // waits in the paste buffer until the screen takes it and wipes it.
   private object KeyInput:
     val Enter = 256
@@ -154,6 +167,7 @@ object KeyScreen:
     val Paste = 263
     val Refused = 264
     val Ignored = 265
+    val NotAscii = 266
     val pasteLimit = 128
 
   private final class KeyInput(in: InputStream, escapeWaitNanos: Long = Main.escapeWaitNanos):
@@ -194,6 +208,7 @@ object KeyScreen:
       else if byte == 127 || byte == 8 then Backspace
       else if byte == 27 then escape()
       else if byte >= 32 && byte < 127 then byte
+      else if byte >= 128 then NotAscii
       else Ignored
 
     private def escape(): Int =
@@ -271,6 +286,18 @@ object KeyScreen:
   private val seedLength = seedGroups * 5
   private val deriving = "Deriving the key. This takes a few seconds."
   private val nameRule = "Use 1 to 32 characters with no space at either end."
+  private val asciiRule = "Only printable ASCII is accepted."
+  private val folderRule = "The folder for the key files must be private. Run chmod 700 on it."
+  private val helperRule = "The key helper is not installed. Run make install."
+  private val unknownAddress =
+    "This address is not in your key names. Check it against the address you saved before you " +
+      "store it."
+  // The fixed texts of the LocalFiles folder check. No other exception text is ever shown.
+  private val storageRules = Set(
+    "local storage cannot be a symbolic link",
+    "local storage is not a directory",
+    "local storage must be private"
+  )
   private val seedHint = "Type or paste the seed from Passwords. Accepted characters show as marks."
 
   private def storedText(approval: String): String =
@@ -289,13 +316,22 @@ object KeyScreen:
       output.flush()
       if output.checkError() then throw new IOException("terminal write failed")
 
-    private def notice(text: String): Vector[String] = Option.when(text.nonEmpty)(text).toVector
+    // A clipboard clear that failed outside a seed field has no note of its own. The next screen
+    // says it.
+    private var carried = ""
 
-    // Paste only reaches the caller that asks for it. Anywhere else it is wiped and ignored.
+    private def notice(text: String): Vector[String] =
+      val all = (text + carried).stripLeading()
+      carried = ""
+      Option.when(all.nonEmpty)(all).toVector
+
+    // Paste only reaches the caller that asks for it. Anywhere else it is wiped and ignored, and
+    // the clipboard is cleared as it is after a paste into a seed field.
     private def next(paste: Boolean = false): Int =
       val key = input.next()
-      if key == KeyInput.Paste && !paste then
+      if !paste && (key == KeyInput.Paste || key == KeyInput.Refused) then
         input.wipePaste()
+        carried += afterPaste()
         KeyInput.Ignored
       else key
 
@@ -312,8 +348,24 @@ object KeyScreen:
     private def saving[A](body: => A): Either[String, A] =
       try Right(body)
       catch
-        case NonFatal(error) =>
-          Left("The key files could not be updated (" + error.getClass.getSimpleName + ")")
+        case NonFatal(error) => Left("The key files could not be updated (" + reason(error) + ")")
+
+    // The folder check of LocalFiles says why in a fixed text. Any other error shows its class
+    // name and nothing else.
+    private def reason(error: Throwable): String = error match
+      case bad: IllegalArgumentException =>
+        Option(bad.getMessage)
+          .map(_.stripPrefix("requirement failed: "))
+          .filter(storageRules.contains)
+          .getOrElse(bad.getClass.getSimpleName)
+      case other => other.getClass.getSimpleName
+
+    // Before a seed exists or is asked for, the places it will go must work. The folder may be
+    // made here with mode 700. A problem is the message that ends the flow.
+    private def ready(): Option[String] =
+      if Try(LocalFiles.directory(context.names.getParent)).isFailure then Some(folderRule)
+      else if !KeyStore.helperReady(context.env) then Some(helperRule)
+      else None
 
     private def present(address: String): Either[String, Boolean] =
       KeychainItems.present(context.keyService, address, context.security)
@@ -431,9 +483,11 @@ object KeyScreen:
         val current = active.get(context.network)
         if current.contains(address) then Right(())
         else
-          KeySetup
-            .switchAllowed(context.stateDirectory, context.network, current)
-            .flatMap(_ => saving(ActiveKey.select(context.active, context.network, address)))
+          saving(
+            KeySetup.switchAllowed(context.stateDirectory, context.network, current)(
+              context.writeActive(context.active, context.network, address)
+            )
+          ).flatMap(identity)
       }
 
     private def rename(row: Row): String =
@@ -464,6 +518,7 @@ object KeyScreen:
               case None          => done = true
               case Some(message) => note = message
           case KeyInput.Backspace => field.backspace()
+          case KeyInput.NotAscii  => note = asciiRule
           case key if key < 256   =>
             if !field.append(key.toByte) then note = "At most 128 characters."
           case _ => ()
@@ -503,11 +558,9 @@ object KeyScreen:
       chosen.get
 
     // A passphrase typed once. The drill accepts any length and lets the address decide.
-    private def askPassphraseOnce(title: String, strict: Boolean): SecretField =
+    private def askPassphraseOnce(title: String): SecretField =
       val field = cleanup.keep(new SecretField(128))
-      typeSecret(title, "Type the passphrase.", "Passphrase: ", field, "")(
-        Option.when(strict && !AgentKey.passphraseValid(field.bytes, field.length))(passphraseRule)
-      )
+      typeSecret(title, "Type the passphrase.", "Passphrase: ", field, "")(None)
       field
 
     private def askName(title: String, label: String, current: Option[String]): String =
@@ -524,6 +577,7 @@ object KeyScreen:
           case KeyInput.Enter =>
             if KeyNames.validName(text.toString) then done = true else note = nameRule
           case KeyInput.Backspace => if text.nonEmpty then text.setLength(text.length - 1)
+          case KeyInput.NotAscii  => note = asciiRule
           case key if key < 256   => if text.length < 32 then text.append(key.toChar)
           case _                  => ()
       text.toString
@@ -621,7 +675,7 @@ object KeyScreen:
     private def newKey(): String =
       try
         var result = Option.empty[String]
-        while result.isEmpty do result = attempt()
+        while result.isEmpty do result = ready().orElse(attempt())
         result.get
       catch
         case Cancelled =>
@@ -677,7 +731,7 @@ object KeyScreen:
     // The owner proves the seed and the passphrase were kept by typing them again.
     private def drill(address: String): Drill =
       val seed = askSeed("Drill")
-      val passphrase = askPassphraseOnce("Drill", strict = false)
+      val passphrase = askPassphraseOnce("Drill")
       val matches = AgentKey.passphraseValid(passphrase.bytes, passphrase.length) && {
         val key = derive("Drill", seed, passphrase)
         try OrderSigning.address(key) == address
@@ -738,10 +792,12 @@ object KeyScreen:
               confirm()
               ""
 
-    // Restore: the seed, then the passphrase, then the address, then the key is stored.
-    private def restore(): String =
+    // Restore: the seed, then the passphrase twice, then the address, then the key is stored.
+    private def restore(): String = ready().getOrElse(restoreChecked())
+
+    private def restoreChecked(): String =
       val seed = askSeed("Restore a key")
-      val passphrase = askPassphraseOnce("Restore a key", strict = true)
+      val passphrase = askPassphrase("Restore a key")
       val key = derive("Restore a key", seed, passphrase)
       wipe(seed)
       passphrase.wipe()
@@ -758,8 +814,11 @@ object KeyScreen:
                 addressLines(
                   "Restore a key",
                   address,
-                  known.map("It is already named " + _.name + ".").toVector ++
-                    Vector("", "Press Enter to store this key. Esc cancels.")
+                  Vector(
+                    known.fold(unknownAddress)("It is already named " + _.name + "."),
+                    "",
+                    "Press Enter to store this key. Esc cancels."
+                  )
                 )
               )
               confirm()

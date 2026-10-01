@@ -225,27 +225,27 @@ object KeySetup:
       _ <- Either.cond(found, (), "The active key is not in the Keychain")
     yield address
 
-  // Opening the journal takes its lock, so a second Desk that trades with the key is seen.
+  // Opening the journal takes its lock, so a second Desk that trades with the key is seen. The
+  // write runs only when the switch is allowed and while the lock is still held. An error from
+  // the write reaches the caller after the journal is closed.
   def switchAllowed(
       stateDirectory: Path,
       network: String,
       current: Option[String]
-  ): Either[String, Unit] = current match
-    case None          => Right(())
+  )(write: => Unit): Either[String, Unit] = current match
+    case None          => Right(write)
     case Some(address) =>
-      try
-        val journal =
-          OrderJournal.open(stateDirectory, network + "-" + address.stripPrefix("0x"))
+      val opened: Either[String, OrderJournal] =
+        try Right(OrderJournal.open(stateDirectory, network + "-" + address.stripPrefix("0x")))
+        catch
+          case _: OverlappingFileLockException => Left(inUse)
+          case error: IllegalArgumentException
+              if Option(error.getMessage).exists(_.contains("another process owns")) =>
+            Left(inUse)
+          case NonFatal(_) => Left("The saved state for the current key cannot be read")
+      opened.flatMap { journal =>
         try
-          Either.cond(
-            journal.pending.isEmpty,
-            (),
-            "A saved order for the current key must finish first"
-          )
+          if journal.pending.isEmpty then Right(write)
+          else Left("A saved order for the current key must finish first")
         finally journal.close()
-      catch
-        case _: OverlappingFileLockException => Left(inUse)
-        case error: IllegalArgumentException
-            if Option(error.getMessage).exists(_.contains("another process owns")) =>
-          Left(inUse)
-        case NonFatal(_) => Left("The saved state for the current key cannot be read")
+      }
