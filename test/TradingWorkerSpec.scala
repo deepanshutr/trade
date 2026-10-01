@@ -1524,11 +1524,17 @@ class TradingWorkerSpec extends TempDirectorySuite:
     test(s"a wall clock jump cannot release an unknown order placed in this run: err $errReply") {
       val f = new Fixture()
       try
+        // The role read follows the startup journal load in the same refresh.
+        Wait.until("journal not loaded")(f.roleReads.get() > 0)
+        // Move the clock so the order counts from its reservation, not the earlier load.
+        val loadedAt = f.clock.get()
+        f.clock.addAndGet(1000L)
         f.ready()
         if errReply then f.reject = true else f.lose = true
         assert(f.worker.submit(buy, "XMR"))
         Wait.until("lookup missing")(f.recoveryReads.get() > 0)
         val saved = f.openedJournal.pending.get
+        assertEquals(saved.createdAt, loadedAt + 1000L)
         f.wallStep.set(600000L)
         for at <- Vector(f.clock.get(), saved.createdAt + 64999L) do
           f.clock.set(at)
