@@ -1,0 +1,86 @@
+{
+  "vectors": [
+    {
+      "name": "counting seed, 8 byte passphrase",
+      "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "passphrase": "pass 123",
+      "seedText": "000GK-40R4N-0M30S-E2093-185GZ-R38EF-1W81Z-24GK0-2GAH4-C5RRP-34D1T-P70XK-3RFGA",
+      "output": "fbbddfac4a872fffd0b236b4ddec716351d41c18cb72ef513a668f0717103996",
+      "counter": 0,
+      "key": "fbbddfac4a872fffd0b236b4ddec716351d41c18cb72ef513a668f0717103996",
+      "address": "0xc0df6975a6dbee4a74449c6d70d830c224d196ae"
+    },
+    {
+      "name": "mixed seed, 128 byte passphrase",
+      "seed": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "passphrase": " '.5<CJQX_fmt{#*18?FMT[bipw~&-4;BIPW^elsz\")07>ELSZahov}%,3:AHOV]dkry!(/6=DKRY`gnu|$+29@GNU\\cjqx '.5<CJQX_fmt{#*18?FMT[bipw~&-4;B",
+      "seedText": "04HMF-ASW9V-NF6Y5-Y093E-8NKR6-KAYDJ-XW0JE-6HB7Y-H6NW0-VVR1V-4D2PT-F2DBG-SQQGF",
+      "output": "547138b452e3720eb451591444a5d7a04188d0681078fcb32dfbaaf7b40553fc",
+      "counter": 0,
+      "key": "547138b452e3720eb451591444a5d7a04188d0681078fcb32dfbaaf7b40553fc",
+      "address": "0x4d4679d7586b8a15d774f5e1e86139ab20f7cda8"
+    },
+    {
+      "name": "zero seed, plain passphrase",
+      "seed": "0000000000000000000000000000000000000000000000000000000000000000",
+      "passphrase": "fixture passphrase three",
+      "seedText": "0000F-00001-0000V-0000E-0000P-00008-0000C-0000D-00005-00007-0000C-0000S-00001",
+      "output": "6068223af77056e94663246c70972f5e657d3692520664eb295a45ce5bd4b87f",
+      "counter": 0,
+      "key": "6068223af77056e94663246c70972f5e657d3692520664eb295a45ce5bd4b87f",
+      "address": "0x3ed5d194c42ea0f54c38f9b12f38a6b1196a75e6"
+    },
+    {
+      "name": "all ones seed, full printable range",
+      "seed": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "passphrase": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
+      "seedText": "ZZZZV-ZZZZA-ZZZZF-ZZZZH-ZZZZ5-ZZZZH-ZZZZM-ZZZZX-ZZZZV-ZZZZE-ZZZZ6-ZZZZE-ZZZGZ",
+      "output": "4b041f2cc9c3dedbc9b2f251c95dd5ce4eae980df3a11b1a3bcdb6ac2c9f4386",
+      "counter": 0,
+      "key": "4b041f2cc9c3dedbc9b2f251c95dd5ce4eae980df3a11b1a3bcdb6ac2c9f4386",
+      "address": "0xa3198567cdb8b58a68723921829790999b3a13d5"
+    },
+    {
+      "name": "alternating seed, edge spaces",
+      "seed": "a55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55a",
+      "passphrase": "  spaces at both ends  ",
+      "seedText": "MNDAZ-APN57-BAJNV-N9ATC-MNDAN-APN5F-BAJNQ-N9ATK-MNDAM-APN5S-BAJND-N9AT2-MND09",
+      "output": "4d6e8c934f4bdf93114658aa4342f1220c757476dc775e8a7ba5417f90e91ae7",
+      "counter": 0,
+      "key": "4d6e8c934f4bdf93114658aa4342f1220c757476dc775e8a7ba5417f90e91ae7",
+      "address": "0x96ca69a14f08226456ed2e8316d10ac80cb33339"
+    }
+  ],
+  "reduce": [
+    {
+      "name": "zero",
+      "input": "0000000000000000000000000000000000000000000000000000000000000000",
+      "counter": 1,
+      "key": "2158a8906d5e2c2be001bac943ab9cab4063536e1c546b40221fdf8db031a4bb"
+    },
+    {
+      "name": "order itself",
+      "input": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
+      "counter": 1,
+      "key": "a7a58b08f2a5edb7d6a826812c8de14a32a964512e3301df912035dd9fa4332b"
+    },
+    {
+      "name": "all ones",
+      "input": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "counter": 1,
+      "key": "30553e7813efd2b87333944e1eede0cbca9e8f6f1fcb2660169b1a03c7ba798e"
+    },
+    {
+      "name": "one",
+      "input": "0000000000000000000000000000000000000000000000000000000000000001",
+      "counter": 0,
+      "key": "0000000000000000000000000000000000000000000000000000000000000001"
+    },
+    {
+      "name": "order minus one",
+      "input": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140",
+      "counter": 0,
+      "key": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140"
+    }
+  ]
+}
