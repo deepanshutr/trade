@@ -182,6 +182,10 @@ object Main:
     }
     Vector(market, fold)
 
+  // The loader of a worker made without a session. It never returns a key.
+  private[desk] val noKey: () => Array[Byte] =
+    () => throw new IllegalStateException("no key was read at start")
+
   // Workers made here have no key. Start-up hands every configured worker a copy of the session
   // key instead. A worker that is not configured never asks for a key, so this loader is not asked.
   private[desk] def withoutKey(
@@ -190,13 +194,16 @@ object Main:
       coin: String,
       directory: Path
   ): TradingWorker =
-    TradingWorker.create(
-      config,
-      enabled,
-      coin,
-      directory,
-      () => throw new IllegalStateException("no key was read at start")
-    )
+    keyless(config, enabled, coin, directory, new JdkExchange(config.baseUrl))
+
+  private[desk] def keyless(
+      config: TradingConfig,
+      enabled: Boolean,
+      coin: String,
+      directory: Path,
+      exchange: Exchange
+  ): TradingWorker =
+    TradingWorker.withExchange(config, enabled, coin, directory, noKey, exchange)
 
   def run(
       args: Args,

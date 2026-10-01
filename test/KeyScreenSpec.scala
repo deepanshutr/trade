@@ -80,6 +80,19 @@ class KeyScreenSpec extends TempDirectorySuite:
       else afterwards()
     override def available(): Int = bytes.length - at
 
+  // Reads the script and tells watch the index of each read, so a test can look at a buffer
+  // between two reads.
+  private final class Spy(bytes: Array[Byte], watch: Int => Unit) extends InputStream:
+    private var at = 0
+    override def read(): Int =
+      watch(at)
+      if at < bytes.length then
+        val next = bytes(at) & 0xff
+        at += 1
+        next
+      else -1
+    override def available(): Int = bytes.length - at
+
   // Fails every write once trouble says so.
   private final class Failing(trouble: () => Boolean) extends java.io.OutputStream:
     def write(b: Int): Unit = if trouble() then throw new IOException("terminal gone")
@@ -370,17 +383,41 @@ class KeyScreenSpec extends TempDirectorySuite:
     assertEquals(f.kinds, Vector("copy", "clear", "clear"))
   }
 
-  test("a paste of exactly 128 bytes is accepted and one of 129 is discarded") {
-    val padded = textOne + " " * (128 - textOne.length)
-    assertEquals(padded.length, 128)
+  // The seed text with spaces after it, which the seed field skips, to reach a length.
+  private def padded(length: Int): String = textOne + " " * (length - textOne.length)
+
+  test("a paste of exactly 128 bytes is processed and the screen moves on to the passphrase") {
+    assertEquals(padded(128).length, 128)
     val f = new Fixture()
-    assertEquals(f.run(newKey(seed = padded)), Some(addressOf(seedOne, phrase)))
-    val g = new Fixture()
-    val long = textOne + " " * (129 - textOne.length)
-    g.run(script("n", enter, phrase, enter, phrase, enter, enter, paste(long), interrupt))
-    assert(lines(g.output).contains("group 1 of 13"))
-    assert(!lines(g.output).exists(_.contains("#")))
-    assertEquals(g.kinds, Vector("copy", "clear", "clear"))
+    f.run(script("n", enter, phrase, enter, phrase, enter, enter, paste(padded(128)), interrupt))
+    val after = frames(f.output).last
+    assertEquals(after.head, "Drill")
+    assert(after.contains("Type the passphrase."), "the seed field did not take the paste")
+    assert(!after.exists(_.startsWith("The paste was refused")))
+    assertEquals(f.kinds, Vector("copy", "clear", "clear"))
+  }
+
+  test("a paste of 129 bytes is refused whole and the seed field stays empty") {
+    assertEquals(padded(129).length, 129)
+    val f = new Fixture()
+    f.run(script("n", enter, phrase, enter, phrase, enter, enter, paste(padded(129)), interrupt))
+    val after = frames(f.output).last
+    assert(
+      after.exists(_.startsWith("The paste was refused. It was longer than 128 bytes")),
+      "the paste was not refused"
+    )
+    assert(after.contains("group 1 of 13"))
+    assert(!after.contains("Type the passphrase."))
+    assert(!after.exists(_.contains("#")))
+    assertEquals(f.kinds, Vector("copy", "clear", "clear"))
+  }
+
+  test("a paste of 129 bytes made of dashes and seed characters is refused too") {
+    val dashed = groupsOne.mkString("-") + "-" * (129 - textOne.length)
+    assertEquals(dashed.length, 129)
+    val f = new Fixture()
+    f.run(script("n", enter, phrase, enter, phrase, enter, enter, paste(dashed), interrupt))
+    assert(frames(f.output).last.exists(_.startsWith("The paste was refused.")))
   }
 
   test(
@@ -463,6 +500,34 @@ class KeyScreenSpec extends TempDirectorySuite:
     assert(!f.output.contains("zzzzzzzzzz"))
     assert(!f.output.contains("yyyyyyyyyy"))
     assert(!f.output.contains("Evil"))
+  }
+
+  test("a paste outside a seed field is wiped at once, before the screen closes") {
+    val f = new Fixture()
+    val parts = Vector(
+      script("n", enter),
+      script(paste("zzzzzzzzzz")), // the first passphrase field
+      script(phrase, enter),
+      script(paste("yyyyyyyyyy")), // the second passphrase field
+      script(phrase, enter, enter),
+      script(paste(textOne)), // the seed field takes this one
+      script(phrase, enter),
+      script(paste("Evil")), // the name field
+      script("Main", enter, enter, "q")
+    )
+    val ends = parts.scanLeft(0)(_ + _.length).tail
+    val outside = Vector(1, 3, 7).map(ends(_))
+    var buffer = Array.emptyByteArray
+    val seen = scala.collection.mutable.Map.empty[Int, Array[Byte]]
+    val input =
+      new Spy(parts.reduce(_ ++ _), at => if buffer.nonEmpty then seen(at) = buffer.clone())
+    val result = KeyScreen.run(f.context, input, f.screen, handed => buffer = handed)
+    assertEquals(result, Some(addressOf(seedOne, phrase)))
+    outside.foreach { end =>
+      // Six bytes before the end the paste is in the buffer, and on the next read it is gone.
+      assert(seen(end - 6).exists(_ != 0), "the paste never reached the buffer")
+      assert(seen(end).forall(_ == 0), "a discarded paste stayed in its buffer")
+    }
   }
 
   test("a paste in the list or on a confirm screen is discarded too") {

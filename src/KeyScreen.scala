@@ -47,7 +47,17 @@ object KeyScreen:
   // Runs on the given streams. Returns the active address when the screen is left with a usable
   // key. Ctrl-C and end of input leave with no address.
   def run(context: Context, input: InputStream, output: PrintStream): Option[String] =
-    runWith(new Cleanup(context), context, input, output)
+    run(context, input, output, _ => ())
+
+  // The same, and the buffer where a paste waits is handed over once, so a test can see that it
+  // is wiped at once.
+  private[desk] def run(
+      context: Context,
+      input: InputStream,
+      output: PrintStream,
+      pasteBuffer: Array[Byte] => Unit
+  ): Option[String] =
+    runWith(new Cleanup(context), context, input, output, pasteBuffer)
 
   // Runs on the real terminal. The terminal and the clipboard are put right on every way out,
   // including a kill, which runs the shutdown hook.
@@ -75,7 +85,7 @@ object KeyScreen:
       "key-screen-restore"
     )
     addHook(hook)
-    try runWith(cleanup, context, input, output)
+    try runWith(cleanup, context, input, output, _ => ())
     finally
       try cleanup.close()
       finally
@@ -86,9 +96,11 @@ object KeyScreen:
       cleanup: Cleanup,
       context: Context,
       input: InputStream,
-      output: PrintStream
+      output: PrintStream,
+      pasteBuffer: Array[Byte] => Unit
   ): Option[String] =
     val keys = new KeyInput(input)
+    pasteBuffer(keys.paste)
     cleanup.keep(keys.paste)
     try new Session(context, keys, output, cleanup).list()
     catch case Interrupted => None

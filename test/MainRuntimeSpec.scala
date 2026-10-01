@@ -376,6 +376,53 @@ class MainRuntimeSpec extends TempDirectorySuite:
         case scala.util.Failure(other)      => throw other
   }
 
+  test("the loader of a worker made without a session refuses and never returns a key") {
+    for _ <- 1 to 3 do
+      val error = intercept[IllegalStateException](Main.noKey())
+      assertEquals(error.getMessage, "no key was read at start")
+  }
+
+  test("a worker made without a session never gets a key and stays blocked and not ready") {
+    val directory = tempDirectory("desk-keyless")
+    val config =
+      TradingConfig(network = "testnet", owner = Some(ownerAddress), agent = Some(keyAddress))
+    val exchange = new Exchange:
+      def info(body: ujson.Value): Option[ujson.Value] = body("type").str match
+        case "meta" =>
+          Some(ujson.read("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}"""))
+        case "userRole" =>
+          Some(ujson.Obj("role" -> "agent", "data" -> ujson.Obj("user" -> ownerAddress)))
+        case _ => None
+      def post(body: ujson.Value): Option[ujson.Value] = None
+      def watch(
+          coin: String,
+          owner: String,
+          generation: Long,
+          receive: Option[ujson.Value] => Unit
+      ): Unit = ()
+    val worker = Main.keyless(config, true, "XMR", directory, exchange)
+    try
+      worker.start()
+      worker.observe(Event.SocketUp)
+      worker.observe(
+        Event.BookUpdate(
+          "XMR",
+          Book(Vector(Level("99.99", "20", 1)), Vector(Level("100", "20", 1)), 1000L),
+          true
+        )
+      )
+      Wait.until("Live never showed why it is blocked")(
+        worker.view.block.contains("Protected signing key is unavailable or differs")
+      )
+      Thread.sleep(300L)
+      assert(!worker.view.ready)
+      assertEquals(
+        worker.view.block,
+        Some("Protected signing key is unavailable or differs")
+      )
+    finally worker.close()
+  }
+
   test("recording never reaches the key step") {
     val s = new Startup(withOwner())
     s.makeUsable()
