@@ -12,12 +12,21 @@ object ProcessRun:
   // seconds and keeps at most 4096 bytes of output. Errors are discarded. The
   // callers decide what the output means and never log it.
   def system(args: Seq[String], stdin: Array[Byte]): ProcessRun =
+    systemWithin(args, stdin, 30L)
+
+  // The same runner with its own limit, so a test need not wait 30 seconds. It is a
+  // separate method because callers pass system as a two argument function.
+  private[desk] def systemWithin(
+      args: Seq[String],
+      stdin: Array[Byte],
+      limitSeconds: Long
+  ): ProcessRun =
     val process = new ProcessBuilder(args.asJava).redirectError(Redirect.DISCARD).start()
     try
       val input = process.getOutputStream
       try input.write(stdin)
       finally input.close()
-      require(process.waitFor(30, TimeUnit.SECONDS), "process did not finish")
+      require(process.waitFor(limitSeconds, TimeUnit.SECONDS), "process did not finish")
       ProcessRun(process.exitValue(), process.getInputStream.readNBytes(4096))
     finally
       if process.isAlive then
@@ -37,9 +46,9 @@ object Clipboard:
     "  var text = $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding);",
     "  var board = $.NSPasteboard.generalPasteboard;",
     "  board.prepareForNewContentsWithOptions(1);",
-    "  if (!board.setStringForType(text, 'public.utf8-plain-text')) throw new Error('copy failed');",
     "  board.setDataForType($.NSData.data, 'org.nspasteboard.ConcealedType');",
     "  board.setDataForType($.NSData.data, 'org.nspasteboard.TransientType');",
+    "  if (!board.setStringForType(text, 'public.utf8-plain-text')) throw new Error('copy failed');",
     "  return '';",
     "}"
   ).mkString("\n")

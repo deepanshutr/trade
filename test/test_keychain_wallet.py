@@ -586,11 +586,15 @@ class InstallLauncherTests(unittest.TestCase):
         self.bin = self.root / "bin"
         self.args = self.root / "python-args"
 
-    def fake_python(self, directory, status=0):
+    def fake_python(self, directory, status=0, executable=None):
+        """A python3 that records its arguments. Asked for sys.executable it prints
+        the given path, or its own path, which is what a real python3 reports."""
         directory.mkdir(parents=True, exist_ok=True)
         python = directory / "python3"
+        reported = str(python) if executable is None else str(executable)
         python.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" >> '" + str(self.args)
-                          + "'\nexit " + str(status) + "\n")
+                          + "'\ncase \"$2\" in *sys.executable*) printf '%s\\n' '" + reported
+                          + "';; esac\nexit " + str(status) + "\n")
         python.chmod(0o755)
         return python
 
@@ -647,7 +651,7 @@ class InstallLauncherTests(unittest.TestCase):
     def test_the_found_python_must_import_the_three_libraries(self):
         self.fake_python(self.bin)
         self.assertEqual(self.install().returncode, 0)
-        self.assertEqual(self.args.read_text().splitlines(),
+        self.assertEqual(self.args.read_text().splitlines()[:2],
                          ["-c", "import cryptography, Crypto, eth_account"])
 
     def test_a_failed_import_stops_the_install_and_keeps_the_old_files(self):
@@ -697,8 +701,8 @@ class InstallLauncherTests(unittest.TestCase):
             "#!/bin/sh",
             'export DESK_PYTHON="${DESK_PYTHON:-' + str(python) + '}"',
             'export DESK_KEY_HELPER="${DESK_KEY_HELPER:-' + str(helper) + '}"',
-            'exec "${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" -jar '
-            '"$HOME/.local/lib/desk.jar" "$@"'])
+            'exec "${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" '
+            '-XX:+DisableAttachMechanism -jar "$HOME/.local/lib/desk.jar" "$@"'])
 
     def test_launcher_exports_the_defaults_and_passes_arguments_on(self):
         python = self.fake_python(self.bin)
@@ -706,8 +710,53 @@ class InstallLauncherTests(unittest.TestCase):
         helper = self.home / ".local/lib/desk-keychain.py"
         lines = self.launch("--keys")
         self.assertEqual(lines, [
-            str(python), str(helper), "-jar", str(self.home / ".local/lib/desk.jar"), "--keys"])
+            str(python), str(helper), "-XX:+DisableAttachMechanism", "-jar",
+            str(self.home / ".local/lib/desk.jar"), "--keys"])
         self.assertTrue(all(os.path.isabs(line) for line in lines[:2]))
+
+    def test_launcher_starts_java_with_attach_disabled_before_the_jar(self):
+        self.fake_python(self.bin)
+        self.assertEqual(self.install().returncode, 0)
+        lines = self.launch("--keys")
+        self.assertIn("-XX:+DisableAttachMechanism", lines)
+        self.assertLess(lines.index("-XX:+DisableAttachMechanism"), lines.index("-jar"))
+        self.assertEqual(lines.count("-XX:+DisableAttachMechanism"), 1)
+        # A caller cannot drop the flag by setting a variable the launcher reads.
+        lines = self.launch(DESK_PYTHON="/custom/python3", DESK_KEY_HELPER="/custom/helper.py")
+        self.assertIn("-XX:+DisableAttachMechanism", lines)
+
+    def test_the_launcher_records_the_interpreter_reported_by_python_itself(self):
+        # command -v finds a shim or a link. The recorded path is what python reports.
+        real = self.root / "real" / "bin" / "python3.12"
+        shim = self.fake_python(self.bin, executable=real)
+        self.assertNotEqual(shim, real)
+        self.assertEqual(self.install().returncode, 0)
+        text = (self.home / ".local/bin/desk").read_text()
+        self.assertIn('export DESK_PYTHON="${DESK_PYTHON:-' + str(real) + '}"', text)
+        self.assertNotIn(str(shim), text)
+        self.assertEqual(self.launch("--keys")[0], str(real))
+        # The libraries are still checked with the python that was found, and so is the path.
+        self.assertEqual(self.args.read_text().splitlines(), [
+            "-c", "import cryptography, Crypto, eth_account", "-c", "import sys; print(sys.executable)"])
+
+    def test_a_reported_interpreter_that_is_not_an_absolute_path_stops_the_install(self):
+        for name, reported in (("relative", "python3"), ("dot", "./python3"), ("empty", "")):
+            with self.subTest(name):
+                self.fake_python(self.bin, executable=reported)
+                done = self.install()
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("absolute", done.stderr)
+                self.assertFalse((self.home / ".local").exists())
+
+    def test_a_reported_interpreter_that_could_change_the_launcher_stops_the_install(self):
+        for name, reported in (("dollar", "/opt/a$b/python3"), ("quote", '/opt/a"b/python3'),
+                               ("backtick", "/opt/a`b/python3"), ("backslash", "/opt/a\\b/python3")):
+            with self.subTest(name):
+                self.fake_python(self.bin, executable=reported)
+                done = self.install()
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("unsafe character", done.stderr)
+                self.assertFalse((self.home / ".local").exists())
 
     def test_launcher_keeps_a_value_that_is_already_set(self):
         python = self.fake_python(self.bin)

@@ -24,17 +24,21 @@ install: build install-launcher
 	cp bin/desk.jar "$$HOME/.local/lib/desk.jar"
 
 # The shell reads HOME so an odd character in it cannot change the recipe.
-# Nothing is written until python3 is found, its path is safe to quote and its libraries import.
-# On macOS the shell prints a found command as an absolute path.
+# Nothing is written until python3 is found, its libraries import and the interpreter path
+# that python reports for itself is absolute and safe to quote. That path is the one recorded.
+# The launcher starts Java with attach disabled so other programs cannot read its memory.
 install-launcher:
 	set -e; \
 	python=$$(command -v python3) || { echo "python3 not found" >&2; exit 1; }; \
 	case "$$python$$HOME" in *[\"\`\\\$$]*) echo "unsafe character in an install path" >&2; exit 1;; esac; \
 	"$$python" -c 'import cryptography, Crypto, eth_account'; \
+	real=$$("$$python" -c 'import sys; print(sys.executable)'); \
+	case "$$real" in /*) ;; *) echo "python3 did not report an absolute interpreter path" >&2; exit 1;; esac; \
+	case "$$real" in *[\"\`\\\$$]*) echo "unsafe character in an install path" >&2; exit 1;; esac; \
 	mkdir -p "$$HOME/.local/bin" "$$HOME/.local/lib"; \
 	cp tools/keychain_wallet.py "$$HOME/.local/lib/desk-keychain.py"; \
 	chmod 600 "$$HOME/.local/lib/desk-keychain.py"; \
-	printf '#!/bin/sh\nexport DESK_PYTHON="$${DESK_PYTHON:-%s}"\nexport DESK_KEY_HELPER="$${DESK_KEY_HELPER:-%s}"\nexec "$${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" -jar "$$HOME/.local/lib/desk.jar" "$$@"\n' "$$python" "$$HOME/.local/lib/desk-keychain.py" > "$$HOME/.local/bin/desk"; \
+	printf '#!/bin/sh\nexport DESK_PYTHON="$${DESK_PYTHON:-%s}"\nexport DESK_KEY_HELPER="$${DESK_KEY_HELPER:-%s}"\nexec "$${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" -XX:+DisableAttachMechanism -jar "$$HOME/.local/lib/desk.jar" "$$@"\n' "$$real" "$$HOME/.local/lib/desk-keychain.py" > "$$HOME/.local/bin/desk"; \
 	chmod +x "$$HOME/.local/bin/desk"
 
 fmt:

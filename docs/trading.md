@@ -42,9 +42,9 @@ Names follow the reference name rule and cannot be a reference. The feed reads
 the pair every two seconds, prices the token in dollars through the quote pool,
 shows the pool's own liquidity as the book at fixed impact steps, builds candles
 from its readings, and lists swaps as the tape, one reading behind and timed at
-the reading that saw them. A node that refuses log queries still serves prices. There is no candle history before Desk starts. Paper and live orders are
-not available on an on-chain market. The bitcoin and gold references keep coming
-from the venue.
+the reading that saw them. A node that refuses log queries still serves prices. There is
+no candle history before Desk starts. Paper and live orders are not available on an
+on-chain market. The bitcoin and gold references keep coming from the venue.
 
 Amounts and age limits are quoted numeric strings. Small and big are total order
 value before fees. Target has its own value ceiling.
@@ -55,8 +55,10 @@ balances remain in place. Old margin simulation files remain separate and unchan
 Live setup needs the public `owner` address in the settings and an active key. The
 `owner` is the address of the wallet that owns the account. It uses the `0x` prefix
 followed by 40 hexadecimal characters. The settings take no `agent`. A settings file
-that has one is refused with a message that points to the key screen. Keep every
-private value out of the settings, the command line, files and chat.
+that has one stops every start, including `desk --keys`, until the field is removed. The
+message says to remove `agent` and that the trading key is now chosen with
+`desk --keys`. Keep every private value out of the settings, the command line, files and
+chat.
 
 Run `desk --keys` to open the key screen. It opens before the workspace and exits when
 you leave it. `desk XMR --trade` opens it first when no usable key exists. It goes on
@@ -75,17 +77,23 @@ a seed field. Desk clears the clipboard after each paste there and discards a pa
 anywhere else. A matching address continues. A mismatch offers a retry or a new seed.
 Last, you name the key. Desk appends the name to `key-names.jsonl`, stores
 the derived key in the Keychain through the key helper, and makes it the active key.
-The key comes from Argon2id over the seed and the passphrase. Rebuilding it needs both.
-Desk keeps neither.
+The key comes from Argon2id, a deliberately slow password hashing method, over the seed
+and the passphrase. Rebuilding it needs both. Desk saves neither.
+
+Some copies of the seed, the passphrase and the key can stay in Java and BouncyCastle
+(the cryptography library) memory buffers. Desk cannot clear them until the process
+exits. `desk --keys` exits when you leave it, so it is the cleaner way to make a key.
 
 The list shows each key with its name, address, network, approval name and an active
 mark. Up and Down move. Enter selects the key. `r` renames it, `n` makes a new key, `s`
 restores a key from its seed and `q` leaves. A key without a Keychain item shows "not in
 Keychain" and cannot be selected. Nothing is ever deleted. A switch is refused while
 the current key has a saved order, or while another Desk holds that key's order lock.
-Restore asks for the seed and the passphrase, shows the address, then stores the key. It
-asks for a name only when the address is new and never writes a second record for a
-known address.
+When a refusal stops a new or restored key from becoming active, the key is still stored
+and named, the current key stays active and the screen shows the reason. Select the key
+later from the list. Restore asks for the seed and the passphrase, shows the address,
+then stores the key and makes it the active key. It asks for a name only when the
+address is new and never writes a second record for a known address.
 
 Two public files hold the choices. `~/.config/desk/key-names.jsonl` holds the names. It
 has one JSON object per line, Desk only appends to it, and its mode is `600`. Desk
@@ -102,29 +110,30 @@ generic password under service `desk`. The account is the key's address. A custo
 libraries `cryptography`, `pycryptodome` and `eth-account`.
 `python3 tools/keychain_wallet.py --check-access` checks the Mac permission settings
 without creating a key. The `--create` mode, the setup record files and the `agent`
-setting no longer exist.
+setting no longer exist. The launcher starts Java with attach disabled, so other
+programs cannot read Desk's memory through Java's attach tools.
 
 When the settings name an owner and a usable key exists, Desk reads the key from the
 Keychain once, before the workspace starts. It prints "Waiting for the Keychain prompt.
 Choose Allow, not Always Allow." and waits up to 120 seconds for the prompt. Use Allow,
 not Always Allow. Apple says Always Allow lets the app read the password "without any
-further authorization or notice from you". See
-[Apple's access guide](https://support.apple.com/en-us/guide/keychain-access/kyca1243/mac).
-Desk keeps the key in memory until that process closes. Starting a new chat does not
-close a running Desk process. Each live worker gets its own copy and wipes it when the
-worker closes. A denied or timed-out read leaves Desk running without a key. Live then
-shows its blocking reason, and Desk does not ask again until you restart it. Desk
-verifies that the loaded key matches the active key and that the venue reports
-delegation to the owner.
+further authorization or notice from you". See [Apple's access
+guide](https://support.apple.com/en-us/guide/keychain-access/kyca1243/mac). Desk keeps
+the key in memory until that process closes. Starting a new chat does not close a
+running Desk process. Each live worker gets its own copy and wipes it when the worker
+closes. A denied or timed-out read leaves Desk running without a key. Live then shows
+its blocking reason, and Desk does not ask again until you restart it. Desk verifies
+that the loaded key matches the active key and that the venue reports delegation to the
+owner.
 
 Making a key does not register a trading account. The wallet that owns the account must
 approve the key's address at the venue as a named API key. Approve it under the approval
 name that Desk shows. The name is `desk-` followed by the first ten hexadecimal
-characters of the address after `0x`. Each key has its own name, so up to three Desk keys can be
-approved at once. Until the approval is in place the key cannot trade, and the role
-check must pass. An approval can expire. A key whose approval has expired cannot trade
-until the owner approves it again. Keep funding and account setup separate from the key
-screen.
+characters of the address after `0x`. Each key has its own name, so up to three Desk
+keys can be approved at once. Until the approval is in place the key cannot trade, and
+the role check must pass. An approval can expire. A key whose approval has expired
+cannot trade until the owner approves it again. Keep funding and account setup separate
+from the key screen.
 
 Desk's local signer accepts only its supported immediate orders. It rejects fund
 transfers, withdrawals, permission changes and leverage changes before producing
