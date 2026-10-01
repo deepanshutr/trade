@@ -13,10 +13,11 @@ object Main:
       paper: Boolean = false,
       record: Boolean = false,
       stateDirectory: Option[String] = None,
-      audio: String = "voice"
+      audio: String = "voice",
+      keys: Boolean = false
   )
   val usage =
-    "usage: desk [COIN] [--mono] [--paper | --trade | --record] [--config PATH] [--state PATH] [--chime | --mute]"
+    "usage: desk [COIN] [--mono] [--paper | --trade | --record | --keys] [--config PATH] [--state PATH] [--chime | --mute]"
   val escapeWaitNanos = 40_000_000L
 
   private[desk] def announcements(args: Args, output: AnnouncementOutput): Announcements =
@@ -29,14 +30,15 @@ object Main:
     def loop(rest: List[String], chosen: Args, hasCoin: Boolean): Either[String, Args] =
       rest match
         case Nil =>
-          if Vector(chosen.trade, chosen.paper, chosen.record).count(identity) > 1 then
-            Left("choose one of paper, live or public recording")
+          if Vector(chosen.trade, chosen.paper, chosen.record, chosen.keys).count(identity) > 1 then
+            Left("choose one of paper, live, public recording or keys")
           else Right(chosen)
         case "--no-analysis" :: tail => loop(tail, chosen, hasCoin)
         case "--mono" :: tail        => loop(tail, chosen.copy(mono = true), hasCoin)
         case "--trade" :: tail       => loop(tail, chosen.copy(trade = true), hasCoin)
         case "--paper" :: tail       => loop(tail, chosen.copy(paper = true), hasCoin)
         case "--record" :: tail      => loop(tail, chosen.copy(record = true), hasCoin)
+        case "--keys" :: tail        => loop(tail, chosen.copy(keys = true), hasCoin)
         case "--chime" :: tail if chosen.audio == "voice" =>
           loop(tail, chosen.copy(audio = "chime"), hasCoin)
         case "--mute" :: tail if chosen.audio == "voice" =>
@@ -180,10 +182,27 @@ object Main:
     }
     Vector(market, fold)
 
+  // Workers made here have no key. Start-up hands every configured worker a copy of the session
+  // key instead. A worker that is not configured never asks for a key, so this loader is not asked.
+  private[desk] def withoutKey(
+      config: TradingConfig,
+      enabled: Boolean,
+      coin: String,
+      directory: Path
+  ): TradingWorker =
+    TradingWorker.create(
+      config,
+      enabled,
+      coin,
+      directory,
+      () => throw new IllegalStateException("no key was read at start")
+    )
+
   def run(
       args: Args,
       sources: TradingConfig => (Connector, Rest) = publicSources,
-      createWorker: (TradingConfig, Boolean, String, Path) => TradingWorker = TradingWorker.create,
-      queue: LinkedBlockingQueue[Event] = new LinkedBlockingQueue[Event]()
+      createWorker: (TradingConfig, Boolean, String, Path) => TradingWorker = withoutKey,
+      queue: LinkedBlockingQueue[Event] = new LinkedBlockingQueue[Event](),
+      keys: KeyStartup.Hooks = KeyStartup.Hooks()
   ): Unit =
-    WorkspaceApp.run(args, sources, createWorker, queue)
+    WorkspaceApp.run(args, sources, createWorker, queue, keys)

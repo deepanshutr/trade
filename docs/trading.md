@@ -52,17 +52,79 @@ value before fees. Target has its own value ceiling.
 balances remain in place. Old margin simulation files remain separate and unchanged.
 `paperFee` is the fraction charged on each simulated fill.
 
-Live setup requires the public `owner` address and its approved delegated `agent`
-address on the selected network. Both use the `0x` prefix followed by 40 hexadecimal
-characters. Add those public addresses to the settings. Keep the private signing
-key out of the settings, command line, files and chat.
+Live setup needs the public `owner` address in the settings and an active key. The
+`owner` is the address of the wallet that owns the account. It uses the `0x` prefix
+followed by 40 hexadecimal characters. The settings take no `agent`. A settings file
+that has one is refused with a message that points to the key screen. Keep every
+private value out of the settings, the command line, files and chat.
 
-Create a generic password item through the Mac system key store. Its service is
-`desk`, its account is the delegated agent address, and its password is that
-agent's private hexadecimal signing key. A custom `keyService` setting changes
-the service name. Use the protected store's on-screen interface for this step.
-A denied or timed-out read leaves signing unavailable. Desk verifies that the
-loaded key matches the agent and that the venue reports delegation to the owner.
+Run `desk --keys` to open the key screen. It opens before the workspace and exits when
+you leave it. `desk XMR --trade` opens it first when no usable key exists. It goes on
+into the workspace only when you leave with a usable active key. Otherwise Desk exits
+with "No trading key". A usable key has an active choice for the selected network, a
+name on that network, and a Keychain item for its address. The check reads the item's
+attributes only. It never reads the key.
+
+To make a key, press `n`. Desk makes a random seed and copies it to the clipboard. The
+screen never shows the seed. Paste it into Passwords, save it there and press Enter.
+Desk clears the clipboard. Then type a passphrase twice. It has 8 to 128 printable
+ASCII characters, and spaces are allowed. Desk derives the key, which takes a few
+seconds, and shows its address and its approval name. The drill follows. The screen
+clears, and you type or paste the seed again, then the passphrase. Paste works only in
+a seed field. Desk clears the clipboard after each paste there and discards a paste
+anywhere else. A matching address continues. A mismatch offers a retry or a new seed.
+Last, you name the key. Desk appends the name to `key-names.jsonl`, stores
+the derived key in the Keychain through the key helper, and makes it the active key.
+The key comes from Argon2id over the seed and the passphrase. Rebuilding it needs both.
+Desk keeps neither.
+
+The list shows each key with its name, address, network, approval name and an active
+mark. Up and Down move. Enter selects the key. `r` renames it, `n` makes a new key, `s`
+restores a key from its seed and `q` leaves. A key without a Keychain item shows "not in
+Keychain" and cannot be selected. Nothing is ever deleted. A switch is refused while
+the current key has a saved order, or while another Desk holds that key's order lock.
+Restore asks for the seed and the passphrase, shows the address, then stores the key. It
+asks for a name only when the address is new and never writes a second record for a
+known address.
+
+Two public files hold the choices. `~/.config/desk/key-names.jsonl` holds the names. It
+has one JSON object per line, Desk only appends to it, and its mode is `600`. Desk
+refuses a file with a torn last line or a hand edit, names the line, and never repairs
+or truncates it. `~/.config/desk/active-key.json` holds one address per network. Its
+mode is `600`, and every change replaces it in one atomic write. Neither file holds a
+private value.
+
+The key helper keeps the only Keychain write. `make install` copies it to
+`~/.local/lib/desk-keychain.py` and writes the launcher with the Python it will use.
+Desk gives the helper the derived key on standard input, and the helper stores it as a
+generic password under service `desk`. The account is the key's address. A custom
+`keyService` setting changes the service name. The helper needs the installed Python
+libraries `cryptography`, `pycryptodome` and `eth-account`.
+`python3 tools/keychain_wallet.py --check-access` checks the Mac permission settings
+without creating a key. The `--create` mode, the setup record files and the `agent`
+setting no longer exist.
+
+When the settings name an owner and a usable key exists, Desk reads the key from the
+Keychain once, before the workspace starts. It prints "Waiting for the Keychain prompt.
+Choose Allow, not Always Allow." and waits up to 120 seconds for the prompt. Use Allow,
+not Always Allow. Apple says Always Allow lets the app read the password "without any
+further authorization or notice from you". See
+[Apple's access guide](https://support.apple.com/en-us/guide/keychain-access/kyca1243/mac).
+Desk keeps the key in memory until that process closes. Starting a new chat does not
+close a running Desk process. Each live worker gets its own copy and wipes it when the
+worker closes. A denied or timed-out read leaves Desk running without a key. Live then
+shows its blocking reason, and Desk does not ask again until you restart it. Desk
+verifies that the loaded key matches the active key and that the venue reports
+delegation to the owner.
+
+Making a key does not register a trading account. The wallet that owns the account must
+approve the key's address at the venue as a named API key. Approve it under the approval
+name that Desk shows. The name is `desk-` followed by the first ten hexadecimal
+characters of the address after `0x`. Each key has its own name, so up to three Desk keys can be
+approved at once. Until the approval is in place the key cannot trade, and the role
+check must pass. An approval can expire. A key whose approval has expired cannot trade
+until the owner approves it again. Keep funding and account setup separate from the key
+screen.
 
 Desk's local signer accepts only its supported immediate orders. It rejects fund
 transfers, withdrawals, permission changes and leverage changes before producing
@@ -71,35 +133,10 @@ transfers between balances within the same account. The local restriction does
 not constrain a key used outside Desk. See the venue's
 [agent-transfer documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#agent-send-asset).
 
-Use **Allow Once** when the Mac asks for the key. **Always Allow** can retain access
-for future sessions, as described in [Apple's access guide](https://support.apple.com/en-us/guide/keychain-access/kyca1243/mac).
-Desk keeps its loaded trading key in memory until that process closes. Starting
-a new chat does not close a running Desk process. The current key-store read has
-an eight-second timeout. A denied or timed-out read requires restarting Desk to
-try again.
-
-For new local keys, `python3 tools/keychain_wallet.py --check-access` checks the
-Mac permission settings without creating a key. After selecting the account role,
-`--create owner` creates a wallet key under service `desk-owner`. `--create agent`
-creates a separate trading key under service `desk`. The account name is the
-generated public address. The helper requires the installed Python libraries
-`cryptography`, `pycryptodome` and `eth-account`.
-
-The helper writes only public setup records to
-`~/.config/desk/keychain-owner.jsonl` or `keychain-agent.jsonl`. It records the
-intended item before adding it, then appends completion after checking its access
-settings. Existing records and key-store items are never overwritten. If setup
-stops, preserve that record and inspect its named item before retrying. The private
-value stays in process memory and the protected store. Library memory copies can
-remain until the helper exits.
-
-Creating either key does not register a trading account. The wallet that owns the
-account must separately approve Desk's trading address at the venue. Keep funding
-and account setup separate from the key-creation command.
-
 Start `desk XMR --trade`, or select Live and confirm its account mode. XMR is the
 venue's Monero symbol. The panel identifies the current trading mode and market.
-Check the full owner and agent in the local settings before enabling this mode.
+Check the owner in the local settings and the address on the key screen before enabling
+this mode.
 Test network access uses `"network": "testnet"`. Public feeds and the live worker
 use the same network. An account, delegation, funding and any real order remain
 separate user actions.

@@ -862,6 +862,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         )
         assertEquals(f.journalOpens.get(), 0)
         assertEquals(f.posts.get(), 0)
+        assertEquals(f.loads.get(), 0)
       finally f.close()
     }
   }

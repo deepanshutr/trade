@@ -479,8 +479,7 @@ object Exchange:
     )
 
 object ProtectedKey:
-  // Desk waits 120 seconds at start for the Keychain prompt. A worker built
-  // without a session key waits 8.
+  // Desk waits 120 seconds at start for the Keychain prompt.
   def read(config: TradingConfig, waitSeconds: Int): Array[Byte] =
     readWith(
       config,
