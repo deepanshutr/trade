@@ -5,6 +5,9 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
+import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -560,6 +563,163 @@ class StoreModeTests(unittest.TestCase):
         result = run_main("--check-access", "--store", "agent", data=HEX)
         self.assertEqual(result.code, 2)
         self.assertFalse(result.keychain.called)
+
+
+ROOT = Path(__file__).parents[1]
+MAKE = shutil.which("make")
+REAL_HOME = os.path.expanduser("~")
+
+
+@unittest.skipUnless(MAKE, "make is required")
+class InstallLauncherTests(unittest.TestCase):
+    """Runs make install-launcher against a temporary home. It never builds.
+
+    HOME is set both in the environment and on the make command line, and a dry run
+    comes first so a recipe that names the build or the real home stops the test.
+    """
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="desk-install-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        self.bin = self.root / "bin"
+        self.args = self.root / "python-args"
+
+    def fake_python(self, directory, status=0):
+        directory.mkdir(parents=True, exist_ok=True)
+        python = directory / "python3"
+        python.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" >> '" + str(self.args)
+                          + "'\nexit " + str(status) + "\n")
+        python.chmod(0o755)
+        return python
+
+    def make(self, *arguments, path=None, home=None):
+        home = home or self.home
+        env = {"HOME": str(home), "PATH": path or str(self.bin) + ":/usr/bin:/bin"}
+        return subprocess.run([MAKE, *arguments, "HOME=" + str(home)], cwd=ROOT, env=env,
+                              capture_output=True, text=True, timeout=60)
+
+    def install(self, **options):
+        home = options.get("home") or self.home
+        dry = self.make("-n", "install-launcher", **options)
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        shown = dry.stdout.replace(str(home), "")
+        for forbidden in (REAL_HOME, "scala-cli", "bin/desk.jar"):
+            self.assertNotIn(forbidden, shown)
+        return self.make("install-launcher", **options)
+
+    def launch(self, *arguments, **variables):
+        java = self.root / "java"
+        java.write_text("#!/bin/sh\nprintf '%s\\n' \"$DESK_PYTHON\" \"$DESK_KEY_HELPER\" \"$@\"\n")
+        java.chmod(0o755)
+        env = {"HOME": str(self.home), "PATH": "/usr/bin:/bin", "DESK_JAVA": str(java), **variables}
+        done = subprocess.run([str(self.home / ".local/bin/desk"), *arguments], env=env,
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout.splitlines()
+
+    def test_helper_is_copied_with_owner_only_mode(self):
+        self.fake_python(self.bin)
+        helper = self.home / ".local/lib/desk-keychain.py"
+        for old in (None, b"old helper"):
+            with self.subTest(replacing=old):
+                helper.parent.mkdir(parents=True, exist_ok=True)
+                if old:
+                    helper.write_bytes(old)
+                    helper.chmod(0o644)
+                done = self.install()
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertFalse(helper.is_symlink())
+                self.assertEqual(helper.read_bytes(), (ROOT / "tools/keychain_wallet.py").read_bytes())
+                self.assertEqual(stat.S_IMODE(helper.stat().st_mode), 0o600)
+
+    def test_install_builds_first_then_runs_the_launcher_part_then_copies_the_jar(self):
+        # A dry run only prints the recipe, so nothing is built or installed.
+        dry = self.make("-n", "install")
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        shown = dry.stdout
+        build = shown.index("scala-cli")
+        launcher = shown.index("keychain_wallet.py")
+        jar = shown.index("cp bin/desk.jar")
+        self.assertTrue(build < launcher < jar)
+
+    def test_the_found_python_must_import_the_three_libraries(self):
+        self.fake_python(self.bin)
+        self.assertEqual(self.install().returncode, 0)
+        self.assertEqual(self.args.read_text().splitlines(),
+                         ["-c", "import cryptography, Crypto, eth_account"])
+
+    def test_a_failed_import_stops_the_install_and_keeps_the_old_files(self):
+        self.fake_python(self.bin, status=1)
+        done = self.install()
+        self.assertNotEqual(done.returncode, 0)
+        self.assertFalse((self.home / ".local").exists())
+        launcher = self.home / ".local/bin/desk"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_bytes(b"old launcher")
+        self.assertNotEqual(self.install().returncode, 0)
+        self.assertEqual(launcher.read_bytes(), b"old launcher")
+        self.assertFalse((self.home / ".local/lib").exists())
+
+    def test_a_missing_python_stops_the_install(self):
+        tools = self.root / "tools"
+        tools.mkdir()
+        for name in ("mkdir", "cp", "chmod"):
+            (tools / name).symlink_to(shutil.which(name))
+        done = self.install(path=str(tools))
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("python3 not found", done.stderr)
+        self.assertFalse((self.home / ".local").exists())
+
+    def test_a_path_that_could_change_the_launcher_stops_the_install(self):
+        odd_python = self.fake_python(self.root / "a$b").parent
+        odd_home = self.root / "home`x"
+        odd_home.mkdir()
+        self.fake_python(self.bin)
+        for name, options, home in (
+                ("python path", {"path": str(odd_python) + ":/usr/bin:/bin"}, self.home),
+                ("home path", {"home": odd_home}, odd_home)):
+            with self.subTest(name):
+                done = self.install(**options)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("unsafe character", done.stderr)
+                self.assertFalse((home / ".local").exists())
+
+    def test_launcher_text_keeps_the_jar_line_and_names_absolute_defaults(self):
+        python = self.fake_python(self.bin)
+        self.assertEqual(self.install().returncode, 0)
+        launcher = self.home / ".local/bin/desk"
+        helper = self.home / ".local/lib/desk-keychain.py"
+        self.assertTrue(os.access(launcher, os.X_OK))
+        lines = launcher.read_text().splitlines()
+        self.assertEqual(lines, [
+            "#!/bin/sh",
+            'export DESK_PYTHON="${DESK_PYTHON:-' + str(python) + '}"',
+            'export DESK_KEY_HELPER="${DESK_KEY_HELPER:-' + str(helper) + '}"',
+            'exec "${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" -jar '
+            '"$HOME/.local/lib/desk.jar" "$@"'])
+
+    def test_launcher_exports_the_defaults_and_passes_arguments_on(self):
+        python = self.fake_python(self.bin)
+        self.assertEqual(self.install().returncode, 0)
+        helper = self.home / ".local/lib/desk-keychain.py"
+        lines = self.launch("--keys")
+        self.assertEqual(lines, [
+            str(python), str(helper), "-jar", str(self.home / ".local/lib/desk.jar"), "--keys"])
+        self.assertTrue(all(os.path.isabs(line) for line in lines[:2]))
+
+    def test_launcher_keeps_a_value_that_is_already_set(self):
+        python = self.fake_python(self.bin)
+        self.assertEqual(self.install().returncode, 0)
+        helper = self.home / ".local/lib/desk-keychain.py"
+        lines = self.launch(DESK_PYTHON="/custom/python3", DESK_KEY_HELPER="/custom/helper.py")
+        self.assertEqual(lines[:2], ["/custom/python3", "/custom/helper.py"])
+        # One value set and the other not. An empty value counts as not set.
+        lines = self.launch(DESK_PYTHON="/custom/python3", DESK_KEY_HELPER="")
+        self.assertEqual(lines[:2], ["/custom/python3", str(helper)])
+        self.assertNotEqual(lines[0], str(python))
 
 
 if __name__ == "__main__":
