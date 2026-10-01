@@ -1391,6 +1391,35 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
+  test("a lost post lookup sent inside the margin keeps the order when its reply lands past it") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.lose = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("lookup missing")(f.recoveryReads.get() > 0)
+      val saved = f.openedJournal.pending.get
+      // Monotonic time covers the wait, and wall time sits on the margin.
+      f.clock.set(saved.expiresAfter + 60000L)
+      assert(f.clock.get() >= saved.createdAt + 65000L)
+      val roles = f.roleReads.get()
+      Wait.until("stale role was not checked again")(f.roleReads.get() > roles)
+      // The role read follows a lookup, so the next lookup sees a fresh role.
+      f.holdRecovery = true
+      assert(f.recoveryEntered.await(3, TimeUnit.SECONDS), "status lookup missing")
+      val held = f.recoveryReads.get()
+      assertEquals(f.openedJournal.pending, Some(saved))
+      f.clock.set(saved.expiresAfter + 60001L)
+      f.recoveryRelease.countDown()
+      Wait.until("unknown order did not release after a later lookup")(!f.worker.view.pending)
+      // Only a lookup sent after the margin may release, and no lookup follows a release.
+      assert(f.recoveryReads.get() > held, "the lookup sent inside the margin released the order")
+      assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.worker.view.outcome, Some("XMR not placed"))
+      assertEquals(f.orderPosts.get(), 1)
+    finally f.close()
+  }
+
   test("err reply with a failed lookup stays saved and pending") {
     val f = new Fixture()
     try
