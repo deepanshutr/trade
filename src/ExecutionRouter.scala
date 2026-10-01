@@ -118,7 +118,7 @@ final class ExecutionRouter(
       }.toEither.left.map(_ => "Paper storage cannot be opened. Its saved balance was preserved")
     else if next == "LIVE" && !config.configured then
       Left(
-        "Live setup required: public owner, delegated signer and protected key. See docs/trading.md"
+        "Live setup required: owner in settings and an active key (desk --keys). See docs/trading.md"
       )
     else if next == "LIVE" && retirementFailed then Left(transitionReason)
     else if next == "LIVE" then

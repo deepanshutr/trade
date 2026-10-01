@@ -69,13 +69,16 @@ object WorkspaceApp:
       announcements: AutoCloseable,
       recorder: Option[AutoCloseable],
       worker: AutoCloseable,
-      diagnostics: AutoCloseable
+      diagnostics: AutoCloseable,
+      session: Option[AutoCloseable] = None
   ): Unit =
     outlook.close()
     announcements.close()
     recorder.foreach(_.close())
     worker.close()
     diagnostics.close()
+    // The workers hold their own copies and have closed by now.
+    session.foreach(_.close())
 
   private[desk] def enterTerminal(
       enter: () => String,
@@ -224,10 +227,11 @@ object WorkspaceApp:
       args: Main.Args,
       sources: TradingConfig => (Connector, Rest),
       createWorker: (TradingConfig, Boolean, String, Path) => TradingWorker,
-      queue: LinkedBlockingQueue[Event]
+      queue: LinkedBlockingQueue[Event],
+      keyHooks: KeyStartup.Hooks
   ): Unit =
-    val home = Path.of(System.getProperty("user.home"))
-    val config = TradingConfig.load(Main.configPath(args, home)) match
+    val home = keyHooks.home
+    val loaded = TradingConfig.load(Main.configPath(args, home)) match
       case Right(value)  => value
       case Left(message) =>
         System.err.println(message)
@@ -237,12 +241,23 @@ object WorkspaceApp:
       .getOrElse(home.resolve(".local/state/desk"))
       .toAbsolutePath
       .normalize()
+    // The key step comes first. The key screen never touches the feed, the event queue or
+    // diagnostics, and the single Keychain read happens before the workspace starts.
+    val prepared = KeyStartup.prepare(args, loaded, directory, keyHooks)
+    val config = prepared.config
+    val session = prepared.session
     val (connector, rest) = sources(config)
     if args.record then record(args, config, directory, connector, rest)
     else
+      // With a session every worker takes its own copy of the one key read. Without one the
+      // injected factory builds the workers, which is how the offline runner stays offline.
+      val live: (TradingConfig, Boolean, String, Path) => TradingWorker = session match
+        case Some(held) =>
+          (c, enabled, coin, dir) => keyHooks.worker(c, enabled, coin, dir, () => held.copy())
+        case None => createWorker
       // Keep construction before local runtime work for the injected offline
       // runner. Its factory rejects any attempt to enable real trading.
-      val initialLive = createWorker(config, args.trade, args.coin, directory)
+      val initialLive = live(config, args.trade, args.coin, directory)
       val now = () => System.currentTimeMillis()
       val diagnostics = Diagnostics.open(directory, now, config.quoteAgeMs)
       val monotonic = () => TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
@@ -252,7 +267,7 @@ object WorkspaceApp:
         mode,
         args.coin,
         initialLive,
-        coin => createWorker(config, true, coin, directory),
+        coin => live(config, true, coin, directory),
         rest,
         directory,
         now,
@@ -320,7 +335,8 @@ object WorkspaceApp:
           announcements,
           recorder,
           worker,
-          diagnostics
+          diagnostics,
+          session
         )
       val saved = enterTerminal(() => Term.enterRaw(), () => closeAll()).getOrElse {
         System.err.println("desk needs a terminal")

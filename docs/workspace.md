@@ -1,9 +1,11 @@
 # Trading workspace
 
 Run `desk XMR --paper` for simulated Monero trading, `desk XMR` for viewing, or
-`desk XMR --trade` for the configured real account. Read the mode and full market
-name above Buy and Sell. The minimum size is 100 columns by 30 rows. Use 120 by
-40 for more chart space.
+`desk XMR --trade` for the configured real account. Run `desk --keys` to make,
+restore, rename or choose the trading key. It opens a key screen before any
+workspace and exits when you leave it. See [live trading settings](trading.md).
+Read the mode and full market name above Buy and Sell. The minimum size is 100
+columns by 30 rows. Use 120 by 40 for more chart space.
 
 Choose an amount, then click Buy or Sell once to submit it. Each button covers
 five rows and repeats the selected amount. There is no separate Send step.
