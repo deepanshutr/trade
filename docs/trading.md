@@ -142,6 +142,9 @@ the local clock is within the margin of the venue's clock; the venue refuses an
 action after its `expiresAfter`, which is unproven until a test-network order; the
 venue's status lookup reflects any action applied before expiry within the margin;
 and an `err` reply plus an `unknownOid` lookup after the margin means not placed.
+The local clock may step, so Desk also waits the same span of real elapsed time,
+65 seconds by the monotonic clock, since it first saw the order: when it reserved
+the order, or when it loaded the saved order at startup.
 Failed lookups keep the order saved regardless of time, and known order statuses
 retain their existing handling. Do not delete recovery state manually. Resolve any
 remaining block using the account's order history.

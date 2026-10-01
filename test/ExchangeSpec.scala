@@ -3,6 +3,8 @@ package desk
 class ExchangeSpec extends munit.FunSuite:
   private val saved =
     SavedOrder("0x" + "1" * 32, 1000, "XMR", 7, Side.Buy, "5", "100.1", "100", 6000, 1000)
+  // Enough monotonic time, so these cases test the wall time rule.
+  private val waited = 65000L
   private def reply(status: ujson.Value): Option[ujson.Value] = Some(
     ujson.Obj(
       "status" -> "ok",
@@ -50,7 +52,14 @@ class ExchangeSpec extends munit.FunSuite:
     val unknown = Some(ujson.Obj("status" -> "unknownOid"))
     Vector(saved.expiresAfter + 1, saved.expiresAfter + 60000L).foreach { now =>
       assertEquals(
-        Exchange.recovered(unknown, saved, now, allowUnknown = false, errReply = true),
+        Exchange.recovered(
+          unknown,
+          saved,
+          now,
+          elapsedMs = waited,
+          allowUnknown = false,
+          errReply = true
+        ),
         None
       )
     }
@@ -59,6 +68,7 @@ class ExchangeSpec extends munit.FunSuite:
         unknown,
         saved,
         saved.expiresAfter + 60001L,
+        elapsedMs = waited,
         allowUnknown = false,
         errReply = true
       ),
@@ -74,7 +84,14 @@ class ExchangeSpec extends munit.FunSuite:
       Some(lookup("filled", "wrong"))
     ).foreach { reply =>
       assertEquals(
-        Exchange.recovered(reply, saved, 66001L, allowUnknown = false, errReply = true),
+        Exchange.recovered(
+          reply,
+          saved,
+          66001L,
+          elapsedMs = waited,
+          allowUnknown = false,
+          errReply = true
+        ),
         None
       )
     }
@@ -103,7 +120,14 @@ class ExchangeSpec extends munit.FunSuite:
   test("recovery preserves known status handling after expiry") {
     assertEquals(
       Exchange
-        .recovered(Some(lookup("canceled")), saved, 66001L, allowUnknown = true, errReply = false),
+        .recovered(
+          Some(lookup("canceled")),
+          saved,
+          66001L,
+          elapsedMs = waited,
+          allowUnknown = true,
+          errReply = false
+        ),
       Some("XMR recovered canceled")
     )
     assertEquals(
@@ -111,6 +135,7 @@ class ExchangeSpec extends munit.FunSuite:
         Some(lookup("futureStatus")),
         saved,
         66001L,
+        elapsedMs = waited,
         allowUnknown = true,
         errReply = false
       ),
@@ -118,7 +143,14 @@ class ExchangeSpec extends munit.FunSuite:
     )
     assertEquals(
       Exchange
-        .recovered(Some(lookup("open")), saved, 66001L, allowUnknown = true, errReply = false),
+        .recovered(
+          Some(lookup("open")),
+          saved,
+          66001L,
+          elapsedMs = waited,
+          allowUnknown = true,
+          errReply = false
+        ),
       None
     )
     assertEquals(
@@ -126,6 +158,7 @@ class ExchangeSpec extends munit.FunSuite:
         Some(lookup("filled", "wrong")),
         saved,
         66001L,
+        elapsedMs = waited,
         allowUnknown = true,
         errReply = false
       ),
@@ -133,7 +166,14 @@ class ExchangeSpec extends munit.FunSuite:
     )
     assertEquals(
       Exchange
-        .recovered(Some(lookup("filled")), saved, 66001L, allowUnknown = true, errReply = false),
+        .recovered(
+          Some(lookup("filled")),
+          saved,
+          66001L,
+          elapsedMs = waited,
+          allowUnknown = true,
+          errReply = false
+        ),
       Some("XMR recovered filled")
     )
     assertEquals(
@@ -141,6 +181,7 @@ class ExchangeSpec extends munit.FunSuite:
         Some(lookup("iocCancelRejected")),
         saved,
         66001L,
+        elapsedMs = waited,
         allowUnknown = true,
         errReply = false
       ),
@@ -151,16 +192,66 @@ class ExchangeSpec extends munit.FunSuite:
   test("unknownOid releases only strictly past signed expiry plus sixty seconds") {
     val unknown = Some(ujson.Obj("status" -> "unknownOid"))
     assertEquals(
-      Exchange.recovered(unknown, saved, 65999L, allowUnknown = true, errReply = false),
+      Exchange.recovered(
+        unknown,
+        saved,
+        65999L,
+        elapsedMs = waited,
+        allowUnknown = true,
+        errReply = false
+      ),
       None
     )
     assertEquals(
-      Exchange.recovered(unknown, saved, 66000L, allowUnknown = true, errReply = false),
+      Exchange.recovered(
+        unknown,
+        saved,
+        66000L,
+        elapsedMs = waited,
+        allowUnknown = true,
+        errReply = false
+      ),
       None
     )
     assertEquals(
-      Exchange.recovered(unknown, saved, 66001L, allowUnknown = true, errReply = false),
+      Exchange.recovered(
+        unknown,
+        saved,
+        66001L,
+        elapsedMs = waited,
+        allowUnknown = true,
+        errReply = false
+      ),
       Some("XMR not placed")
+    )
+  }
+
+  test("unknownOid releases only after sixty-five monotonic seconds even far past wall expiry") {
+    val unknown = Some(ujson.Obj("status" -> "unknownOid"))
+    val late = saved.expiresAfter + 600000L
+    for (errReply, text) <- Vector(false -> "XMR not placed", true -> "XMR order rejected") do
+      Vector(0L, 64999L).foreach { elapsed =>
+        assertEquals(
+          Exchange
+            .recovered(unknown, saved, late, elapsed, allowUnknown = true, errReply = errReply),
+          None,
+          s"released after $elapsed ms with err $errReply"
+        )
+      }
+      assertEquals(
+        Exchange.recovered(unknown, saved, late, 65000L, allowUnknown = true, errReply = errReply),
+        Some(text)
+      )
+    assertEquals(
+      Exchange.recovered(
+        Some(lookup("filled")),
+        saved,
+        0L,
+        0L,
+        allowUnknown = false,
+        errReply = false
+      ),
+      Some("XMR recovered filled")
     )
   }
 
@@ -170,6 +261,7 @@ class ExchangeSpec extends munit.FunSuite:
         Some(ujson.Obj("status" -> "unknownOid")),
         saved,
         saved.expiresAfter + 600000L,
+        elapsedMs = waited,
         allowUnknown = false,
         errReply = false
       ),
@@ -185,7 +277,14 @@ class ExchangeSpec extends munit.FunSuite:
       Some(ujson.Obj("status" -> "err"))
     ).foreach { reply =>
       assertEquals(
-        Exchange.recovered(reply, saved, 66001L, allowUnknown = true, errReply = false),
+        Exchange.recovered(
+          reply,
+          saved,
+          66001L,
+          elapsedMs = waited,
+          allowUnknown = true,
+          errReply = false
+        ),
         None
       )
     }
@@ -217,7 +316,14 @@ class ExchangeSpec extends munit.FunSuite:
       assertEquals(lookup, None)
       assertEquals(Exchange.outcome(post, saved), None)
       assertEquals(
-        Exchange.recovered(lookup, saved, 66001L, allowUnknown = true, errReply = false),
+        Exchange.recovered(
+          lookup,
+          saved,
+          66001L,
+          elapsedMs = waited,
+          allowUnknown = true,
+          errReply = false
+        ),
         None
       )
     try
@@ -286,6 +392,7 @@ class ExchangeSpec extends munit.FunSuite:
       ),
       saved,
       66001L,
+      elapsedMs = waited,
       allowUnknown = true,
       errReply = false
     )

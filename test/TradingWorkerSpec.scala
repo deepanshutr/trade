@@ -56,6 +56,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
       agent = Option.when(missing != "agent")(agent)
     )
     val clock = new AtomicLong(10000L)
+    // Wall time runs ahead of the monotonic clock by this step.
+    val wallStep = new AtomicLong(0L)
     val loads = new AtomicInteger()
     val journalOpens = new AtomicInteger()
     val warmCalls = new AtomicInteger()
@@ -316,7 +318,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         openedJournal = OrderJournal.open(directory, config.identity, beforeReplace, afterReplace)
         openedJournal
       ,
-      () => clock.get(),
+      () => clock.get() + wallStep.get(),
       () => clock.get(),
       afterReserve,
       beforeOrderSign,
@@ -760,6 +762,9 @@ class TradingWorkerSpec extends TempDirectorySuite:
         f.clock.set(saved.expiresAfter + 60001L)
         f.worker.start()
         Wait.until("role check missing")(f.roleReads.get() > 0)
+        // Wall time alone cannot release a restored order, so monotonic time passes too.
+        f.clock.addAndGet(65000L)
+        val reads = f.recoveryReads.get()
         if roleMatches then
           Wait.until("expired order not released")(
             f.worker.view.outcome.contains("XMR not placed")
@@ -767,7 +772,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
           assertEquals(f.openedJournal.pending, None)
         else
           Wait.until("lookup not completed")(
-            f.recoveryReads.get() >= 2 || f.worker.view.outcome.nonEmpty
+            f.recoveryReads.get() >= reads + 2 || f.worker.view.outcome.nonEmpty
           )
           assertEquals(f.openedJournal.pending, Some(saved))
           assert(f.worker.view.pending)
@@ -1455,6 +1460,69 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
+  test("a restored unknown order waits sixty-five monotonic seconds after the journal load") {
+    val f = new Fixture(autoStart = false)
+    try
+      val saved = saveAtStartup(f)
+      f.wallStep.set(600000L)
+      f.worker.start()
+      Wait.until("matching role did not refresh the account")(
+        f.roleReads.get() > 0 && f.worker.view.position.nonEmpty
+      )
+      val reads = f.recoveryReads.get()
+      // Lookups run serially, so the second start proves the first lookup completed.
+      Wait.until("lookup after the role check not completed")(
+        f.recoveryReads.get() > reads + 1 || f.worker.view.outcome.nonEmpty
+      )
+      assertEquals(f.worker.view.outcome, None, "released on wall time alone")
+      f.clock.addAndGet(64999L)
+      val roles = f.roleReads.get()
+      Wait.until("stale role was not checked again")(f.roleReads.get() > roles)
+      val late = f.recoveryReads.get()
+      Wait.until("lookup before sixty-five seconds not completed")(
+        f.recoveryReads.get() > late + 1 || f.worker.view.outcome.nonEmpty
+      )
+      assertEquals(f.worker.view.outcome, None, "released before sixty-five monotonic seconds")
+      assertEquals(f.openedJournal.pending, Some(saved))
+      f.clock.incrementAndGet()
+      Wait.until("restored order not released")(f.worker.view.outcome.contains("XMR not placed"))
+      assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
+
+  Vector(false, true).foreach { errReply =>
+    test(s"a wall clock jump cannot release an unknown order placed in this run: err $errReply") {
+      val f = new Fixture()
+      try
+        f.ready()
+        if errReply then f.reject = true else f.lose = true
+        assert(f.worker.submit(buy, "XMR"))
+        Wait.until("lookup missing")(f.recoveryReads.get() > 0)
+        val saved = f.openedJournal.pending.get
+        f.wallStep.set(600000L)
+        for at <- Vector(f.clock.get(), saved.createdAt + 64999L) do
+          f.clock.set(at)
+          val roles = f.roleReads.get()
+          Wait.until(s"role at $at not checked")(
+            at < saved.createdAt + 60000L || f.roleReads.get() > roles
+          )
+          val reads = f.recoveryReads.get()
+          // Lookups run serially, so the second start proves the first lookup completed.
+          Wait.until(s"lookup at $at not completed")(
+            f.recoveryReads.get() > reads + 1 || f.worker.view.outcome.nonEmpty
+          )
+          assertEquals(f.worker.view.outcome, None, s"released at monotonic $at")
+          assertEquals(f.openedJournal.pending, Some(saved))
+        f.clock.set(saved.createdAt + 65000L)
+        val text = if errReply then "XMR order rejected" else "XMR not placed"
+        Wait.until("unknown order not released")(f.worker.view.outcome.contains(text))
+        assertEquals(f.openedJournal.pending, None)
+        assertEquals(f.orderPosts.get(), 1)
+      finally f.close()
+    }
+  }
+
   test("restart releases an expired unknown order without resending") {
     val f = new Fixture()
     var restarted = Option.empty[TradingWorker]
@@ -1468,6 +1536,9 @@ class TradingWorkerSpec extends TempDirectorySuite:
       val again = f.create()
       restarted = Some(again)
       again.start()
+      Wait.until("restart did not load the saved order")(again.view.pending)
+      // Wall time alone cannot release a restored order, so monotonic time passes too.
+      f.clock.addAndGet(65000L)
       Wait.until("restart did not release expired order")(
         again.view.outcome.contains("XMR not placed")
       )

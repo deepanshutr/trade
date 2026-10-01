@@ -140,6 +140,8 @@ final class TradingWorker private[desk] (
     metadata.filter(_ => fresh(metadataAt, 60000L)).map(_ -> metadataAt)
   }
   private var saved = Option.empty[SavedOrder]
+  // Monotonic time at which this process first saw the saved order.
+  private var savedSeenAt = 0L
   private var errOrder = Option.empty[String]
   private var journal = Option.empty[OrderJournal]
   private var secret = Option.empty[Array[Byte]]
@@ -424,7 +426,10 @@ final class TradingWorker private[desk] (
       case _: Exception =>
         storageFailure()
         return
-    synchronized { saved = Some(p) }
+    synchronized {
+      saved = Some(p)
+      savedSeenAt = monotonic()
+    }
     val request = Try {
       beforeOrderSign()
       signed(Exchange.action(p), p.nonce, Some(p.expiresAfter))
@@ -537,6 +542,7 @@ final class TradingWorker private[desk] (
           journal = Some(opened)
           synchronized {
             saved = opened.pending
+            savedSeenAt = monotonic()
             if saved.nonEmpty then
               busy.set(true)
               message =
@@ -546,11 +552,13 @@ final class TradingWorker private[desk] (
           }
         catch case _: Exception => storageFailure()
       val unresolved = synchronized(
-        if !fatal && !executing.get() then saved.map(p => p -> errOrder.contains(p.id)) else None
+        if !fatal && !executing.get() then saved.map(p => (p, errOrder.contains(p.id), savedSeenAt))
+        else None
       )
-      unresolved.foreach { case (p, gotErrReply) =>
+      unresolved.foreach { case (p, gotErrReply, seenAt) =>
         // Time the lookup before sending it, so a late reply cannot count as past expiry.
         val lookupAt = wall()
+        val elapsed = monotonic() - seenAt
         val reply = exchange.info(
           ujson.Obj(
             "type" -> "orderStatus",
@@ -563,6 +571,7 @@ final class TradingWorker private[desk] (
             reply,
             p,
             lookupAt,
+            elapsed,
             allowUnknown = p.owner.nonEmpty && p.owner == config.owner &&
               synchronized(roleGeneration.contains(g) && fresh(roleAt, 60000L)),
             errReply = gotErrReply

@@ -332,6 +332,9 @@ object Exchange:
   // Assumes order status lookup reflects every action applied before expiry within this margin.
   // Assumes an err reply plus unknownOid after this margin means the action was not placed.
   private val ExpiryMarginMs = 60000L
+  // The local clock may step, so release also needs this much monotonic time since Desk
+  // first saw the order: the five-second signed lifetime plus the margin.
+  private val ReleaseWaitMs = 5000L + ExpiryMarginMs
 
   private val terminal = Set(
     "filled",
@@ -447,10 +450,11 @@ object Exchange:
       reply: Option[ujson.Value],
       saved: SavedOrder,
       now: Long,
+      elapsedMs: Long,
       allowUnknown: Boolean,
       errReply: Boolean
   ): Option[String] =
-    if status(reply).contains("unknownOid") &&
+    if status(reply).contains("unknownOid") && elapsedMs >= ReleaseWaitMs &&
       BigInt(now) > BigInt(saved.expiresAfter) + ExpiryMarginMs
     then
       if errReply then return Some(saved.coin + " order rejected")
