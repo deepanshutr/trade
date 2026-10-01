@@ -32,7 +32,6 @@ object TradingConfig:
     "target",
     "network",
     "owner",
-    "agent",
     "keyService",
     "references", // Accepted for saved settings compatibility; its value is ignored.
     "quoteAgeMs",
@@ -116,10 +115,14 @@ object TradingConfig:
         val text = Files.readString(p)
         require(shallowJson(text))
         val j = ujson.read(text)
+        require(
+          !j.obj.contains("agent"),
+          "agent is now chosen on the key screen (desk --keys)"
+        )
         require(j.obj.keySet.forall(fields.contains), "unknown setting")
         def stringFields(names: String*): Boolean =
           names.forall(name => j.obj.get(name).forall(_.strOpt.isDefined))
-        require(stringFields("owner", "agent"), "owner and agent must be strings")
+        require(stringFields("owner"), "owner must be a string")
         require(stringFields("network", "keyService"), "network and keyService must be strings")
         require(
           stringFields("paperBalance", "paperFee"),
@@ -136,7 +139,7 @@ object TradingConfig:
           j.obj.get(name).map(_.str).getOrElse(fallback)
         def address(name: String): Option[String] = j.obj.get(name).map { v =>
           val a = v.str.toLowerCase(java.util.Locale.ROOT)
-          require(validAddress(a), "invalid owner or agent address")
+          require(validAddress(a), "invalid owner address")
           a
         }
         def millis(name: String, fallback: Long): Long =
@@ -172,7 +175,7 @@ object TradingConfig:
           sizes,
           network,
           address("owner"),
-          address("agent"),
+          None,
           service,
           millis("quoteAgeMs", d.quoteAgeMs),
           millis("positionAgeMs", d.positionAgeMs),

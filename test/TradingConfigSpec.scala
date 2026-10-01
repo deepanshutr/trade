@@ -100,6 +100,61 @@ class TradingConfigSpec extends munit.FunSuite:
     }
   }
 
+  test("settings with an agent field are refused before any value is read") {
+    val message = "invalid trading settings: agent is now chosen on the key screen (desk --keys)"
+    val values = Vector(
+      ujson.Str("0x" + "2" * 40),
+      ujson.Str("private-address-canary"),
+      ujson.Str(""),
+      ujson.Num(5),
+      ujson.Bool(true),
+      ujson.Null,
+      ujson.Arr("private-address-canary"),
+      ujson.Obj("private-address-canary" -> "private-address-canary")
+    )
+    for value <- values do
+      val p = setting(ujson.Obj("agent" -> value).render())
+      try assertEquals(TradingConfig.load(Some(p)), Left(message))
+      finally Files.deleteIfExists(p)
+    val withOwner = setting(
+      ujson
+        .Obj("owner" -> ("0x" + "1" * 40), "agent" -> ("0x" + "2" * 40), "network" -> "testnet")
+        .render()
+    )
+    try assertEquals(TradingConfig.load(Some(withOwner)), Left(message))
+    finally Files.deleteIfExists(withOwner)
+  }
+
+  test("settings without an agent load as before and keep the key service") {
+    val owner = "0x" + "1" * 40
+    val p = setting(
+      ujson.Obj("owner" -> owner, "network" -> "testnet", "keyService" -> "desk-test").render()
+    )
+    try
+      val c = TradingConfig.load(Some(p)).toOption.get
+      assertEquals(c.owner, Some(owner))
+      assertEquals(c.agent, None)
+      assertEquals(c.keyService, "desk-test")
+      assertEquals(c.network, "testnet")
+      assert(!c.configured)
+    finally Files.deleteIfExists(p)
+  }
+
+  test("a settings owner that is not an address names the owner") {
+    val p = setting("""{"owner":"private-address-canary"}""")
+    try
+      val error = TradingConfig.load(Some(p)).swap.toOption.get
+      assertEquals(error, "invalid trading settings: invalid owner address")
+    finally Files.deleteIfExists(p)
+  }
+
+  test("the settings case class still carries the agent chosen elsewhere") {
+    val agent = "0x" + "2" * 40
+    val c = TradingConfig(owner = Some("0x" + "1" * 40), agent = Some(agent), network = "testnet")
+    assert(c.configured)
+    assertEquals(c.identity, "testnet-" + "2" * 40)
+  }
+
   test("an explicit missing path does not silently use defaults") {
     assert(TradingConfig.load(Some(Path.of("/missing/desk/settings.json"))).isLeft)
   }
@@ -143,7 +198,6 @@ class TradingConfigSpec extends munit.FunSuite:
   test("shared validation errors name their fields without including supplied values") {
     val cases = Vector(
       "owner" -> "private-address-canary",
-      "agent" -> "private-address-canary",
       "small" -> "0",
       "big" -> "0",
       "target" -> "0",
@@ -161,7 +215,6 @@ class TradingConfigSpec extends munit.FunSuite:
 
   for field <- Vector(
       "owner",
-      "agent",
       "small",
       "big",
       "target",
