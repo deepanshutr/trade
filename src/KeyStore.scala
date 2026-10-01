@@ -34,6 +34,10 @@ object KeyStore:
       (body("state").str, body("account").str)
     }.toOption
 
+  // True when both helper paths are set and absolute, which is what store needs to run.
+  def helperReady(env: Map[String, String]): Boolean =
+    absolute(env, "DESK_PYTHON").isDefined && absolute(env, "DESK_KEY_HELPER").isDefined
+
   def store(
       key: Array[Byte],
       expected: String,
