@@ -39,11 +39,14 @@ class WorkspaceSpec extends munit.FunSuite:
     assert(!text.contains("Sending"), text)
   }
 
-  test("pending order status shows terminal and save messages at the smallest workspace size") {
+  test("pending outcomes use the same compact labels as finished outcomes") {
     val submitting = "XMR submitting"
     val messages = Vector(
-      "XMR filled 0.5 at 300" -> "XMR filled 0.5 at 300",
-      "XMR canceled before sending" -> "XMR canceled before sending",
+      "Wallet change paused this account or account state is unavailable" -> "Account unavailable",
+      "XMR recovered openInterestCapCanceled" -> "Not sent",
+      "XMR recovered marginCanceled" -> "Not sent",
+      "XMR canceled before sending" -> "Not sent",
+      "XMR filled 0.5 at 300" -> "Filled",
       "Saved order state failed. Restart to recover" -> "Saved order state failed. Restart to recover",
       submitting -> "Sending"
     )
@@ -60,9 +63,22 @@ class WorkspaceSpec extends munit.FunSuite:
       )
       val text = frame.lines.mkString("\n")
       assert(text.contains(expected), text)
-      if message != submitting then assert(!text.contains("Sending"), text)
+      if message != submitting && expected != message then assert(!text.contains(message), text)
       assertEquals(frame.lines.size, 30)
       assert(frame.lines.forall(_.length == 100), text)
+
+      if message != submitting && expected != message then
+        val finished = Workspace.draw(
+          s,
+          view.copy(pending = false),
+          PanelView(mode = "LIVE", actionNotice = Some(message)),
+          100,
+          30,
+          now,
+          java.time.ZoneOffset.UTC,
+          Style.mono
+        )
+        assert(finished.lines.mkString("\n").contains(expected), finished.lines.mkString("\n"))
     }
   }
 
