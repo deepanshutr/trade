@@ -412,8 +412,9 @@ object Exchange:
   private def status(reply: Option[ujson.Value]): Option[String] =
     reply.flatMap(_.objOpt.flatMap(_.get("status")).flatMap(_.strOpt))
 
+  def isErrReply(reply: Option[ujson.Value]): Boolean = status(reply).contains("err")
+
   def outcome(reply: Option[ujson.Value], saved: SavedOrder): Option[String] =
-    if status(reply).contains("err") then return Some(saved.coin + " order rejected")
     reply.flatMap(j =>
       Try {
         require(j("status").str == "ok" && j("response")("type").str == "order")
@@ -445,8 +446,11 @@ object Exchange:
       reply: Option[ujson.Value],
       saved: SavedOrder,
       now: Long,
-      allowUnknown: Boolean
+      allowUnknown: Boolean,
+      errReply: Boolean = false
   ): Option[String] =
+    if errReply && status(reply).contains("unknownOid") then
+      return Some(saved.coin + " order rejected")
     if allowUnknown && status(reply).contains("unknownOid") &&
       BigInt(now) > BigInt(saved.expiresAfter) + ExpiryMarginMs
     then return Some(saved.coin + " not placed")

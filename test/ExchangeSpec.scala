@@ -25,9 +25,22 @@ class ExchangeSpec extends munit.FunSuite:
     assertEquals(order("r").bool, false)
   }
 
-  test("a top-level err rejects the saved order") {
+  test("a top-level err leaves the saved order unresolved") {
     assertEquals(
       Exchange.outcome(Some(ujson.Obj("status" -> "err", "response" -> "x")), saved),
+      None
+    )
+  }
+
+  test("an unknownOid confirms an err reply without expiry permission") {
+    assertEquals(
+      Exchange.recovered(
+        Some(ujson.Obj("status" -> "unknownOid")),
+        saved,
+        1000L,
+        allowUnknown = false,
+        errReply = true
+      ),
       Some("XMR order rejected")
     )
   }

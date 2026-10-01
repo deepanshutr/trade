@@ -1271,16 +1271,52 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.close()
   }
 
-  test("a top-level err releases immediately without a second post") {
+  test("an err reply recovers a matching filled order without a second post") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.reject = true
+      f.recoverFilled = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("err reply did not recover filled order")(
+        f.worker.view.outcome.contains("XMR recovered filled")
+      )
+      assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.orderPosts.get(), 1)
+      assertEquals(f.worker.view.outcome, Some("XMR recovered filled"))
+    finally f.close()
+  }
+
+  test("err and unknownOid release as rejected before expiry") {
     val f = new Fixture()
     try
       f.ready()
       f.reject = true
       assert(f.worker.submit(buy, "XMR"))
-      Wait.until("err did not release saved order")(!f.worker.view.pending)
+      Wait.until("err post missing")(f.orderPosts.get() == 1)
+      val expiresAfter = f.lastPost.get()("expiresAfter").num.toLong
+      Wait.until("err status lookup missing")(f.recoveryReads.get() > 0)
+      assert(f.clock.get() < expiresAfter + 60000L)
+      Wait.until("err and unknownOid did not release")(!f.worker.view.pending)
       assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
       assertEquals(f.orderPosts.get(), 1)
-      assert(f.worker.view.outcome.contains("XMR order rejected"))
+    finally f.close()
+  }
+
+  test("err reply with a failed lookup stays saved and pending") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.reject = true
+      f.lookupFailure = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("err status lookup missing")(f.recoveryReads.get() > 0)
+      Thread.sleep(100)
+      assert(f.worker.view.pending)
+      assert(f.openedJournal.pending.nonEmpty)
+      assertEquals(f.worker.view.outcome, None)
+      assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }
 
