@@ -1,8 +1,9 @@
-"""Create a new Desk key without exporting its private value.
+"""Store a Desk trading key in the Mac Keychain without exporting it.
 
-Only public metadata reaches stdout or the setup record. Python and its crypto
-libraries can retain temporary immutable copies until this short process exits.
-This helper never replaces an item, approves a trading key, or submits an order.
+The key arrives on standard input as 64 lowercase hex characters. Only public
+metadata reaches stdout. Python and its crypto libraries can retain temporary
+immutable copies until this short process exits. This helper never replaces an
+item, approves a trading key, or submits an order.
 """
 
 import argparse
@@ -10,6 +11,7 @@ import ctypes as C
 import json
 import os
 from pathlib import Path
+import re
 import sys
 
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -18,9 +20,15 @@ from eth_account import Account
 
 ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 SERVICES = {"owner": "desk-owner", "agent": "desk"}
+DUPLICATE_ITEM = -25299  # errSecDuplicateItem
+KEY_INPUT = 66  # Up to 65 bytes are a key. A 66th byte means more input follows.
 
 
 class SetupError(RuntimeError):
+    pass
+
+
+class DuplicateItem(SetupError):
     pass
 
 
@@ -42,13 +50,53 @@ def generate():
     return bytearray(key.private_numbers().private_value.to_bytes(32, "big"))
 
 
-def create(role, store, generate, before_store=lambda public: None):
+def hex_value(byte):
+    if 48 <= byte <= 57:
+        return byte - 48
+    if 97 <= byte <= 102:
+        return byte - 87
+    raise SetupError("invalid key input")
+
+
+def read_key(stream):
+    """Reads 64 lowercase hex characters and an optional newline into a new buffer.
+
+    Reads at most 66 bytes and refuses anything else. The key never becomes a str.
+    """
+    raw, key = bytearray(KEY_INPUT), bytearray(32)
+    try:
+        view, used = memoryview(raw), 0
+        while used < KEY_INPUT:
+            count = stream.readinto(view[used:])
+            if not count:
+                break
+            used += count
+        if used not in (64, 65) or (used == 65 and raw[64] != 10):
+            raise SetupError("invalid key input")
+        for index in range(32):
+            key[index] = hex_value(raw[2 * index]) * 16 + hex_value(raw[2 * index + 1])
+        return key
+    except BaseException:
+        key[:] = bytes(len(key))
+        raise
+    finally:
+        raw[:] = bytes(len(raw))
+
+
+def service_name(value):
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", value):
+        raise argparse.ArgumentTypeError("service name must match [A-Za-z0-9._-]{1,80}")
+    return value
+
+
+def create(role, store, generate, before_store=lambda public: None, service=None):
     if role not in SERVICES:
         raise SetupError("unknown wallet role")
     secret = generate()
     encoded = bytearray()
     try:
-        public = {"role": role, "service": SERVICES[role], "account": address(secret)}
+        public = {"role": role, "service": service or SERVICES[role],
+                  "account": address(secret)}
         before_store(public)
         encoded.extend(secret.hex().encode("ascii"))
         store.add(public["service"], public["account"], "Desk " + role + " key", encoded)
@@ -213,9 +261,12 @@ class MacKeychain:
             path = Path.home() / "Library/Keychains/login.keychain-db"
             self.check(self.sec.SecKeychainOpen(os.fsencode(path), C.byref(keychain)))
             # Create-only. No update or delete function is bound by this helper.
-            self.check(self.sec.SecKeychainItemCreateFromContent(
+            status = self.sec.SecKeychainItemCreateFromContent(
                 fourcc("genp"), C.byref(listing), len(secret), raw,
-                keychain, access, C.byref(item)))
+                keychain, access, C.byref(item))
+            if status == DUPLICATE_ITEM:
+                raise DuplicateItem("key store status " + str(status))
+            self.check(status)
             self.check(self.sec.SecKeychainItemCopyAccess(item, C.byref(saved_access)))
             self.access_rules(saved_access)
             self.probe(item)
@@ -228,13 +279,16 @@ def main():
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument("--check-access", action="store_true",
                          help="check native access objects without creating any key")
-    actions.add_argument("--create", choices=sorted(SERVICES))
+    actions.add_argument("--store", choices=["agent"],
+                         help="store the key read on standard input")
+    parser.add_argument("--service", type=service_name,
+                        help="Keychain service name, default " + SERVICES["agent"])
     args = parser.parse_args()
-    record = None
     public = None
+    key = None
     try:
-        store = MacKeychain()
         if args.check_access:
+            store = MacKeychain()
             access = store.access("Desk access preparation")
             try:
                 print(json.dumps({"read_rules": store.access_rules(access),
@@ -243,36 +297,32 @@ def main():
             finally:
                 store.release(access)
             return 0
-        directory = Path.home() / ".config/desk"
-        if directory.is_symlink() or not directory.is_dir() or directory.stat().st_mode & 0o077:
-            raise SetupError("private Desk settings directory required")
-        path = directory / ("keychain-" + args.create + ".jsonl")
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        record = os.fdopen(descriptor, "w")
+        key = read_key(sys.stdin.buffer)
+        store = MacKeychain()
 
-        def prepare(value):
+        def keep(value):
             nonlocal public
             public = dict(value)
-            record.write(json.dumps({**public, "state": "prepared"}) + "\n")
-            record.flush()
-            os.fsync(record.fileno())
 
-        public = create(args.create, store, generate, prepare)
-        record.write(json.dumps({**public, "state": "stored", "prompt_required": True}) + "\n")
-        record.flush()
-        os.fsync(record.fileno())
-        print(json.dumps({**public, "state": "stored", "prompt_required": True}))
+        public = create(args.store, store, lambda: key, keep, args.service)
+        print(json.dumps({"account": public["account"], "role": public["role"],
+                          "service": public["service"], "state": "stored",
+                          "prompt_required": True}, separators=(",", ":")))
         return 0
+    except DuplicateItem:
+        print(json.dumps({"account": public["account"], "state": "exists"},
+                         separators=(",", ":")))
+        return 3
     except Exception as error:
         stopped = {"state": "stopped", "item": public,
-                   "message": "Setup did not finish. Preserve any setup record and inspect the named item before retrying."}
+                   "message": "Storage did not finish. Inspect the named Keychain item before retrying."}
         if isinstance(error, SetupError):
             stopped["reason"] = str(error)
         print(json.dumps(stopped), file=sys.stderr)
         return 1
     finally:
-        if record:
-            record.close()
+        if key is not None:
+            key[:] = bytes(len(key))
 
 
 if __name__ == "__main__":
