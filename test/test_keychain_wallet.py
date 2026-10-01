@@ -28,8 +28,7 @@ FIXTURE = bytes.fromhex("00" * 31 + "01")
 PUBLIC = "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
 HEX = FIXTURE.hex().encode("ascii")
 LETTERS = bytes.fromhex("0123456789abcdef" * 4)
-FIXED_MESSAGE = ("Setup did not finish. Preserve any setup record "
-                 "and inspect the named item before retrying.")
+FIXED_MESSAGE = "Storage did not finish. Inspect the named Keychain item before retrying."
 
 
 class Store:
@@ -124,7 +123,7 @@ class KeychainWalletTests(unittest.TestCase):
         self.assertEqual(result.code, 1)
         self.assertEqual(len(store.calls), 1)
         stopped = json.loads(result.err)
-        self.assertIn("inspect the named item", stopped["message"])
+        self.assertEqual(stopped["message"], FIXED_MESSAGE)
         self.assertEqual(stopped["reason"], reason)
         self.assertEqual(stopped["item"]["account"], PUBLIC)
         self.assertEqual(result.out, "")

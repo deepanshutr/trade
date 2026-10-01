@@ -315,7 +315,7 @@ def main():
         return 3
     except Exception as error:
         stopped = {"state": "stopped", "item": public,
-                   "message": "Setup did not finish. Preserve any setup record and inspect the named item before retrying."}
+                   "message": "Storage did not finish. Inspect the named Keychain item before retrying."}
         if isinstance(error, SetupError):
             stopped["reason"] = str(error)
         print(json.dumps(stopped), file=sys.stderr)
