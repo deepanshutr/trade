@@ -33,6 +33,8 @@ final case class TradingView(
 object TradingWorker:
   val ownerMismatchMessage: String = "Signer does not match the configured owner"
   val savedOwnerMismatchMessage: String = "Saved order belongs to another owner"
+  val setupMessage: String =
+    "Live setup required: owner in settings and an active key (desk --keys). See docs/trading.md"
   val maximumReviewLifetimeMs: Long = 30000L
 
   // The loader hands this worker its own copy of the key. The worker wipes it on close.
@@ -550,7 +552,7 @@ final class TradingWorker private[desk] (
 
   private def refresh(): Unit =
     if enabled && !config.configured then
-      synchronized { message = "Configure owner and delegated signer" }
+      synchronized { message = TradingWorker.setupMessage }
       return
     val (current, g, version) = synchronized((coin, generation, accountVersion))
     val startedAt = monotonic()

@@ -858,7 +858,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
       val f = new Fixture(missing = missing)
       try
         Wait.until("configure message missing")(
-          f.worker.view.message == "Configure owner and delegated signer"
+          f.worker.view.message ==
+            "Live setup required: owner in settings and an active key (desk --keys). See docs/trading.md"
         )
         assertEquals(f.journalOpens.get(), 0)
         assertEquals(f.posts.get(), 0)
