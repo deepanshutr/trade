@@ -56,6 +56,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
       agent = Option.when(missing != "agent")(agent)
     )
     val clock = new AtomicLong(10000L)
+    // Wall time runs ahead of the monotonic clock by this step.
+    val wallStep = new AtomicLong(0L)
     val loads = new AtomicInteger()
     val journalOpens = new AtomicInteger()
     val warmCalls = new AtomicInteger()
@@ -316,7 +318,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         openedJournal = OrderJournal.open(directory, config.identity, beforeReplace, afterReplace)
         openedJournal
       ,
-      () => clock.get(),
+      () => clock.get() + wallStep.get(),
       () => clock.get(),
       afterReserve,
       beforeOrderSign,
@@ -356,10 +358,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     f.pauseActive()
     assert(f.worker.submit(buy, "XMR"))
     Wait.until("completion and fresh account snapshot missing")(!f.worker.view.pending)
-    assertEquals(
-      f.worker.view.outcome,
-      Some(if f.reject then "XMR order rejected" else "XMR filled 1 at 100")
-    )
+    assertEquals(f.worker.view.outcome, Some("XMR filled 1 at 100"))
 
   private def assertUsable(f: Fixture, expected: Option[String], cash: Boolean = false): Unit =
     val view = f.worker.view
@@ -545,9 +544,20 @@ class TradingWorkerSpec extends TempDirectorySuite:
   test("a rejected order resumes after unchanged active data is renewed") {
     val f = new Fixture()
     try
+      f.ready()
+      val receive = f.timedActiveReceive
+      f.pauseActive()
       f.reject = true
-      completeWithoutActive(f)
-      assert(!f.worker.view.ready)
+      f.holdRecovery = true
+      assert(f.worker.submit(buy, "XMR"))
+      assert(f.recoveryEntered.await(3, TimeUnit.SECONDS), "err status lookup missing")
+      f.clock.set(f.lastPost.get()("expiresAfter").num.toLong + 60001L)
+      f.fresh(f.worker, time = 2000L)
+      receive(f.activePayload, f.clock.getAndIncrement())
+      f.recoveryRelease.countDown()
+      Wait.until("rejected order not released")(!f.worker.view.pending)
+      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
+      assert(!f.worker.view.ready, "active data stamped before the release restored readiness")
       assertEquals(f.worker.view.position, Some(BigDecimal(0)))
       f.sendActive()
       f.ready()
@@ -752,6 +762,9 @@ class TradingWorkerSpec extends TempDirectorySuite:
         f.clock.set(saved.expiresAfter + 60001L)
         f.worker.start()
         Wait.until("role check missing")(f.roleReads.get() > 0)
+        // Wall time alone cannot release a restored order, so monotonic time passes too.
+        f.clock.addAndGet(65000L)
+        val reads = f.recoveryReads.get()
         if roleMatches then
           Wait.until("expired order not released")(
             f.worker.view.outcome.contains("XMR not placed")
@@ -759,7 +772,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
           assertEquals(f.openedJournal.pending, None)
         else
           Wait.until("lookup not completed")(
-            f.recoveryReads.get() >= 2 || f.worker.view.outcome.nonEmpty
+            f.recoveryReads.get() >= reads + 2 || f.worker.view.outcome.nonEmpty
           )
           assertEquals(f.openedJournal.pending, Some(saved))
           assert(f.worker.view.pending)
@@ -1271,16 +1284,160 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.close()
   }
 
-  test("a top-level err releases immediately without a second post") {
+  test("an err reply recovers a matching filled order without a second post") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.reject = true
+      f.recoverFilled = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("err reply did not recover filled order")(
+        f.worker.view.outcome.contains("XMR recovered filled")
+      )
+      assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.orderPosts.get(), 1)
+      assertEquals(f.worker.view.outcome, Some("XMR recovered filled"))
+    finally f.close()
+  }
+
+  test("err and unknownOid stay saved until expiry plus the margin, then release without a role") {
     val f = new Fixture()
     try
       f.ready()
       f.reject = true
       assert(f.worker.submit(buy, "XMR"))
-      Wait.until("err did not release saved order")(!f.worker.view.pending)
+      Wait.until("err post missing")(f.orderPosts.get() == 1)
+      val expiresAfter = f.lastPost.get()("expiresAfter").num.toLong
+      Wait.until("err status lookup missing")(f.recoveryReads.get() > 0)
+      f.roleMatches = false
+      Vector(f.clock.get(), expiresAfter + 1, expiresAfter + 60000L).foreach { now =>
+        f.clock.set(now)
+        val reads = f.recoveryReads.get()
+        // Lookups run serially, so the second start proves the first lookup completed.
+        Wait.until(s"lookup at $now not completed")(
+          f.recoveryReads.get() > reads + 1 || f.worker.view.outcome.nonEmpty
+        )
+        assertEquals(f.worker.view.outcome, None, s"err and unknownOid released at $now")
+        assert(f.openedJournal.pending.nonEmpty)
+      }
+      f.clock.set(expiresAfter + 60001L)
+      // Busy stays set without a matching role, so wait for the outcome instead.
+      Wait.until("err and unknownOid did not release after the margin")(
+        f.worker.view.outcome.nonEmpty
+      )
       assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
       assertEquals(f.orderPosts.get(), 1)
-      assert(f.worker.view.outcome.contains("XMR order rejected"))
+    finally f.close()
+  }
+
+  test("an err on an earlier settled order does not release a later lost order") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.reject = true
+      f.recoverFilled = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("err order did not settle as filled")(
+        f.worker.view.outcome.contains("XMR recovered filled")
+      )
+      val first = f.lastPost.get()("action")("orders")(0)("c").str
+      f.reject = false
+      f.recoverFilled = false
+      f.lose = true
+      f.sendActive()
+      f.ready()
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("second post missing")(f.orderPosts.get() == 2)
+      val reads = f.recoveryReads.get()
+      Wait.until("second lookup missing")(f.recoveryReads.get() > reads)
+      val saved = f.openedJournal.pending.get
+      assertNotEquals(saved.id, first)
+      f.roleMatches = false
+      f.clock.set(saved.expiresAfter + 60001L)
+      val late = f.recoveryReads.get()
+      Wait.until("lookup past the margin not completed")(
+        f.recoveryReads.get() > late + 1 || f.openedJournal.pending.isEmpty
+      )
+      assertEquals(
+        f.openedJournal.pending,
+        Some(saved),
+        "an earlier err released a later lost order"
+      )
+      assert(f.worker.view.pending)
+      assertEquals(f.orderPosts.get(), 2)
+    finally f.close()
+  }
+
+  test("an err lookup sent before expiry keeps the order when its reply lands past the margin") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.reject = true
+      f.holdRecovery = true
+      assert(f.worker.submit(buy, "XMR"))
+      assert(f.recoveryEntered.await(3, TimeUnit.SECONDS), "err status lookup missing")
+      val held = f.recoveryReads.get()
+      val expiresAfter = f.lastPost.get()("expiresAfter").num.toLong
+      assert(f.clock.get() < expiresAfter)
+      f.clock.set(expiresAfter + 60001L)
+      f.recoveryRelease.countDown()
+      Wait.until("err and unknownOid did not release after a later lookup")(!f.worker.view.pending)
+      // Only a lookup sent after the margin may release, and no lookup follows a release.
+      assert(f.recoveryReads.get() > held, "the lookup sent before expiry released the order")
+      assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
+      assertEquals(f.orderPosts.get(), 1)
+    finally f.close()
+  }
+
+  test("a lost post lookup sent inside the margin keeps the order when its reply lands past it") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.lose = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("lookup missing")(f.recoveryReads.get() > 0)
+      val saved = f.openedJournal.pending.get
+      // Monotonic time covers the wait, and wall time sits on the margin.
+      f.clock.set(saved.expiresAfter + 60000L)
+      assert(f.clock.get() >= saved.createdAt + 65000L)
+      val roles = f.roleReads.get()
+      Wait.until("stale role was not checked again")(f.roleReads.get() > roles)
+      // The role read follows a lookup, so the next lookup sees a fresh role.
+      f.holdRecovery = true
+      assert(f.recoveryEntered.await(3, TimeUnit.SECONDS), "status lookup missing")
+      val held = f.recoveryReads.get()
+      assertEquals(f.openedJournal.pending, Some(saved))
+      f.clock.set(saved.expiresAfter + 60001L)
+      f.recoveryRelease.countDown()
+      Wait.until("unknown order did not release after a later lookup")(!f.worker.view.pending)
+      // Only a lookup sent after the margin may release, and no lookup follows a release.
+      assert(f.recoveryReads.get() > held, "the lookup sent inside the margin released the order")
+      assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.worker.view.outcome, Some("XMR not placed"))
+      assertEquals(f.orderPosts.get(), 1)
+    finally f.close()
+  }
+
+  test("err reply with a failed lookup stays saved and pending") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.reject = true
+      f.lookupFailure = true
+      assert(f.worker.submit(buy, "XMR"))
+      Wait.until("err status lookup missing")(f.recoveryReads.get() > 0)
+      f.clock.set(f.lastPost.get()("expiresAfter").num.toLong + 60001L)
+      val reads = f.recoveryReads.get()
+      // Lookups run serially, so the second start proves the first late lookup completed.
+      Wait.until("failed lookup past the margin not completed")(
+        f.recoveryReads.get() > reads + 1 || f.worker.view.outcome.nonEmpty
+      )
+      assertEquals(f.worker.view.outcome, None, "a failed lookup released the err order")
+      assert(f.worker.view.pending)
+      assert(f.openedJournal.pending.nonEmpty)
+      assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }
 
@@ -1332,6 +1489,75 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
+  test("a restored unknown order waits sixty-five monotonic seconds after the journal load") {
+    val f = new Fixture(autoStart = false)
+    try
+      val saved = saveAtStartup(f)
+      f.wallStep.set(600000L)
+      f.worker.start()
+      Wait.until("matching role did not refresh the account")(
+        f.roleReads.get() > 0 && f.worker.view.position.nonEmpty
+      )
+      val reads = f.recoveryReads.get()
+      // Lookups run serially, so the second start proves the first lookup completed.
+      Wait.until("lookup after the role check not completed")(
+        f.recoveryReads.get() > reads + 1 || f.worker.view.outcome.nonEmpty
+      )
+      assertEquals(f.worker.view.outcome, None, "released on wall time alone")
+      f.clock.addAndGet(64999L)
+      val roles = f.roleReads.get()
+      Wait.until("stale role was not checked again")(f.roleReads.get() > roles)
+      val late = f.recoveryReads.get()
+      Wait.until("lookup before sixty-five seconds not completed")(
+        f.recoveryReads.get() > late + 1 || f.worker.view.outcome.nonEmpty
+      )
+      assertEquals(f.worker.view.outcome, None, "released before sixty-five monotonic seconds")
+      assertEquals(f.openedJournal.pending, Some(saved))
+      f.clock.incrementAndGet()
+      Wait.until("restored order not released")(f.worker.view.outcome.contains("XMR not placed"))
+      assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.posts.get(), 0)
+    finally f.close()
+  }
+
+  Vector(false, true).foreach { errReply =>
+    test(s"a wall clock jump cannot release an unknown order placed in this run: err $errReply") {
+      val f = new Fixture()
+      try
+        // The role read follows the startup journal load in the same refresh.
+        Wait.until("journal not loaded")(f.roleReads.get() > 0)
+        // Move the clock so the order counts from its reservation, not the earlier load.
+        val loadedAt = f.clock.get()
+        f.clock.addAndGet(1000L)
+        f.ready()
+        if errReply then f.reject = true else f.lose = true
+        assert(f.worker.submit(buy, "XMR"))
+        Wait.until("lookup missing")(f.recoveryReads.get() > 0)
+        val saved = f.openedJournal.pending.get
+        assertEquals(saved.createdAt, loadedAt + 1000L)
+        f.wallStep.set(600000L)
+        for at <- Vector(f.clock.get(), saved.createdAt + 64999L) do
+          f.clock.set(at)
+          val roles = f.roleReads.get()
+          Wait.until(s"role at $at not checked")(
+            at < saved.createdAt + 60000L || f.roleReads.get() > roles
+          )
+          val reads = f.recoveryReads.get()
+          // Lookups run serially, so the second start proves the first lookup completed.
+          Wait.until(s"lookup at $at not completed")(
+            f.recoveryReads.get() > reads + 1 || f.worker.view.outcome.nonEmpty
+          )
+          assertEquals(f.worker.view.outcome, None, s"released at monotonic $at")
+          assertEquals(f.openedJournal.pending, Some(saved))
+        f.clock.set(saved.createdAt + 65000L)
+        val text = if errReply then "XMR order rejected" else "XMR not placed"
+        Wait.until("unknown order not released")(f.worker.view.outcome.contains(text))
+        assertEquals(f.openedJournal.pending, None)
+        assertEquals(f.orderPosts.get(), 1)
+      finally f.close()
+    }
+  }
+
   test("restart releases an expired unknown order without resending") {
     val f = new Fixture()
     var restarted = Option.empty[TradingWorker]
@@ -1345,6 +1571,9 @@ class TradingWorkerSpec extends TempDirectorySuite:
       val again = f.create()
       restarted = Some(again)
       again.start()
+      Wait.until("restart did not load the saved order")(again.view.pending)
+      // Wall time alone cannot release a restored order, so monotonic time passes too.
+      f.clock.addAndGet(65000L)
       Wait.until("restart did not release expired order")(
         again.view.outcome.contains("XMR not placed")
       )

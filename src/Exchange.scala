@@ -330,7 +330,11 @@ object Exchange:
   // Assumes the venue refuses actions after expiresAfter (unproven until a test-network order).
   // Local and venue clocks are within this margin: the venue checks expiry on its clock, Desk on local time.
   // Assumes order status lookup reflects every action applied before expiry within this margin.
+  // Assumes an err reply plus unknownOid after this margin means the action was not placed.
   private val ExpiryMarginMs = 60000L
+  // The local clock may step, so release also needs this much monotonic time since Desk
+  // first saw the order: the five-second signed lifetime plus the margin.
+  private val ReleaseWaitMs = 5000L + ExpiryMarginMs
 
   private val terminal = Set(
     "filled",
@@ -412,8 +416,9 @@ object Exchange:
   private def status(reply: Option[ujson.Value]): Option[String] =
     reply.flatMap(_.objOpt.flatMap(_.get("status")).flatMap(_.strOpt))
 
+  def isErrReply(reply: Option[ujson.Value]): Boolean = status(reply).contains("err")
+
   def outcome(reply: Option[ujson.Value], saved: SavedOrder): Option[String] =
-    if status(reply).contains("err") then return Some(saved.coin + " order rejected")
     reply.flatMap(j =>
       Try {
         require(j("status").str == "ok" && j("response")("type").str == "order")
@@ -445,11 +450,15 @@ object Exchange:
       reply: Option[ujson.Value],
       saved: SavedOrder,
       now: Long,
-      allowUnknown: Boolean
+      elapsedMs: Long,
+      allowUnknown: Boolean,
+      errReply: Boolean
   ): Option[String] =
-    if allowUnknown && status(reply).contains("unknownOid") &&
+    if status(reply).contains("unknownOid") && elapsedMs >= ReleaseWaitMs &&
       BigInt(now) > BigInt(saved.expiresAfter) + ExpiryMarginMs
-    then return Some(saved.coin + " not placed")
+    then
+      if errReply then return Some(saved.coin + " order rejected")
+      if allowUnknown then return Some(saved.coin + " not placed")
     reply.flatMap(j =>
       Try {
         require(j("status").str == "order")
