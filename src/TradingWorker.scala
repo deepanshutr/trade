@@ -549,6 +549,8 @@ final class TradingWorker private[desk] (
         if !fatal && !executing.get() then saved.map(p => p -> errOrder.contains(p.id)) else None
       )
       unresolved.foreach { case (p, gotErrReply) =>
+        // Time the lookup before sending it, so a late reply cannot count as past expiry.
+        val lookupAt = wall()
         val reply = exchange.info(
           ujson.Obj(
             "type" -> "orderStatus",
@@ -560,7 +562,7 @@ final class TradingWorker private[desk] (
           .recovered(
             reply,
             p,
-            wall(),
+            lookupAt,
             allowUnknown = p.owner.nonEmpty && p.owner == config.owner &&
               synchronized(roleGeneration.contains(g) && fresh(roleAt, 60000L)),
             errReply = gotErrReply

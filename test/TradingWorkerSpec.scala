@@ -355,14 +355,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
     f.ready()
     f.pauseActive()
     assert(f.worker.submit(buy, "XMR"))
-    if f.reject then
-      Wait.until("err post missing")(f.orderPosts.get() > 0)
-      f.clock.set(f.lastPost.get()("expiresAfter").num.toLong + 1)
     Wait.until("completion and fresh account snapshot missing")(!f.worker.view.pending)
-    assertEquals(
-      f.worker.view.outcome,
-      Some(if f.reject then "XMR order rejected" else "XMR filled 1 at 100")
-    )
+    assertEquals(f.worker.view.outcome, Some("XMR filled 1 at 100"))
 
   private def assertUsable(f: Fixture, expected: Option[String], cash: Boolean = false): Unit =
     val view = f.worker.view
@@ -548,11 +542,21 @@ class TradingWorkerSpec extends TempDirectorySuite:
   test("a rejected order resumes after unchanged active data is renewed") {
     val f = new Fixture()
     try
+      f.ready()
+      val receive = f.timedActiveReceive
+      f.pauseActive()
       f.reject = true
-      completeWithoutActive(f)
-      assert(!f.worker.view.ready)
-      assertEquals(f.worker.view.position, Some(BigDecimal(0)))
+      f.holdRecovery = true
+      assert(f.worker.submit(buy, "XMR"))
+      assert(f.recoveryEntered.await(3, TimeUnit.SECONDS), "err status lookup missing")
+      f.clock.set(f.lastPost.get()("expiresAfter").num.toLong + 60001L)
       f.fresh(f.worker, time = 2000L)
+      receive(f.activePayload, f.clock.getAndIncrement())
+      f.recoveryRelease.countDown()
+      Wait.until("rejected order not released")(!f.worker.view.pending)
+      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
+      assert(!f.worker.view.ready, "active data stamped before the release restored readiness")
+      assertEquals(f.worker.view.position, Some(BigDecimal(0)))
       f.sendActive()
       f.ready()
       assert(f.worker.submit(buy, "XMR"))
@@ -1291,7 +1295,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
-  test("err and unknownOid stay saved until the signed expiry, then release as rejected") {
+  test("err and unknownOid stay saved until expiry plus the margin, then release without a role") {
     val f = new Fixture()
     try
       f.ready()
@@ -1300,25 +1304,22 @@ class TradingWorkerSpec extends TempDirectorySuite:
       Wait.until("err post missing")(f.orderPosts.get() == 1)
       val expiresAfter = f.lastPost.get()("expiresAfter").num.toLong
       Wait.until("err status lookup missing")(f.recoveryReads.get() > 0)
-      assert(f.clock.get() < expiresAfter)
-      val early = f.recoveryReads.get()
-      // Lookups run serially, so the second start proves the first lookup completed.
-      Wait.until("lookup before expiry not completed")(
-        f.recoveryReads.get() > early + 1 || !f.worker.view.pending
+      f.roleMatches = false
+      Vector(f.clock.get(), expiresAfter + 1, expiresAfter + 60000L).foreach { now =>
+        f.clock.set(now)
+        val reads = f.recoveryReads.get()
+        // Lookups run serially, so the second start proves the first lookup completed.
+        Wait.until(s"lookup at $now not completed")(
+          f.recoveryReads.get() > reads + 1 || f.worker.view.outcome.nonEmpty
+        )
+        assertEquals(f.worker.view.outcome, None, s"err and unknownOid released at $now")
+        assert(f.openedJournal.pending.nonEmpty)
+      }
+      f.clock.set(expiresAfter + 60001L)
+      // Busy stays set without a matching role, so wait for the outcome instead.
+      Wait.until("err and unknownOid did not release after the margin")(
+        f.worker.view.outcome.nonEmpty
       )
-      assert(f.worker.view.pending, "err and unknownOid released before the signed expiry")
-      assert(f.openedJournal.pending.nonEmpty)
-      assertEquals(f.worker.view.outcome, None)
-      f.clock.set(expiresAfter)
-      val boundary = f.recoveryReads.get()
-      Wait.until("boundary lookup not completed")(
-        f.recoveryReads.get() > boundary + 1 || !f.worker.view.pending
-      )
-      assert(f.worker.view.pending, "err and unknownOid released at the signed expiry")
-      assert(f.openedJournal.pending.nonEmpty)
-      f.clock.set(expiresAfter + 1)
-      Wait.until("err and unknownOid did not release after expiry")(!f.worker.view.pending)
-      assert(f.clock.get() < expiresAfter + 60000L)
       assertEquals(f.openedJournal.pending, None)
       assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
       assertEquals(f.orderPosts.get(), 1)
@@ -1347,14 +1348,41 @@ class TradingWorkerSpec extends TempDirectorySuite:
       Wait.until("second lookup missing")(f.recoveryReads.get() > reads)
       val saved = f.openedJournal.pending.get
       assertNotEquals(saved.id, first)
-      f.clock.set(saved.expiresAfter + 1)
+      f.roleMatches = false
+      f.clock.set(saved.expiresAfter + 60001L)
       val late = f.recoveryReads.get()
-      Wait.until("lookup after expiry not completed")(
-        f.recoveryReads.get() > late + 1 || !f.worker.view.pending
+      Wait.until("lookup past the margin not completed")(
+        f.recoveryReads.get() > late + 1 || f.openedJournal.pending.isEmpty
       )
-      assert(f.worker.view.pending, "an earlier err released a later lost order")
-      assertEquals(f.openedJournal.pending, Some(saved))
+      assertEquals(
+        f.openedJournal.pending,
+        Some(saved),
+        "an earlier err released a later lost order"
+      )
+      assert(f.worker.view.pending)
       assertEquals(f.orderPosts.get(), 2)
+    finally f.close()
+  }
+
+  test("an err lookup sent before expiry keeps the order when its reply lands past the margin") {
+    val f = new Fixture()
+    try
+      f.ready()
+      f.reject = true
+      f.holdRecovery = true
+      assert(f.worker.submit(buy, "XMR"))
+      assert(f.recoveryEntered.await(3, TimeUnit.SECONDS), "err status lookup missing")
+      val held = f.recoveryReads.get()
+      val expiresAfter = f.lastPost.get()("expiresAfter").num.toLong
+      assert(f.clock.get() < expiresAfter)
+      f.clock.set(expiresAfter + 60001L)
+      f.recoveryRelease.countDown()
+      Wait.until("err and unknownOid did not release after a later lookup")(!f.worker.view.pending)
+      // Only a lookup sent after the margin may release, and no lookup follows a release.
+      assert(f.recoveryReads.get() > held, "the lookup sent before expiry released the order")
+      assertEquals(f.openedJournal.pending, None)
+      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
+      assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }
 
@@ -1366,10 +1394,15 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.lookupFailure = true
       assert(f.worker.submit(buy, "XMR"))
       Wait.until("err status lookup missing")(f.recoveryReads.get() > 0)
-      Thread.sleep(100)
+      f.clock.set(f.lastPost.get()("expiresAfter").num.toLong + 60001L)
+      val reads = f.recoveryReads.get()
+      // Lookups run serially, so the second start proves the first late lookup completed.
+      Wait.until("failed lookup past the margin not completed")(
+        f.recoveryReads.get() > reads + 1 || f.worker.view.outcome.nonEmpty
+      )
+      assertEquals(f.worker.view.outcome, None, "a failed lookup released the err order")
       assert(f.worker.view.pending)
       assert(f.openedJournal.pending.nonEmpty)
-      assertEquals(f.worker.view.outcome, None)
       assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }

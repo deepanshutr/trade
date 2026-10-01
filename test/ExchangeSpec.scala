@@ -46,17 +46,19 @@ class ExchangeSpec extends munit.FunSuite:
     )
   }
 
-  test("an err reply plus unknownOid releases only strictly past the signed expiry") {
+  test("an err reply plus unknownOid releases only strictly past expiry plus sixty seconds") {
     val unknown = Some(ujson.Obj("status" -> "unknownOid"))
-    assertEquals(
-      Exchange.recovered(unknown, saved, saved.expiresAfter, allowUnknown = false, errReply = true),
-      None
-    )
+    Vector(saved.expiresAfter + 1, saved.expiresAfter + 60000L).foreach { now =>
+      assertEquals(
+        Exchange.recovered(unknown, saved, now, allowUnknown = false, errReply = true),
+        None
+      )
+    }
     assertEquals(
       Exchange.recovered(
         unknown,
         saved,
-        saved.expiresAfter + 1,
+        saved.expiresAfter + 60001L,
         allowUnknown = false,
         errReply = true
       ),

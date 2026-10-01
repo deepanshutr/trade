@@ -130,20 +130,20 @@ The captured quantity, limit and account settings are compared with the current
 full plan before queuing and immediately before signing. An uncertain response
 blocks further orders while status is checked. The pending order is not resent.
 A parsed top-level `err` reply keeps the saved order pending for a status lookup.
-A matching final status settles it as usual. An `unknownOid` lookup releases it as
-rejected only when local wall time is past the signed `expiresAfter`, without the
-60-second margin or owner and role checks. Before then it stays saved, because an
-action still in flight may not show in the lookup yet. Desk remembers which order
-got the `err` reply only in memory, so a restart applies the normal saved-order
-rules. For orders without an `err` reply, a parsed `unknownOid` lookup releases the
-order as "not placed" only when local wall time is past the signed `expiresAfter`
-plus a fixed 60-second margin. This relies on four assumptions: an `err` reply plus
-an `unknownOid` lookup after the order's signed expiry means not placed; the venue
-refuses an action after its `expiresAfter`, which is unproven until a test-network
-order; the local clock is within the margin of the venue's clock; and the venue's
-status lookup reflects any action applied before expiry within the margin. Failed
-lookups keep the order saved regardless of time, and known order statuses retain
-their existing handling. Do not delete recovery state manually. Resolve any
+A matching final status settles it as usual. A parsed `unknownOid` lookup releases
+a saved order only when the local wall time read before the lookup was sent is past
+the signed `expiresAfter` plus a fixed 60-second margin. Before then it stays saved,
+because an action still in flight may not show in the lookup yet. After the margin,
+an order with an `err` reply releases as rejected without owner and role checks.
+Any other order releases as "not placed" under the owner and role checks below.
+Desk remembers which order got the `err` reply only in memory, so a restart
+applies the normal saved-order rules. Both time releases rely on four assumptions:
+the local clock is within the margin of the venue's clock; the venue refuses an
+action after its `expiresAfter`, which is unproven until a test-network order; the
+venue's status lookup reflects any action applied before expiry within the margin;
+and an `err` reply plus an `unknownOid` lookup after the margin means not placed.
+Failed lookups keep the order saved regardless of time, and known order statuses
+retain their existing handling. Do not delete recovery state manually. Resolve any
 remaining block using the account's order history.
 
 A saved order records its owner. A matching final status reported under the

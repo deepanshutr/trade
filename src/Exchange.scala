@@ -330,6 +330,7 @@ object Exchange:
   // Assumes the venue refuses actions after expiresAfter (unproven until a test-network order).
   // Local and venue clocks are within this margin: the venue checks expiry on its clock, Desk on local time.
   // Assumes order status lookup reflects every action applied before expiry within this margin.
+  // Assumes an err reply plus unknownOid after this margin means the action was not placed.
   private val ExpiryMarginMs = 60000L
 
   private val terminal = Set(
@@ -449,12 +450,11 @@ object Exchange:
       allowUnknown: Boolean,
       errReply: Boolean
   ): Option[String] =
-    if errReply && status(reply).contains("unknownOid") &&
-      BigInt(now) > BigInt(saved.expiresAfter)
-    then return Some(saved.coin + " order rejected")
-    if allowUnknown && status(reply).contains("unknownOid") &&
+    if status(reply).contains("unknownOid") &&
       BigInt(now) > BigInt(saved.expiresAfter) + ExpiryMarginMs
-    then return Some(saved.coin + " not placed")
+    then
+      if errReply then return Some(saved.coin + " order rejected")
+      if allowUnknown then return Some(saved.coin + " not placed")
     reply.flatMap(j =>
       Try {
         require(j("status").str == "order")
