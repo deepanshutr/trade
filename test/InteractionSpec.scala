@@ -378,3 +378,21 @@ class InteractionSpec extends munit.FunSuite:
     f.x()
     assertEquals((f.planned, f.sent), (Vector.empty, Vector.empty))
   }
+
+  test("a live frame published after a switch to prop cannot close by click or key") {
+    val f = new Fixture("LIVE", long)
+    f.draw()
+    val before = f.controller.panel
+    f.key(Command.Mode("PROP"))
+    f.draw()
+    f.key(Command.Confirm)
+    val stale =
+      Workspace.draw(f.snapshot, f.view, before, 120, 40, now, java.time.ZoneOffset.UTC, Style.mono)
+    val close = stale.buttons.find(_.action == DeskAction.Close).get
+    f.controller.publish(stale)
+    f.press(close)
+    f.release(close)
+    f.x()
+    assertEquals(f.modes, Vector("PROP"))
+    assertEquals((f.planned, f.sent), (Vector.empty, Vector.empty))
+  }

@@ -123,9 +123,7 @@ final class DeskController(
             send(intent)
           // A Close carries no amount. It sells a long and buys a short. On a flat or unknown
           // position it asks for a buy, which the plan or the worker refuses.
-          case DeskAction.Close
-              if view.ready && !view.pending && current.mode == "LIVE" &&
-                current.modeReview.isEmpty =>
+          case DeskAction.Close if view.ready && !view.pending && current.modeReview.isEmpty =>
             send(
               OrderIntent(
                 if view.position.exists(_ > 0) then Side.Sell else Side.Buy,
