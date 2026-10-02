@@ -89,7 +89,7 @@ in the chosen state directory, even when a separate process owns public recordin
 Four files retain at most 8 MiB. These records include validated market selections,
 history counts, quote age, disconnects, slow input and frames, and fixed failure
 categories. They exclude typed text, account data, orders and raw error messages.
-Diagnostic records from before the rename of paper to prop name that mode `simulated`.
+Records written before the paper mode became prop name it `simulated`.
 Later records name it `prop`.
 Logging uses a bounded background queue. `!logs` marks unavailable diagnostic
 storage. See [logging details](diagnostics.md).

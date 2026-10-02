@@ -261,7 +261,7 @@ object WorkspaceApp:
       val now = () => System.currentTimeMillis()
       val diagnostics = Diagnostics.open(directory, now, config.quoteAgeMs)
       val monotonic = () => TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
-      val mode = if args.trade then "LIVE" else if args.prop then "PROP" else "VIEW"
+      val mode = args.mode
       val worker = new ExecutionRouter(
         config,
         mode,

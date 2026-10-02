@@ -38,6 +38,12 @@ class PropModeSpec extends TempDirectorySuite:
     assert(!Main.usage.toLowerCase.contains("paper"), Main.usage)
   }
 
+  test("--prop starts in PROP, --trade in LIVE and neither in VIEW") {
+    assertEquals(Main.parseArgs(Seq("XMR", "--prop")).map(_.mode), Right("PROP"))
+    assertEquals(Main.parseArgs(Seq("XMR", "--trade")).map(_.mode), Right("LIVE"))
+    assertEquals(Main.parseArgs(Seq("XMR")).map(_.mode), Right("VIEW"))
+  }
+
   test("settings accept propBalance and propFee and refuse paperBalance and paperFee") {
     val loaded = TradingConfig.load(Some(settings("""{"propBalance":"20000","propFee":"0.001"}""")))
     assertEquals(
@@ -205,7 +211,7 @@ class PropModeSpec extends TempDirectorySuite:
       Wait.until("prop did not become ready")(r.route.view.ready)
       assertEquals(r.route.mode, "PROP")
       val intent = Trading.action(0)
-      val plan = r.route.preview(intent).toOption.get
+      val plan = r.route.preview(intent).fold(reason => fail(reason), identity)
       assert(
         r.route.submitReviewed(OrderReview(intent, plan, r.clock.get(), r.clock.get() + 30000L))
       )

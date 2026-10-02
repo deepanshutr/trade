@@ -15,7 +15,8 @@ object Main:
       stateDirectory: Option[String] = None,
       audio: String = "voice",
       keys: Boolean = false
-  )
+  ):
+    def mode: String = if trade then "LIVE" else if prop then "PROP" else "VIEW"
   val usage =
     "usage: desk [COIN] [--mono] [--prop | --trade | --record | --keys] [--config PATH] [--state PATH] [--chime | --mute]"
   val escapeWaitNanos = 40_000_000L
