@@ -3,7 +3,7 @@ package desk
 class StatusPanelSpec extends munit.FunSuite:
   private val now = 1800000000000L
   private val snapshot = Snapshot.initial("XMR", now)
-  private val panel = PanelView(mode = "PAPER", actionNotice = Some("PAPER XMR buy filled 5"))
+  private val panel = PanelView(mode = "PROP", actionNotice = Some("PROP XMR buy filled 5"))
   private def draw(
       view: TradingView,
       p: PanelView = panel,
@@ -41,9 +41,9 @@ class StatusPanelSpec extends munit.FunSuite:
 
   test("pending progress separates queue, save and unresolved exchange result") {
     for (message, expected) <- Vector(
-        "PAPER queued 0s | XMR" -> "Queued 0s",
-        "PAPER checking 1s | XMR" -> "Checking 1s",
-        "PAPER saving 4s | XMR" -> "Saving 4s",
+        "PROP queued 0s | XMR" -> "Queued 0s",
+        "PROP checking 1s | XMR" -> "Checking 1s",
+        "PROP saving 4s | XMR" -> "Saving 4s",
         "XMR waiting for order result" -> "Confirming result"
       )
     do
@@ -213,7 +213,7 @@ class StatusPanelSpec extends munit.FunSuite:
   private def failingReceipt(receipt: String): (DeskController, OrderResultLog.Writer) =
     val failed = new java.util.concurrent.CountDownLatch(1)
     lazy val controller: DeskController = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => now,
       _ => Left("unused"),
       _ => false,
@@ -235,10 +235,10 @@ class StatusPanelSpec extends munit.FunSuite:
 
   test("failed real order receipts name their own action in the smallest frame") {
     for receipt <- Vector(
-        "PAPER XMR buy filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z",
-        "PAPER XMR sell filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z",
-        "PAPER XMR buy partial 0.5 at 100\nFee $0.03 | #1 2026-09-30T00:00:00Z",
-        "Paper no fill: no depth inside reviewed limit",
+        "PROP XMR buy filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z",
+        "PROP XMR sell filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z",
+        "PROP XMR buy partial 0.5 at 100\nFee $0.03 | #1 2026-09-30T00:00:00Z",
+        "Prop no fill: no depth inside reviewed limit",
         "XMR order rejected"
       )
     do
@@ -272,7 +272,7 @@ class StatusPanelSpec extends munit.FunSuite:
     assert(!unsaved.lines.exists(_.contains("not saved #1")), unsaved.lines.mkString("\n"))
 
     val pending = draw(
-      TradingView("XMR", message = "PAPER saving 3s | XMR", pending = true),
+      TradingView("XMR", message = "PROP saving 3s | XMR", pending = true),
       failed,
       Layout.minCols,
       Layout.minRows,
@@ -321,7 +321,7 @@ class StatusPanelSpec extends munit.FunSuite:
     val release = new java.util.concurrent.CountDownLatch(1)
     val failed = new java.util.concurrent.CountDownLatch(1)
     lazy val controller: DeskController = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => now,
       _ => Left("unused"),
       _ => false,
@@ -334,7 +334,7 @@ class StatusPanelSpec extends munit.FunSuite:
     )
     lazy val writer = new OrderResultLog.Writer(
       text => {
-        if text.startsWith("PAPER XMR buy filled") then
+        if text.startsWith("PROP XMR buy filled") then
           started.countDown()
           release.await(2, java.util.concurrent.TimeUnit.SECONDS)
           throw new java.io.IOException("save failed")
@@ -345,12 +345,12 @@ class StatusPanelSpec extends munit.FunSuite:
     try
       controller.addMessage(
         "order",
-        "PAPER XMR buy filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z"
+        "PROP XMR buy filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z"
       )
       assert(started.await(2, java.util.concurrent.TimeUnit.SECONDS))
       controller.addMessage(
         "order",
-        "PAPER XMR sell filled 1 at 100\nFee $0.05 | #2 2026-09-30T00:00:00Z"
+        "PROP XMR sell filled 1 at 100\nFee $0.05 | #2 2026-09-30T00:00:00Z"
       )
       val newer = draw(
         TradingView("XMR", message = "Ready", ready = true),
@@ -383,7 +383,7 @@ class StatusPanelSpec extends munit.FunSuite:
   test("a successful real order receipt adds no failure status") {
     val saved = new java.util.concurrent.CountDownLatch(1)
     lazy val controller = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => now,
       _ => Left("unused"),
       _ => false,
@@ -397,7 +397,7 @@ class StatusPanelSpec extends munit.FunSuite:
     try
       controller.addMessage(
         "order",
-        "PAPER XMR buy filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z"
+        "PROP XMR buy filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z"
       )
       assert(saved.await(2, java.util.concurrent.TimeUnit.SECONDS))
       val frame = draw(
@@ -413,8 +413,8 @@ class StatusPanelSpec extends munit.FunSuite:
 
   test("a fill without a reported side cannot be labelled as a sale") {
     for (result, expected) <- Vector(
-        "PAPER XMR buy filled 1" -> "Bought",
-        "PAPER XMR sell filled 1" -> "Sold",
+        "PROP XMR buy filled 1" -> "Bought",
+        "PROP XMR sell filled 1" -> "Sold",
         "XMR filled 1 @ 100" -> "Filled"
       )
     do

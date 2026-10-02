@@ -8,11 +8,11 @@ import java.util.concurrent.atomic.AtomicLong
 class TradeProgressSpec extends TempDirectorySuite:
   private val start = 1800000000000L
 
-  private class Paper(balance: BigDecimal = BigDecimal(10000), fee: BigDecimal = BigDecimal(0)):
+  private class Prop(balance: BigDecimal = BigDecimal(10000), fee: BigDecimal = BigDecimal(0)):
     val clock = new AtomicLong(start)
     val ledger =
-      PaperLedger.open(tempDirectory("trade-progress-"), "mainnet", balance, fee)
-    val worker = new PaperWorker(
+      PropLedger.open(tempDirectory("trade-progress-"), "mainnet", balance, fee)
+    val worker = new PropWorker(
       TradingConfig(),
       "XMR",
       ledger,
@@ -39,8 +39,8 @@ class TradeProgressSpec extends TempDirectorySuite:
       OrderReview(intent, worker.preview(intent).toOption.get, clock.get(), clock.get() + 30000)
     def close(): Unit = worker.close()
 
-  test("fees that exceed paper capacity are explained before Send without any write") {
-    val f = new Paper(BigDecimal(500), BigDecimal("0.001"))
+  test("fees that exceed prop capacity are explained before Send without any write") {
+    val f = new Prop(BigDecimal(500), BigDecimal("0.001"))
     try
       f.open()
       val before = f.ledger.account
@@ -52,9 +52,9 @@ class TradeProgressSpec extends TempDirectorySuite:
   }
 
   test("a repeated capacity refusal gives a distinct acknowledgement on the main screen") {
-    val f = new Paper(BigDecimal(200))
+    val f = new Prop(BigDecimal(200))
     val c = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => f.clock.get(),
       f.worker.preview,
       f.worker.submitReviewed,
@@ -77,7 +77,7 @@ class TradeProgressSpec extends TempDirectorySuite:
   }
 
   test("a flat account below every preset gets an achievable settings route") {
-    val f = new Paper(BigDecimal(200))
+    val f = new Prop(BigDecimal(200))
     try
       f.open()
       val reason = f.worker.preview(Trading.action(0)).swap.toOption.get
@@ -87,8 +87,8 @@ class TradeProgressSpec extends TempDirectorySuite:
     finally f.close()
   }
 
-  test("paper receipts retain exact time in a human-readable form") {
-    val f = new Paper()
+  test("prop receipts retain exact time in a human-readable form") {
+    val f = new Prop()
     try
       f.open()
       assert(f.worker.submitReviewed(f.review()))
@@ -101,7 +101,7 @@ class TradeProgressSpec extends TempDirectorySuite:
   }
 
   test("wallet refusals and a losing sale preserve the remaining spendable cash") {
-    val f = new Paper(BigDecimal(200))
+    val f = new Prop(BigDecimal(200))
     def one(side: Side, price: BigDecimal): OrderPlan =
       OrderPlan(
         "XMR",
@@ -139,7 +139,7 @@ class TradeProgressSpec extends TempDirectorySuite:
   }
 
   test("capacity uses actual partial depth and checks larger depth again after review") {
-    val f = new Paper(BigDecimal(200))
+    val f = new Prop(BigDecimal(200))
     try
       f.open()
       f.publish("1")
@@ -153,8 +153,8 @@ class TradeProgressSpec extends TempDirectorySuite:
     finally f.close()
   }
 
-  test("a newer quote excludes stale depth from paper capacity preview") {
-    val f = new Paper(BigDecimal(200))
+  test("a newer quote excludes stale depth from prop capacity preview") {
+    val f = new Prop(BigDecimal(200))
     try
       f.open()
       val depth = f.book.copy(
@@ -186,7 +186,7 @@ class TradeProgressSpec extends TempDirectorySuite:
   }
 
   test("every identical completed refusal is delivered even when no pending frame is sampled") {
-    val f = new Paper(BigDecimal(200))
+    val f = new Prop(BigDecimal(200))
     val updates = new OrderUpdates
     var received = Vector.empty[String]
     try
@@ -211,7 +211,7 @@ class TradeProgressSpec extends TempDirectorySuite:
   private val ready = TradingView(
     "XMR",
     Some(BigDecimal(0)),
-    "Paper ready",
+    "Prop ready",
     ready = true,
     rules = Some(rules),
     bid = Some(BigDecimal("99.99")),
@@ -242,7 +242,7 @@ class TradeProgressSpec extends TempDirectorySuite:
   for mouse <- Vector(false, true) do
     test(s"unavailable order explains its reason for mouse=$mouse") {
       val c = new DeskController(
-        PanelView(mode = "PAPER"),
+        PanelView(mode = "PROP"),
         () => start,
         _ => fail("unavailable control prepared an order"),
         _ => fail("sent unavailable order"),
@@ -267,10 +267,10 @@ class TradeProgressSpec extends TempDirectorySuite:
       position = Some(BigDecimal("1234567890" * 8)),
       ready = false,
       pending = true,
-      message = "PAPER saving 4s | XMR"
+      message = "PROP saving 4s | XMR"
     )
     val c = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => start,
       plan,
       _ => false,
@@ -297,10 +297,10 @@ class TradeProgressSpec extends TempDirectorySuite:
     style <- Vector(Style.mono, Style.colour)
     scenario <- Vector("filled", "partial", "no-fill", "capacity")
   do
-    test(s"visible one-click paper $scenario pipeline at $cols x$rows colour=" + style.colour) {
-      val f = new Paper(if scenario == "capacity" then BigDecimal(200) else BigDecimal(10000))
+    test(s"visible one-click prop $scenario pipeline at $cols x$rows colour=" + style.colour) {
+      val f = new Prop(if scenario == "capacity" then BigDecimal(200) else BigDecimal(10000))
       val c = new DeskController(
-        PanelView(mode = "PAPER"),
+        PanelView(mode = "PROP"),
         () => f.clock.get(),
         f.worker.preview,
         f.worker.submitReviewed,
@@ -358,7 +358,7 @@ class TradeProgressSpec extends TempDirectorySuite:
               )
             )
         }
-        Wait.until("paper completion missing")(!f.worker.view.pending)
+        Wait.until("prop completion missing")(!f.worker.view.pending)
         val completed = update("result")
         val expected = scenario match
           case "no-fill"  => "No fill"

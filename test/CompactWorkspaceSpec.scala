@@ -25,7 +25,7 @@ class CompactWorkspaceSpec extends munit.FunSuite:
       .find(_.action == DeskAction.Prepare(OrderIntent(Side.Buy, OrderKind.Hard)))
       .get
     assertEquals(buy.height, 5)
-    assert(frame.buttons.find(_.action == DeskAction.Mode("PAPER")).get.y >= buy.y + buy.height)
+    assert(frame.buttons.find(_.action == DeskAction.Mode("PROP")).get.y >= buy.y + buy.height)
     assert(frame.lines(buy.y + 1).contains("1 BUY $500"))
     assert(!frame.lines.exists(_.contains("tokens")))
   }

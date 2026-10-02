@@ -15,11 +15,11 @@ class ExecutionReceiptOrderFinderSpec extends munit.FunSuite:
       bid = Some(BigDecimal(99)),
       ask = Some(BigDecimal(101))
     )
-    val fill = "PAPER XMR buy filled 1 at 100\nFee $0.05 | #1 offline"
+    val fill = "PROP XMR buy filled 1 at 100\nFee $0.05 | #1 offline"
     val completed =
       pending.copy(pending = false, ready = true, outcome = Some(fill), outcomeId = 1L)
     val controller = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => at,
       _ => throw new AssertionError("A pending input cannot request a new preview"),
       _ => throw new AssertionError("No submission is permitted in the receipt ordering check"),

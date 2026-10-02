@@ -4,10 +4,10 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import scala.util.Try
 
-final class PaperWorker(
+final class PropWorker(
     config: TradingConfig,
     initialCoin: String,
-    ledger: PaperLedger,
+    ledger: PropLedger,
     rest: Rest,
     wall: () => Long,
     monotonic: () => Long,
@@ -66,41 +66,41 @@ final class PaperWorker(
     val elapsed = BigInt(monotonic()) - metadataAt
     metadata.nonEmpty && elapsed >= 0 && elapsed <= age
   private def blockReason: Option[ExecutionBlock] =
-    if closed.get() then Some(ExecutionBlock(BlockCode.Blocked, "Paper closed. Restart Desk"))
+    if closed.get() then Some(ExecutionBlock(BlockCode.Blocked, "Prop closed. Restart Desk"))
     else if !ledger.available then
-      Some(ExecutionBlock(BlockCode.Storage, "Paper storage unavailable. Restart to recover"))
+      Some(ExecutionBlock(BlockCode.Storage, "Prop storage unavailable. Restart to recover"))
     else if !connected && !backup then
       Some(ExecutionBlock(BlockCode.Connection, "Reconnecting. Waiting for fresh prices"))
     else if rules.isEmpty || !metadataFresh(60000L) then
-      Some(ExecutionBlock(BlockCode.Market, "Paper waiting for market details"))
+      Some(ExecutionBlock(BlockCode.Market, "Prop waiting for market details"))
     else if book.isEmpty || touch.isEmpty then
-      Some(ExecutionBlock(BlockCode.Prices, "Paper waiting for selected-market depth"))
+      Some(ExecutionBlock(BlockCode.Prices, "Prop waiting for selected-market depth"))
     else if !touch.exists(t =>
         t.bidPrice > 0 && t.askPrice > t.bidPrice && t.bidSize > 0 && t.askSize > 0
       )
-    then Some(ExecutionBlock(BlockCode.Prices, "Paper quote invalid. Waiting for prices"))
+    then Some(ExecutionBlock(BlockCode.Prices, "Prop quote invalid. Waiting for prices"))
     else if !book.exists(b =>
         fresh(b._2) && (!backup || (BigInt(wall()) - b._1.time).abs <= config.quoteAgeMs)
       ) || !touch.exists(t => fresh(t.receivedAt))
-    then Some(ExecutionBlock(BlockCode.Prices, "Paper prices stale. Waiting for fresh depth"))
+    then Some(ExecutionBlock(BlockCode.Prices, "Prop prices stale. Waiting for fresh depth"))
     else if !book.exists(b =>
         touch.exists(t => (BigInt(b._1.time) - BigInt(t.time)).abs <= config.quoteAgeMs)
       )
-    then Some(ExecutionBlock(BlockCode.Prices, "Paper depth behind quote. Waiting for depth"))
+    then Some(ExecutionBlock(BlockCode.Prices, "Prop depth behind quote. Waiting for depth"))
     else None
   private def block: Option[String] = blockReason.map(_.text)
   private def ready: Boolean = block.isEmpty
-  private def held(account: PaperAccount): BigDecimal =
+  private def held(account: PropAccount): BigDecimal =
     account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0))
-  def account: PaperAccount = ledger.account
+  def account: PropAccount = ledger.account
   def view: TradingView = synchronized {
     val account = ledger.account
     val reason = blockReason
     val dataReady = reason.isEmpty
     val working = pending.get()
     val elapsed = ((BigInt(monotonic()) - pendingAt).max(BigInt(0)) / 1000)
-    val message = if working then s"PAPER $stage ${elapsed}s | $pendingCoin"
-    else if dataReady then (if backup then "Paper ready: backup prices" else "Paper ready")
+    val message = if working then s"PROP $stage ${elapsed}s | $pendingCoin"
+    else if dataReady then (if backup then "Prop ready: backup prices" else "Prop ready")
     else reason.get.text
     TradingView(
       coin,
@@ -116,7 +116,7 @@ final class PaperWorker(
       outcome,
       outcomeId = outcomeId,
       portfolio = if ledger.available then
-        PortfolioView.paper(
+        PortfolioView.prop(
           account,
           coin,
           Option.when(dataReady)(touch.map(_.midpoint)).flatten
@@ -173,8 +173,8 @@ final class PaperWorker(
       case _ => ()
   }
   def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized {
-    if closed.get() then Left("Paper worker is closed")
-    else if pending.get() then Left("Wait for the pending paper order")
+    if closed.get() then Left("Prop worker is closed")
+    else if pending.get() then Left("Wait for the pending prop order")
     else
       val account = ledger.account
       val position = held(account)
@@ -247,7 +247,7 @@ final class PaperWorker(
         thread.setDaemon(true)
         threads :+= thread
         thread.start()
-      spawn("paper-metadata") {
+      spawn("prop-metadata") {
         while !closed.get() do
           if synchronized(!metadataFresh(30000L)) then
             val result = Try(rest.post("""{"type":"meta"}""")).toOption.flatten.flatMap(s =>
@@ -262,7 +262,7 @@ final class PaperWorker(
             }
           Thread.sleep(1000L)
       }
-      spawn("paper-orders") {
+      spawn("prop-orders") {
         while !closed.get() do
           val review = orders.take()
           val result = try
@@ -276,14 +276,14 @@ final class PaperWorker(
                 Trading
                   .fillAtLimit(review.plan, rules.get, book.get._1, currentQuote, position)
                   .map(plan => (plan, prepared.get.accountCount))
-              else Left("Paper canceled: reviewed request is no longer current")
+              else Left("Prop canceled: reviewed request is no longer current")
             }
             fill.flatMap { (plan, count) =>
               synchronized { stage = "saving" }
               ledger.fill(plan, wall(), Some(count))
             }
           catch
-            case scala.util.control.NonFatal(_) => Left("Paper order failed. Review before retry")
+            case scala.util.control.NonFatal(_) => Left("Prop order failed. Review before retry")
           synchronized {
             prepared = None
             outcome = Some(result.fold(identity, identity))

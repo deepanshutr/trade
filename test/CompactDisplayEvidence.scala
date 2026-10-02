@@ -93,14 +93,14 @@ object CompactDisplayFixtures:
     )
 
   def panel(coin: String = "XMR"): PanelView = PanelView(
-    mode = "PAPER",
+    mode = "PROP",
     outlook = outlook(coin)
   )
 
   def trading(coin: String = "XMR"): TradingView = TradingView(
     coin,
     position = Some(BigDecimal(0)),
-    message = "Paper ready",
+    message = "Prop ready",
     ready = true,
     rules = Some(MarketRules(0, 4, 5)),
     bid = Some(BigDecimal(mid(coin) * 0.99)),

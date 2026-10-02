@@ -6,13 +6,13 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import scala.jdk.CollectionConverters.*
 
-class PaperFlowReviewSpec extends TempDirectorySuite:
+class PropFlowReviewSpec extends TempDirectorySuite:
   private val start = 1800000000000L
   private val meta =
     """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5},{"name":"BTC","szDecimals":2,"maxLeverage":40}]}"""
 
   private class Fixture(
-      initialMode: String = "PAPER",
+      initialMode: String = "PROP",
       configured: Boolean = false,
       allowLive: Boolean = false,
       held: BigDecimal = BigDecimal(0)
@@ -26,11 +26,11 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
     )
     if held > 0 then
       LocalFiles.write(
-        directory.resolve("paper/wallet-mainnet.json"),
+        directory.resolve("prop/wallet-mainnet.json"),
         ujson.write(
           ujson.Obj(
-            "cash" -> config.paperBalance.toString,
-            "deposit" -> (config.paperBalance + held * 100).toString,
+            "cash" -> config.propBalance.toString,
+            "deposit" -> (config.propBalance + held * 100).toString,
             "realized" -> "0",
             "fees" -> "0",
             "orders" -> ujson.Arr(),
@@ -65,7 +65,7 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
         else if kind == "userAbstraction" then Some(ujson.Str("disabled"))
         else fail("unexpected account request: " + kind)
       def post(body: ujson.Value): Option[ujson.Value] = fail(
-        "paper reached a live order endpoint"
+        "prop reached a live order endpoint"
       )
       def watch(
           coin: String,
@@ -96,8 +96,8 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
       false,
       "XMR",
       exchange,
-      () => fail("paper loaded a key"),
-      () => fail("paper opened a live journal"),
+      () => fail("prop loaded a key"),
+      () => fail("prop opened a live journal"),
       () => clock.get(),
       () => clock.get()
     )
@@ -107,7 +107,7 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
       "XMR",
       live,
       coin =>
-        if !allowLive then fail("paper created enabled live worker")
+        if !allowLive then fail("prop created enabled live worker")
         recreated.incrementAndGet()
         new TradingWorker(
           config,
@@ -196,17 +196,17 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
       route.start()
       route.observe(Event.SocketUp)
       publish()
-      if initialMode == "PAPER" then Wait.until("paper did not become ready")(route.view.ready)
+      if initialMode == "PROP" then Wait.until("prop did not become ready")(route.view.ready)
     def saved: ujson.Value =
       ujson.read(
-        Files.readString(directory.resolve("paper/wallet-mainnet.json"))
+        Files.readString(directory.resolve("prop/wallet-mainnet.json"))
       )
     def close(): Unit = route.close()
 
   for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
     for index <- 0 until 4 do
       test(
-        s"paper order ${index + 1} reaches persisted fill through visible controls at ${cols}x${rows}"
+        s"prop order ${index + 1} reaches persisted fill through visible controls at ${cols}x${rows}"
       ) {
         val f = new Fixture(held = if index >= 2 then BigDecimal(20)
         else BigDecimal(0))
@@ -214,7 +214,7 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
           f.open()
           val review = f.prepare(Trading.action(index), cols, rows)
           f.send(cols, rows, mouse = index % 2 == 1)
-          Wait.until("paper did not finish")(f.route.view.outcome.nonEmpty)
+          Wait.until("prop did not finish")(f.route.view.outcome.nonEmpty)
           assert(
             f.route.view.outcome.exists(_.contains("filled")),
             f.route.view.outcome.toString
@@ -223,7 +223,7 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
           assertEquals(f.route.view.position, Some(review.plan.positionAfter))
           assertEquals(
             BigDecimal(f.saved("fees").str),
-            review.plan.estimatedValue * f.config.paperFee
+            review.plan.estimatedValue * f.config.propFee
           )
           assert(
             f.draw(cols, rows)
@@ -236,30 +236,30 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
       }
 
   test(
-    "view-to-paper selection needs no enabled live worker and accepts a fresh subsequent quote"
+    "view-to-prop selection needs no enabled live worker and accepts a fresh subsequent quote"
   ) {
     val f = new Fixture(initialMode = "VIEW")
     try
       f.open()
       f.draw()
-      f.key(Command.Mode("PAPER"))
+      f.key(Command.Mode("PROP"))
       f.draw()
       f.key(Command.Confirm)
-      assertEquals(f.controller.panel.mode, "PAPER")
+      assertEquals(f.controller.panel.mode, "PROP")
       assert(!f.route.view.ready)
       f.clock.incrementAndGet()
       f.publish()
-      Wait.until("selected paper did not become ready")(f.route.view.ready)
+      Wait.until("selected prop did not become ready")(f.route.view.ready)
       f.prepare(Trading.action(0))
       f.send()
-      Wait.until("selected paper did not finish")(f.route.view.outcome.nonEmpty)
+      Wait.until("selected prop did not finish")(f.route.view.outcome.nonEmpty)
       assert(f.route.view.outcome.exists(_.contains("filled")))
       assertEquals(f.saved("count").num.toLong, 1L)
     finally f.close()
   }
 
   test(
-    "paper fill, fee and position survive reopening under the same state directory"
+    "prop fill, fee and position survive reopening under the same state directory"
   ) {
     val f = new Fixture()
     var expected = Option.empty[OrderPlan]
@@ -272,18 +272,18 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
     finally f.close()
     val plan = expected.get
     val ledger =
-      PaperLedger.open(
-        f.directory.resolve("paper"),
+      PropLedger.open(
+        f.directory.resolve("prop"),
         "mainnet",
         BigDecimal(20),
-        f.config.paperFee
+        f.config.propFee
       )
     try
       assertEquals(ledger.account.count, 1L)
       assertEquals(ledger.account.positions("XMR").quantity, plan.positionAfter)
       assertEquals(
         ledger.account.cash,
-        f.config.paperBalance - plan.estimatedValue * (1 + f.config.paperFee)
+        f.config.propBalance - plan.estimatedValue * (1 + f.config.propFee)
       )
       assertEquals(ledger.account.orders.size, 1)
     finally ledger.close()
@@ -296,13 +296,13 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
     try
       f.open()
       f.prepare(Trading.action(0))
-      val saved = f.directory.resolve("paper/wallet-mainnet.json")
+      val saved = f.directory.resolve("prop/wallet-mainnet.json")
       Files.createDirectory(saved)
       f.send()
       Wait.until("storage failure not surfaced")(f.route.view.outcome.nonEmpty)
       assertEquals(
         f.route.view.outcome,
-        Some("Paper storage failed. Restart to recover")
+        Some("Prop storage failed. Restart to recover")
       )
       assertEquals(f.route.view.position, Some(BigDecimal(0)))
       assert(!f.route.view.ready)
@@ -360,7 +360,7 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
   }
 
   test(
-    "paper startup with live addresses configured does not request account state"
+    "prop startup with live addresses configured does not request account state"
   ) {
     val f = new Fixture(configured = true)
     try
@@ -374,7 +374,7 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
   }
 
   test(
-    "switching VIEW to PAPER closes account polling and returning LIVE creates a fresh enabled worker"
+    "switching VIEW to PROP closes account polling and returning LIVE creates a fresh enabled worker"
   ) {
     val f =
       new Fixture(initialMode = "VIEW", configured = true, allowLive = true)
@@ -383,13 +383,13 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
       Wait.until("view did not start configured account polling")(
         f.infoTypes.asScala.contains("clearinghouseState")
       )
-      assert(f.route.switchMode("PAPER").isRight)
+      assert(f.route.switchMode("PROP").isRight)
       Wait.until("previous live worker did not retire")(f.closed.get() == 1)
-      val readsAtPaper = f.infoTypes.size()
-      val watchesAtPaper = f.watched.get()
+      val readsAtProp = f.infoTypes.size()
+      val watchesAtProp = f.watched.get()
       Thread.sleep(1100)
-      assertEquals(f.infoTypes.size(), readsAtPaper)
-      assertEquals(f.watched.get(), watchesAtPaper)
+      assertEquals(f.infoTypes.size(), readsAtProp)
+      assertEquals(f.watched.get(), watchesAtProp)
       assertEquals(f.keysRead.get(), 0)
       assert(f.route.switchMode("LIVE").isRight)
       Wait.until("new live worker was not created")(f.recreated.get() == 1)
@@ -400,7 +400,7 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
       )
       assertEquals(f.keysRead.get(), 1)
       assert(f.infoTypes.asScala.contains("userRole"))
-      assert(f.route.switchMode("PAPER").isRight)
+      assert(f.route.switchMode("PROP").isRight)
       Wait.until("second live worker did not retire")(f.closed.get() == 2)
       assert(f.route.switchMode("LIVE").isRight)
       Wait.until("second live worker was not created")(f.recreated.get() == 2)
@@ -411,25 +411,25 @@ class PaperFlowReviewSpec extends TempDirectorySuite:
     finally f.close()
   }
 
-  test("paper storage refusal leaves current live polling available") {
+  test("prop storage refusal leaves current live polling available") {
     val f = new Fixture(initialMode = "VIEW", configured = true)
     try
       f.open()
       Wait.until("view did not start account polling")(
         f.infoTypes.asScala.contains("clearinghouseState")
       )
-      val paper = f.directory.resolve("paper")
-      LocalFiles.directory(paper)
-      LocalFiles.write(paper.resolve("wallet-mainnet.json"), "broken")
-      assert(f.route.switchMode("PAPER").isLeft)
+      val prop = f.directory.resolve("prop")
+      LocalFiles.directory(prop)
+      LocalFiles.write(prop.resolve("wallet-mainnet.json"), "broken")
+      assert(f.route.switchMode("PROP").isLeft)
       assertEquals(f.route.mode, "VIEW")
       assertEquals(f.closed.get(), 0)
       val readsBefore = f.infoTypes.size()
-      Wait.until("existing worker stopped on failed paper selection")(
+      Wait.until("existing worker stopped on failed prop selection")(
         f.infoTypes.size() > readsBefore
       )
       assertEquals(
-        Files.readString(paper.resolve("wallet-mainnet.json")),
+        Files.readString(prop.resolve("wallet-mainnet.json")),
         "broken"
       )
     finally f.close()

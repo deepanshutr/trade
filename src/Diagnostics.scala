@@ -65,9 +65,9 @@ object Diagnostics:
     new Diagnostics(() => new FilesSink(directory.resolve("diagnostics")), now, quoteAgeMs)
 
   def component(thread: String): DiagnosticPart = thread match
-    case "keys"                                                    => DiagnosticPart.Input
-    case "fold" | "market"                                         => DiagnosticPart.Fold
-    case "orders" | "paper-orders" | "account" | "balance-display" => DiagnosticPart.Account
+    case "keys"                                                   => DiagnosticPart.Input
+    case "fold" | "market"                                        => DiagnosticPart.Fold
+    case "orders" | "prop-orders" | "account" | "balance-display" => DiagnosticPart.Account
     case "feed" | "poll" | "coarse" | "heartbeat" | "onchain" | "history-repair" =>
       DiagnosticPart.Feed
     case _ => DiagnosticPart.Background
@@ -145,10 +145,10 @@ final class Diagnostics private[desk] (
 
   def execution(mode: String, view: TradingView): Unit = synchronized {
     val kind = mode match
-      case "PAPER" => "simulated"
-      case "LIVE"  => "live"
-      case "VIEW"  => "view"
-      case _       => "unknown"
+      case "PROP" => "prop"
+      case "LIVE" => "live"
+      case "VIEW" => "view"
+      case _      => "unknown"
     val state = if kind == "view" then "view"
     else if view.pending then "pending"
     else if view.ready then "ready"

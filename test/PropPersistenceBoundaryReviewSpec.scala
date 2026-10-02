@@ -4,12 +4,12 @@ import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.{AtomicLong, AtomicReference}
 import scala.util.control.NonFatal
 
-class PaperPersistenceBoundaryReviewSpec extends TempDirectorySuite:
+class PropPersistenceBoundaryReviewSpec extends TempDirectorySuite:
 
-  private class Fixture(persist: PaperAccount => Unit):
+  private class Fixture(persist: PropAccount => Unit):
     val clock = new AtomicLong(1800000000000L)
-    val ledger = new PaperLedger(
-      PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
+    val ledger = new PropLedger(
+      PropAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
       BigDecimal(0),
       persist,
       new AutoCloseable { def close(): Unit = () }
@@ -21,7 +21,7 @@ class PaperPersistenceBoundaryReviewSpec extends TempDirectorySuite:
           """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5},{"name":"BTC","szDecimals":2,"maxLeverage":40}]}"""
         )
     val worker =
-      new PaperWorker(TradingConfig(), "XMR", ledger, rest, () => clock.get(), () => clock.get())
+      new PropWorker(TradingConfig(), "XMR", ledger, rest, () => clock.get(), () => clock.get())
     val exchange = new Exchange:
       def info(body: ujson.Value): Option[ujson.Value] = throw new IllegalStateException(
         "unexpected live read"
@@ -48,7 +48,7 @@ class PaperPersistenceBoundaryReviewSpec extends TempDirectorySuite:
     )
     val router = new ExecutionRouter(
       TradingConfig(),
-      "PAPER",
+      "PROP",
       "XMR",
       live,
       _ => throw new IllegalStateException("unexpected live worker"),
@@ -57,9 +57,9 @@ class PaperPersistenceBoundaryReviewSpec extends TempDirectorySuite:
       () => clock.get(),
       () => clock.get()
     )
-    val paperField = classOf[ExecutionRouter].getDeclaredFields.find(_.getName == "paper").get
-    paperField.setAccessible(true)
-    paperField.set(router, Some(worker))
+    val propField = classOf[ExecutionRouter].getDeclaredFields.find(_.getName == "prop").get
+    propField.setAccessible(true)
+    propField.set(router, Some(worker))
     private var readers = Vector.empty[Thread]
     def book(coin: String): Unit =
       router.observe(
@@ -78,7 +78,7 @@ class PaperPersistenceBoundaryReviewSpec extends TempDirectorySuite:
       router.start()
       router.observe(Event.SocketUp)
       book("XMR")
-      Wait.until("paper did not become ready")(router.view.ready)
+      Wait.until("prop did not become ready")(router.view.ready)
     def review(): OrderReview =
       val intent = Trading.action(0)
       OrderReview(intent, router.preview(intent).toOption.get, clock.get(), clock.get() + 30000)
@@ -91,7 +91,7 @@ class PaperPersistenceBoundaryReviewSpec extends TempDirectorySuite:
           catch case NonFatal(error) => result.set(Left(error))
           finally done.countDown()
         },
-        "synthetic-paper-read"
+        "synthetic-prop-read"
       )
       thread.setDaemon(true)
       readers :+= thread
@@ -101,11 +101,11 @@ class PaperPersistenceBoundaryReviewSpec extends TempDirectorySuite:
         case Right(value) => value
         case Left(error)  => throw error
     def orderThread: Thread =
-      val field = classOf[PaperWorker].getDeclaredFields.find(_.getName == "threads").get
+      val field = classOf[PropWorker].getDeclaredFields.find(_.getName == "threads").get
       field.setAccessible(true)
-      field.get(worker).asInstanceOf[Vector[Thread]].find(_.getName == "paper-orders").get
+      field.get(worker).asInstanceOf[Vector[Thread]].find(_.getName == "prop-orders").get
     def complete(): Unit =
-      Wait.until("paper order remained pending")(
+      Wait.until("prop order remained pending")(
         !router.view.pending && router.view.outcome.nonEmpty
       )
     def close(): Unit =
@@ -131,7 +131,7 @@ class PaperPersistenceBoundaryReviewSpec extends TempDirectorySuite:
       f.clock.addAndGet(5000L)
       val pending = f.quick("view")(f.router.view)
       assert(pending.pending)
-      assertEquals(pending.message, "PAPER saving 5s | XMR")
+      assertEquals(pending.message, "PROP saving 5s | XMR")
       assertEquals(pending.position, Some(BigDecimal(0)))
       assertEquals(pending.outcome, None)
       assertEquals(pending.portfolio.stables, Some(BigDecimal(10000)))
@@ -204,7 +204,7 @@ class PaperPersistenceBoundaryReviewSpec extends TempDirectorySuite:
         assert(f.router.submitReviewed(review))
         val order = f.orderThread
         def atWriter: Boolean = order.getStackTrace.exists(frame =>
-          frame.getClassName == "desk.PaperLedger" && frame.getMethodName == "fill"
+          frame.getClassName == "desk.PropLedger" && frame.getMethodName == "fill"
         )
         val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
         while !atWriter && System.nanoTime() < until do Thread.`yield`()

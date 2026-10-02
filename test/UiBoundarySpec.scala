@@ -80,7 +80,7 @@ class UiBoundarySpec extends munit.FunSuite:
     marginMode = Some("isolated")
   )
   private val zone = java.time.ZoneOffset.UTC
-  private class Fixture(mode: String = "PAPER"):
+  private class Fixture(mode: String = "PROP"):
     var currentView = view
     var sent = Vector.empty[OrderReview]
     var modes = Vector.empty[String]
@@ -148,7 +148,7 @@ class UiBoundarySpec extends munit.FunSuite:
   test("Buy and Sell occupy separate complete targets at every supported width") {
     for cols <- Vector(100, 101, 120, 160); style <- Vector(Style.mono, Style.colour) do
       val frame =
-        Workspace.draw(snapshot, view, PanelView(mode = "PAPER"), cols, 30, now, zone, style)
+        Workspace.draw(snapshot, view, PanelView(mode = "PROP"), cols, 30, now, zone, style)
       val buttons = frame.buttons.filter(_.action.isInstanceOf[DeskAction.Prepare])
       assertEquals(buttons.size, 2)
       assert(buttons.head.x + buttons.head.width <= buttons.last.x)

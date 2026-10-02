@@ -29,10 +29,10 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
   )
   private val review = OrderReview(intent, plan, now, now + 30000, Some(3), Some("isolated"))
   private val panels = Vector(
-    PanelView(mode = "PAPER"),
-    PanelView(mode = "PAPER", bigOrder = true),
+    PanelView(mode = "PROP"),
+    PanelView(mode = "PROP", bigOrder = true),
     PanelView(mode = "LIVE"),
-    PanelView(mode = "PAPER", modeReview = Some("LIVE"))
+    PanelView(mode = "PROP", modeReview = Some("LIVE"))
   )
 
   private def draw(
@@ -89,9 +89,9 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
       def trades(f: WorkspaceFrame) = f.controls
         .filter(_.action.isInstanceOf[DeskAction.Prepare])
         .map(b => (b.x, b.y, b.width, b.height))
-      val small = draw(PanelView(mode = "PAPER"), cols, rows)
-      val large = draw(PanelView(mode = "PAPER", bigOrder = true), cols, rows)
-      val pending = draw(PanelView(mode = "PAPER"), cols, rows, pending = true)
+      val small = draw(PanelView(mode = "PROP"), cols, rows)
+      val large = draw(PanelView(mode = "PROP", bigOrder = true), cols, rows)
+      val pending = draw(PanelView(mode = "PROP"), cols, rows, pending = true)
       assertEquals(trades(small), trades(large))
       assertEquals(trades(small), trades(pending))
   }

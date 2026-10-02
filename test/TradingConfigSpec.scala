@@ -224,8 +224,8 @@ class TradingConfigSpec extends munit.FunSuite:
       "positionAgeMs",
       "network",
       "keyService",
-      "paperBalance",
-      "paperFee",
+      "propBalance",
+      "propFee",
       "onchain"
     )
   do

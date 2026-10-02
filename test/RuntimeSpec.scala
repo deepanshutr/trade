@@ -4,20 +4,20 @@ import java.util.concurrent.{CountDownLatch, TimeUnit}
 
 class RuntimeSpec extends TempDirectorySuite:
 
-  test("paper execution uses public data, requires reviewed plan and refuses stale books") {
+  test("prop execution uses public data, requires reviewed plan and refuses stale books") {
     var time = 1800000000000L
     val requested = new java.util.concurrent.CopyOnWriteArrayList[String]()
     val rest = new Rest:
       def post(body: String): Option[String] =
         requested.add(ujson.read(body)("type").str)
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
-    val ledger = PaperLedger.open(
-      tempDirectory("desk-paper-execution"),
+    val ledger = PropLedger.open(
+      tempDirectory("desk-prop-execution"),
       "mainnet",
       BigDecimal(10000),
       BigDecimal("0.0005")
     )
-    val worker = new PaperWorker(TradingConfig(), "XMR", ledger, rest, () => time, () => time)
+    val worker = new PropWorker(TradingConfig(), "XMR", ledger, rest, () => time, () => time)
     try
       worker.start()
       worker.observe(Event.SocketUp)

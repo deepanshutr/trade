@@ -18,9 +18,9 @@ class StorageReviewSpec extends TempDirectorySuite:
     finally paths.close()
 
   test("a refused persistent write leaves the previous account and disables fills") {
-    val directory = tempDirectory("desk-paper-write-failure")
+    val directory = tempDirectory("desk-prop-write-failure")
     val path = directory.resolve("wallet-mainnet.json")
-    val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
+    val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
       assert(ledger.fill(plan(Side.Buy, "1", "100"), now).isRight)
       val before = ledger.account
@@ -33,14 +33,14 @@ class StorageReviewSpec extends TempDirectorySuite:
       assert(ledger.fill(plan(Side.Sell, "1", "120"), now + 2).isLeft)
       Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"))
     finally ledger.close()
-    val reopened = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
+    val reopened = PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try assertEquals(reopened.account.positions("XMR").quantity, BigDecimal(1))
     finally reopened.close()
   }
 
   test("unequal adds, partial closes and a new holding retain the correct purchase basis") {
-    val ledger = PaperLedger.open(
-      tempDirectory("desk-paper-weighted"),
+    val ledger = PropLedger.open(
+      tempDirectory("desk-prop-weighted"),
       "mainnet",
       BigDecimal(1000),
       BigDecimal("0.001")
@@ -56,7 +56,7 @@ class StorageReviewSpec extends TempDirectorySuite:
       assert(ledger.fill(plan(Side.Sell, "4", "90"), now + 3).isLeft)
       assertEquals(ledger.account, before)
       assert(ledger.fill(plan(Side.Sell, "2", "90"), now + 3).isRight)
-      assertEquals(ledger.account.positions, Map.empty[String, PaperPosition])
+      assertEquals(ledger.account.positions, Map.empty[String, PropPosition])
       assertEquals(ledger.account.cash, BigDecimal("995.196"))
       assertEquals(ledger.account.realized, BigDecimal(-4))
       assertEquals(ledger.account.fees, BigDecimal("0.804"))
@@ -68,9 +68,9 @@ class StorageReviewSpec extends TempDirectorySuite:
     finally ledger.close()
   }
 
-  test("a paper fill cannot persist an invalid market that prevents reopen") {
-    val ledger = PaperLedger.open(
-      tempDirectory("desk-paper-invalid"),
+  test("a prop fill cannot persist an invalid market that prevents reopen") {
+    val ledger = PropLedger.open(
+      tempDirectory("desk-prop-invalid"),
       "mainnet",
       BigDecimal(1000),
       BigDecimal(0)

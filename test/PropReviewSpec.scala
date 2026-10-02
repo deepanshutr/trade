@@ -2,20 +2,20 @@ package desk
 
 import java.util.concurrent.TimeUnit
 
-class PaperReviewSpec extends TempDirectorySuite:
-  test("paper review lifetime is bounded without timestamp overflow") {
+class PropReviewSpec extends TempDirectorySuite:
+  test("prop review lifetime is bounded without timestamp overflow") {
     val now = 1800000000000L
     val rest = new Rest:
       def post(body: String): Option[String] =
         assertEquals(ujson.read(body), ujson.Obj("type" -> "meta"))
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
-    val ledger = PaperLedger.open(
-      tempDirectory("desk-paper-review-expiry"),
+    val ledger = PropLedger.open(
+      tempDirectory("desk-prop-review-expiry"),
       "mainnet",
       BigDecimal(10000),
       BigDecimal(0)
     )
-    val worker = new PaperWorker(TradingConfig(), "XMR", ledger, rest, () => now, () => now)
+    val worker = new PropWorker(TradingConfig(), "XMR", ledger, rest, () => now, () => now)
     try
       worker.start()
       worker.observe(Event.SocketUp)

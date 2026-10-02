@@ -4,8 +4,8 @@ import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicReference
 import java.time.ZoneId
 
-class PaperSaveResponsivenessSpec extends TempDirectorySuite:
-  test("router view and controller draw stay responsive during a held paper save") {
+class PropSaveResponsivenessSpec extends TempDirectorySuite:
+  test("router view and controller draw stay responsive during a held prop save") {
     val at = 1800000000000L
     val saving = new CountDownLatch(1)
     val release = new CountDownLatch(1)
@@ -14,21 +14,21 @@ class PaperSaveResponsivenessSpec extends TempDirectorySuite:
     val viewed = new CountDownLatch(2)
     val shown = new AtomicReference[TradingView]()
     val drawn = new AtomicReference[WorkspaceFrame]()
-    val saved = new AtomicReference[PaperAccount]()
+    val saved = new AtomicReference[PropAccount]()
     val errors = new java.util.concurrent.ConcurrentLinkedQueue[Throwable]()
     val trace = new java.util.concurrent.ConcurrentLinkedQueue[String]()
     val began = System.nanoTime()
     def mark(text: String): Unit =
       val _ = trace.add(s"${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began)} ms $text")
-    val persist: PaperAccount => Unit = next =>
+    val persist: PropAccount => Unit = next =>
       mark("save entered")
       saving.countDown()
       if !release.await(5, TimeUnit.SECONDS) then
         throw new IllegalStateException("test did not release simulated storage")
       mark("save released")
       saved.set(next)
-    val ledger = new PaperLedger(
-      PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
+    val ledger = new PropLedger(
+      PropAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
       BigDecimal(0),
       persist,
       new AutoCloseable { def close(): Unit = () }
@@ -36,48 +36,48 @@ class PaperSaveResponsivenessSpec extends TempDirectorySuite:
     val rest = new Rest:
       def post(body: String): Option[String] =
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
-    val worker = new PaperWorker(TradingConfig(), "XMR", ledger, rest, () => at, () => at)
+    val worker = new PropWorker(TradingConfig(), "XMR", ledger, rest, () => at, () => at)
     val exchange = new Exchange:
-      def info(body: ujson.Value): Option[ujson.Value] = fail("paper started a live account read")
-      def post(body: ujson.Value): Option[ujson.Value] = fail("paper attempted a live order")
+      def info(body: ujson.Value): Option[ujson.Value] = fail("prop started a live account read")
+      def post(body: ujson.Value): Option[ujson.Value] = fail("prop attempted a live order")
       def watch(
           coin: String,
           owner: String,
           generation: Long,
           receive: Option[ujson.Value] => Unit
       ): Unit =
-        fail("paper opened a live account socket")
+        fail("prop opened a live account socket")
     val live = new TradingWorker(
       TradingConfig(),
       false,
       "XMR",
       exchange,
-      () => fail("paper loaded a key"),
-      () => fail("paper opened a live journal"),
+      () => fail("prop loaded a key"),
+      () => fail("prop opened a live journal"),
       () => at,
       () => at
     )
     val router = new ExecutionRouter(
       TradingConfig(),
-      "PAPER",
+      "PROP",
       "XMR",
       live,
-      _ => fail("paper enabled live trading"),
+      _ => fail("prop enabled live trading"),
       rest,
       tempDirectory("save-response-"),
       () => at,
       () => at
     )
-    // Install only a synthetic paper store with a controllable save. Every read
+    // Install only a synthetic prop store with a controllable save. Every read
     // and order below goes through the real router and controller interfaces.
-    val paperField = classOf[ExecutionRouter].getDeclaredFields.find(_.getName == "paper").get
-    paperField.setAccessible(true)
-    paperField.set(router, Some(worker))
+    val propField = classOf[ExecutionRouter].getDeclaredFields.find(_.getName == "prop").get
+    propField.setAccessible(true)
+    propField.set(router, Some(worker))
     val book = Book(Vector(Level("99.99", "50", 1)), Vector(Level("100", "50", 1)), at)
     val snapshot =
       Snapshot.initial("XMR", at).copy(book = Some(book), feed = Health.Live(at))
     val controller = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => at,
       router.preview,
       router.submitReviewed,
@@ -111,8 +111,8 @@ class PaperSaveResponsivenessSpec extends TempDirectorySuite:
       thread.setDaemon(true)
       thread
     val readers = Vector(
-      reader("synthetic-paper-view")(shown.set(router.view)),
-      reader("synthetic-paper-frame") {
+      reader("synthetic-prop-view")(shown.set(router.view)),
+      reader("synthetic-prop-frame") {
         drawn.set(draw())
       }
     )
@@ -146,7 +146,7 @@ class PaperSaveResponsivenessSpec extends TempDirectorySuite:
             mark("Send returned")
             sent.countDown()
         },
-        "synthetic-paper-send"
+        "synthetic-prop-send"
       )
       submitter.setDaemon(true)
       sender = Some(submitter)

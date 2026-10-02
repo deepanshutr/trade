@@ -18,7 +18,7 @@ def speed():
 
 def wallet_case():
     results = [{'id': index, 'kind': 'order', 'at': index,
-                'text': f'PAPER XMR {"buy" if index % 2 else "sell"} filled 1 at 500\nFee $0.25 | #{index} offline'}
+                'text': f'PROP XMR {"buy" if index % 2 else "sell"} filled 1 at 500\nFee $0.25 | #{index} offline'}
                for index in range(1, 601)]
     saved = {'deposit': '10000', 'cash': '9850', 'fees': '150', 'realized': '0',
              'positions': {}, 'count': 600, 'orders': [result['text'] for result in results]}
@@ -35,7 +35,7 @@ class IndependentOracleReview(unittest.TestCase):
             if click == 2:
                 continue
             side = 'buy' if click % 2 else 'sell'
-            filled.append(f'PAPER XMR {side} filled 1 at 500\nFee $0.25 | #{len(filled) + 1} offline')
+            filled.append(f'PROP XMR {side} filled 1 at 500\nFee $0.25 | #{len(filled) + 1} offline')
         completion = ['Order pending', filled[0]] + filled[1:]
         results = [{'kind': 'order', 'text': text} for text in completion]
         saved.update(cash='9350.25', fees='149.75', count=599,
@@ -105,7 +105,7 @@ class IndependentOracleReview(unittest.TestCase):
         saved, results, book = wallet_case()
         results[0]['text'] = 'No XMR to sell'
         for index in range(2, 601):
-            results[index - 1]['text'] = f'PAPER XMR {"sell" if index % 2 else "buy"} filled 1 at 500\nFee $0.25 | #{index} offline'
+            results[index - 1]['text'] = f'PROP XMR {"sell" if index % 2 else "buy"} filled 1 at 500\nFee $0.25 | #{index} offline'
         saved.update(cash='9350.25', fees='149.75', count=599,
                      positions={'XMR': {'quantity': '1', 'entry': '500'}},
                      orders=[result['text'] for result in results[1:]])

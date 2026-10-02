@@ -472,12 +472,12 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
-  test("paper and view panels ignore live usable margin") {
+  test("prop and view panels ignore live usable margin") {
     val f = new Fixture()
     try
       f.ready()
       val view = f.worker.view
-      for mode <- Vector("PAPER", "VIEW") do
+      for mode <- Vector("PROP", "VIEW") do
         val frame = Workspace.draw(
           Snapshot.initial("XMR", f.clock.get()),
           view,

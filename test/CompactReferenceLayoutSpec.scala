@@ -31,5 +31,5 @@ class CompactReferenceLayoutSpec extends munit.FunSuite:
       assertEquals(frame.lines.size, rows)
       val tradeTop = rows - 15
       assert(frame.lines(tradeTop).contains("VIEW XMR"), frame.lines.mkString("\n"))
-      assert(frame.buttons.filter(_.action == DeskAction.Mode("PAPER")).forall(_.y > tradeTop))
+      assert(frame.buttons.filter(_.action == DeskAction.Mode("PROP")).forall(_.y > tradeTop))
     }

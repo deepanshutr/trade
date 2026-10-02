@@ -52,5 +52,5 @@ class WorkspaceHelpersSpec extends munit.FunSuite:
         )
         .lines
     yield line
-    assertEquals(digest(lines), "f01a03b9237784e2e1b18b0c582c7ff1c9aeffc167c0c3aca69dc25a8701126f")
+    assertEquals(digest(lines), "897f5c0bd49875304dd5c79edc4a3693d6712b2ecce71bf2c4fc4d65bb223ba4")
   }

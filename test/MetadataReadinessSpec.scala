@@ -17,9 +17,9 @@ class MetadataReadinessSpec extends TempDirectorySuite:
         respond()
     val config = TradingConfig()
     val path = tempDirectory("desk-metadata-readiness-")
-    val ledger = PaperLedger.open(path, "mainnet", config.paperBalance, config.paperFee)
+    val ledger = PropLedger.open(path, "mainnet", config.propBalance, config.propFee)
     val worker =
-      new PaperWorker(config, "XMR", ledger, rest, () => time.get(), () => time.get(), initial)
+      new PropWorker(config, "XMR", ledger, rest, () => time.get(), () => time.get(), initial)
     def quote(coin: String = "XMR"): Unit =
       worker.observe(
         Event.BookUpdate(

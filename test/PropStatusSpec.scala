@@ -3,20 +3,20 @@ package desk
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-class PaperStatusSpec extends TempDirectorySuite:
-  test("paper status follows fresh data, expiry, disconnect and market selection") {
+class PropStatusSpec extends TempDirectorySuite:
+  test("prop status follows fresh data, expiry, disconnect and market selection") {
     val clock = new AtomicLong(1800000000000L)
     val rest = new Rest:
       def post(body: String): Option[String] =
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
-    val ledger = PaperLedger.open(
-      tempDirectory("desk-paper-status"),
+    val ledger = PropLedger.open(
+      tempDirectory("desk-prop-status"),
       "mainnet",
       BigDecimal(10000),
       BigDecimal(0)
     )
     val worker =
-      new PaperWorker(TradingConfig(), "XMR", ledger, rest, () => clock.get(), () => clock.get())
+      new PropWorker(TradingConfig(), "XMR", ledger, rest, () => clock.get(), () => clock.get())
     def publish(): Unit = worker.observe(
       Event.BookUpdate(
         "XMR",
@@ -37,12 +37,12 @@ class PaperStatusSpec extends TempDirectorySuite:
       val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
       while !worker.view.ready && System.nanoTime() < deadline do Thread.sleep(5)
       assert(worker.view.ready)
-      assertEquals(worker.view.message, "Paper ready")
+      assertEquals(worker.view.message, "Prop ready")
       clock.addAndGet(1001)
       blocked(BlockCode.Prices)
       publish()
       assert(worker.view.ready)
-      assertEquals(worker.view.message, "Paper ready")
+      assertEquals(worker.view.message, "Prop ready")
       worker.observe(Event.SocketDown)
       blocked(BlockCode.Connection)
       worker.observe(Event.SocketUp)
@@ -50,27 +50,27 @@ class PaperStatusSpec extends TempDirectorySuite:
       clock.incrementAndGet()
       publish()
       assert(worker.view.ready)
-      assertEquals(worker.view.message, "Paper ready")
+      assertEquals(worker.view.message, "Prop ready")
       worker.select("BTC")
       blocked(BlockCode.Market)
       assertEquals(ledger.account.count, 0L)
     finally worker.close()
   }
 
-  test("paper pending status and retained result follow current readiness") {
+  test("prop pending status and retained result follow current readiness") {
     val clock = new AtomicLong(1800000000000L)
     val rest = new Rest:
       def post(body: String): Option[String] =
         assertEquals(ujson.read(body), ujson.Obj("type" -> "meta"))
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
-    val ledger = PaperLedger.open(
-      tempDirectory("desk-paper-status-result"),
+    val ledger = PropLedger.open(
+      tempDirectory("desk-prop-status-result"),
       "mainnet",
       BigDecimal(10000),
       BigDecimal(0)
     )
     val worker =
-      new PaperWorker(TradingConfig(), "XMR", ledger, rest, () => clock.get(), () => clock.get())
+      new PropWorker(TradingConfig(), "XMR", ledger, rest, () => clock.get(), () => clock.get())
     def publish(): Unit = worker.observe(
       Event.BookUpdate(
         "XMR",
@@ -82,7 +82,7 @@ class PaperStatusSpec extends TempDirectorySuite:
       worker.start()
       worker.observe(Event.SocketUp)
       publish()
-      Wait.until("PaperStatusSpec condition")(worker.view.ready)
+      Wait.until("PropStatusSpec condition")(worker.view.ready)
       val intent = OrderIntent(Side.Buy, OrderKind.Hard)
       val review = OrderReview(
         intent,
@@ -95,17 +95,17 @@ class PaperStatusSpec extends TempDirectorySuite:
         val pending = worker.view
         assert(pending.pending)
         assert(!pending.ready)
-        assertEquals(pending.message, "PAPER queued 0s | XMR")
+        assertEquals(pending.message, "PROP queued 0s | XMR")
         assertEquals(pending.outcome, None)
       }
-      Wait.until("PaperStatusSpec condition")(!worker.view.pending)
+      Wait.until("PropStatusSpec condition")(!worker.view.pending)
       assertEquals(ledger.account.count, 1L)
       val result = Some(ledger.account.orders.last)
       def completed(ready: Boolean): Unit =
         val view = worker.view
         assertEquals(view.ready, ready)
         assert(!view.pending)
-        if ready then assertEquals(view.message, "Paper ready")
+        if ready then assertEquals(view.message, "Prop ready")
         else assertEquals(view.block, Some(view.message))
         assertEquals(view.outcome, result)
       completed(true)

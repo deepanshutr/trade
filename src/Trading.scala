@@ -197,7 +197,7 @@ object Trading:
     }
     (subtract(requested, remaining), value)
 
-  // Execute an already reviewed paper request against current visible depth.
+  // Execute an already reviewed prop request against current visible depth.
   // Quantity and limit remain exactly the terms the user saw.
   def fillAtLimit(
       plan: OrderPlan,
@@ -207,14 +207,14 @@ object Trading:
       position: BigDecimal
   ): Either[String, OrderPlan] =
     for
-      _ <- check(plan.asset == rules.asset && validDecimals(rules), "Paper market rules changed")
-      _ <- check(validPrice(plan.limit, rules), "Paper limit does not match market precision")
-      _ <- check(validPrice(currentQuote, rules), "Paper quote does not match market precision")
+      _ <- check(plan.asset == rules.asset && validDecimals(rules), "Prop market rules changed")
+      _ <- check(validPrice(plan.limit, rules), "Prop limit does not match market precision")
+      _ <- check(validPrice(currentQuote, rules), "Prop quote does not match market precision")
       _ <- check(
         plan.quantity > zero && plan.quantity.bigDecimal
           .stripTrailingZeros()
           .scale() <= rules.szDecimals,
-        "Paper quantity does not match market precision"
+        "Prop quantity does not match market precision"
       )
       bids <- levels(book.bids, rules, ascending = false)
       asks <- levels(book.asks, rules, ascending = true)
@@ -224,7 +224,7 @@ object Trading:
         else plan.limit <= q.price && q.price <= currentQuote
       )
       (filled, value) = walk(eligible, plan.quantity)
-      _ <- check(filled > zero, "Paper no fill: no depth inside reviewed limit")
+      _ <- check(filled > zero, "Prop no fill: no depth inside reviewed limit")
       average = BigDecimal(value.bigDecimal.divide(filled.bigDecimal, averageContext))
     yield plan.copy(
       estimatedQuantity = filled,

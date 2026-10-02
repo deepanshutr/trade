@@ -82,12 +82,12 @@ class WorkspaceSpec extends munit.FunSuite:
     }
   }
 
-  test("paper limit precision errors retain their reason in the trade status") {
-    val notice = "Paper limit does not match market precision"
+  test("prop limit precision errors retain their reason in the trade status") {
+    val notice = "Prop limit does not match market precision"
     val frame = Workspace.draw(
       s,
       view.copy(ready = true),
-      PanelView(mode = "PAPER", actionNotice = Some(notice), actionNumber = 1),
+      PanelView(mode = "PROP", actionNotice = Some(notice), actionNumber = 1),
       160,
       45,
       now,
@@ -123,7 +123,7 @@ class WorkspaceSpec extends munit.FunSuite:
   }
 
   test("one-click controls have no send button and a small screen has no controls") {
-    val panel = PanelView(mode = "PAPER")
+    val panel = PanelView(mode = "PROP")
     val frame = Workspace.draw(
       s,
       view.copy(ready = true),

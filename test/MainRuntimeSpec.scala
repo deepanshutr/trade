@@ -56,24 +56,24 @@ class MainRuntimeSpec extends TempDirectorySuite:
     val frame = draw()
   }
 
-  test("paper and recorder modes have explicit independent startup choices") {
+  test("prop and recorder modes have explicit independent startup choices") {
     assert(
-      Main.parseArgs(Seq("XMR", "--paper", "--state", "/tmp/desk-private")).isRight
+      Main.parseArgs(Seq("XMR", "--prop", "--state", "/tmp/desk-private")).isRight
     )
     assert(Main.parseArgs(Seq("--record")).isRight)
-    assert(Main.parseArgs(Seq("--paper", "--trade")).isLeft)
+    assert(Main.parseArgs(Seq("--prop", "--trade")).isLeft)
     assert(Main.parseArgs(Seq("--record", "--trade")).isLeft)
-    assert(Main.parseArgs(Seq("--record", "--paper")).isLeft)
+    assert(Main.parseArgs(Seq("--record", "--prop")).isLeft)
     assert(Main.parseArgs(Seq("--state")).isLeft)
   }
 
-  test("paper balance and fee can be configured without live addresses") {
-    val directory = tempDirectory("desk-paper-settings")
+  test("prop balance and fee can be configured without live addresses") {
+    val directory = tempDirectory("desk-prop-settings")
     val path = directory.resolve("settings.json")
-    Files.writeString(path, """{"paperBalance":"20000","paperFee":"0.001"}""")
+    Files.writeString(path, """{"propBalance":"20000","propFee":"0.001"}""")
     Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"))
     assert(TradingConfig.load(Some(path)).isRight)
-    Files.writeString(path, """{"paperFee":"-1"}""")
+    Files.writeString(path, """{"propFee":"-1"}""")
     assert(TradingConfig.load(Some(path)).isLeft)
   }
 
@@ -168,7 +168,7 @@ class MainRuntimeSpec extends TempDirectorySuite:
   test("the keys mode is its own choice and the usage line names it") {
     assertEquals(Main.parseArgs(Seq("--keys")), Right(Main.Args("XMR", false, keys = true)))
     assert(Main.parseArgs(Seq("--keys", "--trade")).isLeft)
-    assert(Main.parseArgs(Seq("--paper", "--keys")).isLeft)
+    assert(Main.parseArgs(Seq("--prop", "--keys")).isLeft)
     assert(Main.parseArgs(Seq("--keys", "--record")).isLeft)
     assert(Main.usage.contains("--keys"))
   }

@@ -194,7 +194,7 @@ def validate_wallet(saved, results, fixture_book):
                 assert expected_side == "sell" and held == 0, "impossible empty-wallet refusal"
             refused.append(receipt)
             continue
-        match = re.fullmatch(r"PAPER XMR (buy|sell) filled ([0-9.]+) at ([^\n]+)\nFee \$([0-9.]+) \| #(\d+) .+", receipt)
+        match = re.fullmatch(r"PROP XMR (buy|sell) filled ([0-9.]+) at ([^\n]+)\nFee \$([0-9.]+) \| #(\d+) .+", receipt)
         assert match, "invalid fill receipt"
         side, quantity, shown, fee, count = match.groups()
         assert side == expected_side, "fill side differs from clicked button"
@@ -476,7 +476,7 @@ class Playback:
                                lambda f: len(f["lines"]) == 40 and market("XMR")(f))
             assert all(len(row) == 120 for row in wide["lines"])
         elif self.mode == "speed":
-            self.frame(lambda f: contains("PAPER XMR")(f) and f["lines"][-11].split("|")[-1].strip() == "")
+            self.frame(lambda f: contains("PROP XMR")(f) and f["lines"][-11].split("|")[-1].strip() == "")
             clicks = self.clicks
             began = time.monotonic_ns()
             for index in range(600):
@@ -495,14 +495,14 @@ class Playback:
             self.wait(recorded, "all six hundred results saved")
             assert len(self.receipts) == 600, "missing or duplicate result"
             results = list(self.receipts.values())
-            saved = json.loads((self.state_directory / "paper" / "wallet-mainnet.json").read_text())
+            saved = json.loads((self.state_directory / "prop" / "wallet-mainnet.json").read_text())
             fixture_book = json.loads((Path(self.args.fixtures) / "l2Book.json").read_text())["data"]
             filled, refused = validate_wallet(saved, results, fixture_book)
             results_saved_ms = (time.monotonic_ns() - clicks[-1]) / 1e6
             self.settle()
             self.read_receipts()
             assert len(self.receipts) == 600, "unexpected later result"
-            settled = json.loads((self.state_directory / "paper" / "wallet-mainnet.json").read_text())
+            settled = json.loads((self.state_directory / "prop" / "wallet-mainnet.json").read_text())
             assert settled == saved, "a refused click executed later"
             gaps = frame_gaps([f["captured_ns"] for f in self.frames.complete], clicks[0], clicks[-1])
             backlog = max(p["backlog"] for p in self.progress)
@@ -586,7 +586,7 @@ class Playback:
         if self.mode == "speed":
             self.read_receipts()
             assert len(self.receipts) == 600, "unexpected result during shutdown"
-            closed = json.loads((self.state_directory / "paper" / "wallet-mainnet.json").read_text())
+            closed = json.loads((self.state_directory / "prop" / "wallet-mainnet.json").read_text())
             assert closed == saved, "ledger changed during shutdown"
         samples = validate_result(result, self.mode)
         assert any(any(0x2800 <= ord(c) <= 0x28FF for c in line)
@@ -620,7 +620,7 @@ class Playback:
                 (self.directory / "receipts.json").write_text(json.dumps(self.receipts, indent=2) + "\n")
                 (self.directory / "progress.json").write_text(json.dumps(self.progress, indent=2) + "\n")
                 (self.directory / "clicks.json").write_text(json.dumps(self.clicks) + "\n")
-                saved = self.state_directory / "paper" / "wallet-mainnet.json"
+                saved = self.state_directory / "prop" / "wallet-mainnet.json"
                 if saved.exists():
                     (self.directory / "simulated-ledger.json").write_bytes(saved.read_bytes())
                 records = self.state_directory / "diagnostics" / "events-0.jsonl"

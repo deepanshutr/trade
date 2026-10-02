@@ -1,13 +1,13 @@
 # Configure live trading
 
-The [workspace guide](workspace.md) describes the layout, simulated account and
+The [workspace guide](workspace.md) describes the layout, prop account and
 trade buttons. Clicking Buy or Sell submits the selected amount immediately.
 Switching into real trading requires a visible mode confirmation. Starting the
 program preserves observed leverage and margin mode.
 
 The default settings file is `~/.config/desk/config.json`. `--config /path` selects
 another file. It must be a private regular file with permissions `600`. An absent
-default file permits public viewing and paper trading with these defaults:
+default file permits public viewing and prop trading with these defaults:
 
 ```json
 {
@@ -15,8 +15,8 @@ default file permits public viewing and paper trading with these defaults:
   "big": "1000",
   "target": "1000",
   "network": "mainnet",
-  "paperBalance": "10000",
-  "paperFee": "0.0005"
+  "propBalance": "10000",
+  "propFee": "0.0005"
 }
 ```
 
@@ -43,14 +43,16 @@ the pair every two seconds, prices the token in dollars through the quote pool,
 shows the pool's own liquidity as the book at fixed impact steps, builds candles
 from its readings, and lists swaps as the tape, one reading behind and timed at
 the reading that saw them. A node that refuses log queries still serves prices. There is
-no candle history before Desk starts. Paper and live orders are not available on an
+no candle history before Desk starts. Prop and live orders are not available on an
 on-chain market. The bitcoin and gold references keep coming from the venue.
 
 Amounts and age limits are quoted numeric strings. Small and big are total order
 value before fees. Target has its own value ceiling.
-`paperBalance` applies when creating a simulated wallet. Existing saved wallet
+`propBalance` applies when creating a prop wallet. Existing saved wallet
 balances remain in place. Old margin simulation files remain separate and unchanged.
-`paperFee` is the fraction charged on each simulated fill.
+`propFee` is the fraction charged on each simulated fill. A settings file that still
+has `paperBalance` or `paperFee` stops Desk at start until the two keys are renamed
+`propBalance` and `propFee`.
 
 Live setup needs the public `owner` address in the settings and an active key. The
 `owner` is the address of the wallet that owns the account. It uses the `0x` prefix
@@ -165,7 +167,7 @@ wrong-market or replaced-connection replies cannot renew the selected account.
 The workspace uses immediate orders with the selected value and a price limit
 no more than 0.1 percent from the captured best quote. Available depth can produce
 a partial fill or no fill. In real trading, an opposite fill reduces the existing
-position before its remainder opens the other direction. In simulated trading,
+position before its remainder opens the other direction. In prop trading,
 Buy spends stables and Sell is capped at held tokens. The selected value excludes fees.
 Calculations retain full precision. Compact dollar figures are rounded for display.
 Best and Target orders are no longer exposed in the normal workspace.

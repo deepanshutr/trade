@@ -8,10 +8,10 @@ class ExecutionOrderingSpec extends munit.FunSuite:
     val inputLock = new Object
     val snapshot = Snapshot.initial("XMR", 1000L)
     val pending = TradingView("XMR", message = "Sending", pending = true)
-    val receipt = "PAPER XMR buy filled 1 at 500\nFee $0.25 | #1 offline"
+    val receipt = "PROP XMR buy filled 1 at 500\nFee $0.25 | #1 offline"
     val completed = pending.copy(pending = false, outcome = Some(receipt), outcomeId = 1L)
     val controller = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => 1000L,
       _ => Left("no new order"),
       _ => false,

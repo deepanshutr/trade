@@ -19,15 +19,15 @@ class ExecutionDiagnosticsFinderSpec extends munit.FunSuite:
     val saved = new Memory
     val log = new Diagnostics(() => saved, wall.get, 2000L, monotonic = monotonic.get)
     val waiting =
-      TradingView("XMR", message = "waiting", block = Some("Paper waiting for market details"))
-    log.execution("PAPER", waiting)
+      TradingView("XMR", message = "waiting", block = Some("Prop waiting for market details"))
+    log.execution("PROP", waiting)
     wall.set(-100000L)
     monotonic.set(30999L)
-    log.execution("PAPER", waiting)
+    log.execution("PROP", waiting)
     monotonic.incrementAndGet()
-    log.execution("PAPER", waiting)
+    log.execution("PROP", waiting)
     monotonic.set(61001L)
-    log.execution("PAPER", waiting.copy(ready = true, block = None))
+    log.execution("PROP", waiting.copy(ready = true, block = None))
     log.start()
     log.close()
     val events = saved.execution
@@ -71,7 +71,7 @@ class ExecutionDiagnosticsFinderSpec extends munit.FunSuite:
     val thread = new Thread(() =>
       try
         for i <- 0 until 10000 do
-          log.execution("PAPER", TradingView("XMR", message = "waiting", ready = i % 2 == 0))
+          log.execution("PROP", TradingView("XMR", message = "waiting", ready = i % 2 == 0))
       finally finished.countDown()
     )
     thread.setDaemon(true)

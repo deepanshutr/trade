@@ -13,8 +13,8 @@ final case class TradingConfig(
     keyService: String = "desk",
     quoteAgeMs: Long = 1000L,
     positionAgeMs: Long = 2000L,
-    paperBalance: BigDecimal = BigDecimal("10000"),
-    paperFee: BigDecimal = BigDecimal("0.0005"),
+    propBalance: BigDecimal = BigDecimal("10000"),
+    propFee: BigDecimal = BigDecimal("0.0005"),
     onchain: Vector[OnchainMarket] = Vector.empty
 ):
   def configured: Boolean = owner.nonEmpty && agent.nonEmpty
@@ -36,8 +36,8 @@ object TradingConfig:
     "references", // Accepted for saved settings compatibility; its value is ignored.
     "quoteAgeMs",
     "positionAgeMs",
-    "paperBalance",
-    "paperFee",
+    "propBalance",
+    "propFee",
     "onchain"
   )
   private val marketName = "[A-Z0-9][A-Z0-9._-]{0,19}"
@@ -125,8 +125,8 @@ object TradingConfig:
         require(stringFields("owner"), "owner must be a string")
         require(stringFields("network", "keyService"), "network and keyService must be strings")
         require(
-          stringFields("paperBalance", "paperFee"),
-          "paperBalance and paperFee must be strings"
+          stringFields("propBalance", "propFee"),
+          "propBalance and propFee must be strings"
         )
         require(stringFields("small", "big", "target"), "small, big and target must be strings")
         require(
@@ -167,10 +167,10 @@ object TradingConfig:
         require(Set("mainnet", "testnet").contains(network), "invalid network")
         val service = string("keyService", d.keyService)
         require(service.matches("[A-Za-z0-9._-]{1,80}"), "invalid key service")
-        val balance = decimal("paperBalance", d.paperBalance)
-        val fee = decimal("paperFee", d.paperFee)
-        require(balance > 0 && balance <= BigDecimal("1000000000"), "invalid paper balance")
-        require(fee >= 0 && fee <= BigDecimal("0.01"), "invalid paper fee")
+        val balance = decimal("propBalance", d.propBalance)
+        val fee = decimal("propFee", d.propFee)
+        require(balance > 0 && balance <= BigDecimal("1000000000"), "invalid prop balance")
+        require(fee >= 0 && fee <= BigDecimal("0.01"), "invalid prop fee")
         TradingConfig(
           sizes,
           network,

@@ -19,7 +19,7 @@ class InteractionSpec extends munit.FunSuite:
     var sent = Vector.empty[OrderReview]
     var modes = Vector.empty[String]
     val controller = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => now,
       order =>
         Trading.plan(
@@ -61,7 +61,7 @@ class InteractionSpec extends munit.FunSuite:
     f.key(Command.PlaceOrder(intent))
     f.key(Command.Confirm)
     assertEquals(f.sent.map(_.intent), Vector(intent))
-    f.view = ready.copy(outcome = Some("PAPER XMR buy filled 5"), outcomeId = OrderUpdates.nextId())
+    f.view = ready.copy(outcome = Some("PROP XMR buy filled 5"), outcomeId = OrderUpdates.nextId())
     f.key(Command.PlaceOrder(intent))
     assertEquals(
       f.sent.size,

@@ -4,20 +4,20 @@ import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 import java.time.ZoneId
 
-class PaperExecutionDepthSpec extends munit.FunSuite:
+class PropExecutionDepthSpec extends munit.FunSuite:
   private val epoch = 1800000000000L
 
   private final class Fixture(
-      initial: PaperAccount = PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
-      persist: PaperAccount => Unit = _ => ()
+      initial: PropAccount = PropAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
+      persist: PropAccount => Unit = _ => ()
   ):
     val clock = new AtomicLong(epoch)
     val writes = new AtomicInteger()
     val closedLeases = new AtomicInteger()
-    val ledger = new PaperLedger(
+    val ledger = new PropLedger(
       initial,
       BigDecimal("0.001"),
-      ((next: PaperAccount) => { persist(next); val _ = writes.incrementAndGet(); () }),
+      ((next: PropAccount) => { persist(next); val _ = writes.incrementAndGet(); () }),
       new AutoCloseable { def close(): Unit = { val _ = closedLeases.incrementAndGet(); () } }
     )
     val rest = new Rest:
@@ -27,7 +27,7 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
           """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5},{"name":"BTC","szDecimals":2,"maxLeverage":5}]}"""
         )
     val worker =
-      new PaperWorker(TradingConfig(), "XMR", ledger, rest, () => clock.get(), () => clock.get())
+      new PropWorker(TradingConfig(), "XMR", ledger, rest, () => clock.get(), () => clock.get())
     def book(at: Long = clock.get(), coin: String = "XMR"): Book =
       Book(Vector(Level("99.99", "50", 1)), Vector(Level("100", "50", 1)), at)
     def publish(at: Long = clock.get(), coin: String = "XMR"): Unit =
@@ -103,12 +103,12 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
   do
     test(s"$side a newer best quote caps the committed top quantity queued=$queued moved=$moved") {
       val initial = if side == Side.Buy then
-        PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000))
+        PropAccount(BigDecimal(10000), deposit = BigDecimal(10000))
       else
-        PaperAccount(
+        PropAccount(
           BigDecimal(9000),
           deposit = BigDecimal(10000),
-          positions = Map("XMR" -> PaperPosition(BigDecimal(10), BigDecimal(100)))
+          positions = Map("XMR" -> PropPosition(BigDecimal(10), BigDecimal(100)))
         )
       val f = new Fixture(initial)
       try
@@ -164,10 +164,10 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
   for side <- Vector(Side.Buy, Side.Sell) do
     test(s"$side a delayed full book cannot revive capacity removed by a newer quote") {
       val f = new Fixture(
-        PaperAccount(
+        PropAccount(
           BigDecimal(9000),
           deposit = BigDecimal(10000),
-          positions = Map("XMR" -> PaperPosition(BigDecimal(10), BigDecimal(100)))
+          positions = Map("XMR" -> PropPosition(BigDecimal(10), BigDecimal(100)))
         )
       )
       try
@@ -187,10 +187,10 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
 
     test(s"$side an older best quote cannot shrink newer full depth") {
       val f = new Fixture(
-        PaperAccount(
+        PropAccount(
           BigDecimal(9000),
           deposit = BigDecimal(10000),
-          positions = Map("XMR" -> PaperPosition(BigDecimal(10), BigDecimal(100)))
+          positions = Map("XMR" -> PropPosition(BigDecimal(10), BigDecimal(100)))
         )
       )
       try
@@ -205,10 +205,10 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
 
     test(s"$side a best quote increase cannot inflate known full depth") {
       val f = new Fixture(
-        PaperAccount(
+        PropAccount(
           BigDecimal(9000),
           deposit = BigDecimal(10000),
-          positions = Map("XMR" -> PaperPosition(BigDecimal(10), BigDecimal(100)))
+          positions = Map("XMR" -> PropPosition(BigDecimal(10), BigDecimal(100)))
         )
       )
       try
@@ -300,7 +300,7 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
         if failSave then
           assertEquals(
             f.ledger.account,
-            PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000))
+            PropAccount(BigDecimal(10000), deposit = BigDecimal(10000))
           )
           assert(!f.worker.view.ready)
           assert(f.worker.view.portfolio.stables.isEmpty)
@@ -317,7 +317,7 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
   test("rapid successive controller actions retain every completed receipt") {
     val f = new Fixture()
     val c = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => f.clock.get(),
       f.worker.preview,
       f.worker.submitReviewed,
@@ -376,7 +376,7 @@ class PaperExecutionDepthSpec extends munit.FunSuite:
       assert(f.worker.submitReviewed(f.review()))
       assert(entered.await(2, TimeUnit.SECONDS))
       f.close()
-      assertEquals(f.ledger.account, PaperAccount(BigDecimal(10000), deposit = BigDecimal(10000)))
+      assertEquals(f.ledger.account, PropAccount(BigDecimal(10000), deposit = BigDecimal(10000)))
       assertEquals(f.writes.get(), 0)
       assertEquals(f.closedLeases.get(), 1)
       assert(!f.ledger.available)

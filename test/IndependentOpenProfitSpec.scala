@@ -5,7 +5,7 @@ import java.time.ZoneOffset
 
 class IndependentOpenProfitSpec extends TempDirectorySuite:
   private val now = 1800000000000L
-  private val blank = PaperAccount(BigDecimal(1000), deposit = BigDecimal(1000))
+  private val blank = PropAccount(BigDecimal(1000), deposit = BigDecimal(1000))
   private def exact(text: String): Exact = new Exact(text)
   private def same(actual: Option[BigDecimal], expected: Exact): Unit =
     assert(
@@ -65,7 +65,7 @@ class IndependentOpenProfitSpec extends TempDirectorySuite:
 
   test("actual buys, partial sales and full closure separate gross open profit from total net") {
     val dir = tempDirectory("desk-open-profit-")
-    val ledger = PaperLedger.open(dir, "mainnet", BigDecimal(1000), BigDecimal("0.01"))
+    val ledger = PropLedger.open(dir, "mainnet", BigDecimal(1000), BigDecimal("0.01"))
     def fill(side: Side, q: Int, px: Int): Unit =
       assert(
         ledger
@@ -74,22 +74,22 @@ class IndependentOpenProfitSpec extends TempDirectorySuite:
       )
     try
       fill(Side.Buy, 2, 100)
-      val first = PortfolioView.paper(ledger.account, "XMR", Some(110))
+      val first = PortfolioView.prop(ledger.account, "XMR", Some(110))
       same(first.openProfit, exact("20"))
       same(first.net, exact("18"))
       fill(Side.Sell, 1, 120)
-      val remaining = PortfolioView.paper(ledger.account, "XMR", Some(90))
+      val remaining = PortfolioView.prop(ledger.account, "XMR", Some(90))
       same(remaining.openProfit, exact("-10"))
       same(remaining.net, exact("6.8"))
       fill(Side.Sell, 1, 80)
-      val flat = PortfolioView.paper(ledger.account, "XMR", None)
+      val flat = PortfolioView.prop(ledger.account, "XMR", None)
       same(flat.openProfit, exact("0"))
       same(flat.net, exact("-4"))
     finally ledger.close()
   }
 
   test(
-    "paper open profit matches independent exact arithmetic and ignores fees and closed results"
+    "prop open profit matches independent exact arithmetic and ignores fees and closed results"
   ) {
     val quantities = Vector("1", "0.000001", "12345.123456")
     val entries = Vector("100", "123.45678901234567890123456789")
@@ -99,13 +99,13 @@ class IndependentOpenProfitSpec extends TempDirectorySuite:
         cash = BigDecimal("913.456"),
         realized = BigDecimal("321.987"),
         fees = BigDecimal("77.123"),
-        positions = Map("XMR" -> PaperPosition(BigDecimal(q), BigDecimal(entry)))
+        positions = Map("XMR" -> PropPosition(BigDecimal(q), BigDecimal(entry)))
       )
-      val p = PortfolioView.paper(saved, "XMR", Some(BigDecimal(mark)))
+      val p = PortfolioView.prop(saved, "XMR", Some(BigDecimal(mark)))
       val expected = exact(q).multiply(exact(mark).subtract(exact(entry)))
       same(p.openProfit, expected)
       same(p.net, exact("913.456").add(exact(q).multiply(exact(mark))).subtract(exact("1000")))
-      val unrelated = PortfolioView.paper(
+      val unrelated = PortfolioView.prop(
         saved.copy(cash = 42, fees = 999, realized = -555),
         "XMR",
         Some(BigDecimal(mark))
@@ -116,12 +116,12 @@ class IndependentOpenProfitSpec extends TempDirectorySuite:
   test(
     "held positions need a valid selected mark while flat and other-market open profit is zero"
   ) {
-    val saved = blank.copy(positions = Map("XMR" -> PaperPosition(2, 100)))
+    val saved = blank.copy(positions = Map("XMR" -> PropPosition(2, 100)))
     for mark <- Vector(None, Some(BigDecimal(0)), Some(BigDecimal(-1))) do
-      assertEquals(PortfolioView.paper(saved, "XMR", mark).openProfit, None)
-      assertEquals(PortfolioView.paper(saved, "XMR", mark).net, None)
-    same(PortfolioView.paper(blank, "XMR", None).openProfit, exact("0"))
-    val other = PortfolioView.paper(saved, "BTC", Some(110))
+      assertEquals(PortfolioView.prop(saved, "XMR", mark).openProfit, None)
+      assertEquals(PortfolioView.prop(saved, "XMR", mark).net, None)
+    same(PortfolioView.prop(blank, "XMR", None).openProfit, exact("0"))
+    val other = PortfolioView.prop(saved, "BTC", Some(110))
     same(other.openProfit, exact("0"))
     assertEquals(other.net, None)
   }
@@ -194,7 +194,7 @@ class IndependentOpenProfitSpec extends TempDirectorySuite:
     )
     for
       (cols, rows) <- Vector((100, 30), (360, 99)); style <- Vector(Style.mono, Style.colour);
-      mode <- Vector("PAPER", "LIVE"); (open, net) <- scenarios
+      mode <- Vector("PROP", "LIVE"); (open, net) <- scenarios
     do
       val p =
         PortfolioView(openProfit = open, net = net, tokenValue = Some(500), stables = Some(800))

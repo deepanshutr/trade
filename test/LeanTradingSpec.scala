@@ -8,7 +8,7 @@ class RefineTradingSpec extends munit.FunSuite:
   private val view = TradingView(
     "XMR",
     Some(BigDecimal(0)),
-    "Paper ready",
+    "Prop ready",
     true,
     false,
     Some(MarketRules(0, 2, 5)),
@@ -19,7 +19,7 @@ class RefineTradingSpec extends munit.FunSuite:
   private class Fixture:
     var sent = Vector.empty[OrderReview]
     val controller = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => now,
       intent =>
         Trading.plan(
@@ -80,13 +80,13 @@ class RefineTradingSpec extends munit.FunSuite:
   test("input records a completed order before another submission can replace its receipt") {
     val f = new Fixture
     val first =
-      view.copy(outcome = Some("PAPER XMR buy filled 5"), outcomeId = OrderUpdates.nextId())
+      view.copy(outcome = Some("PROP XMR buy filled 5"), outcomeId = OrderUpdates.nextId())
     f.draw(first)
     f.key(Command.PlaceOrder(OrderIntent(Side.Sell, OrderKind.Hard)), first)
     assertEquals(f.sent.size, 1)
     assertEquals(f.controller.panel.actionNumber, 1L)
     val second =
-      view.copy(outcome = Some("PAPER XMR sell filled 5"), outcomeId = OrderUpdates.nextId())
+      view.copy(outcome = Some("PROP XMR sell filled 5"), outcomeId = OrderUpdates.nextId())
     f.draw(second)
     f.key(Command.PlaceOrder(OrderIntent(Side.Buy, OrderKind.Hard)), second)
     assertEquals(f.controller.panel.actionNumber, 2L)

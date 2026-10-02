@@ -9,7 +9,7 @@ class SimpleExecutionSpec extends munit.FunSuite:
   private val view = TradingView(
     "XMR",
     Some(BigDecimal(0)),
-    "Paper ready",
+    "Prop ready",
     true,
     false,
     Some(MarketRules(0, 2, 5)),
@@ -21,7 +21,7 @@ class SimpleExecutionSpec extends munit.FunSuite:
     val frame = Workspace.draw(
       snapshot,
       view,
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       100,
       30,
       now,
@@ -58,7 +58,7 @@ class SimpleExecutionSpec extends munit.FunSuite:
   private final class Fixture:
     var sent = Vector.empty[OrderReview]
     val controller = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => now,
       intent =>
         Trading.plan(
@@ -128,10 +128,10 @@ class SimpleExecutionSpec extends munit.FunSuite:
     f.draw()
     f.key(Command.PlaceOrder(OrderIntent(Side.Buy, OrderKind.Hard)))
     val panels = Vector(
-      "ready" -> PanelView(mode = "PAPER"),
-      "large" -> PanelView(mode = "PAPER", bigOrder = true),
+      "ready" -> PanelView(mode = "PROP"),
+      "large" -> PanelView(mode = "PROP", bigOrder = true),
       "review" -> f.controller.panel,
-      "mode" -> PanelView(mode = "PAPER", modeReview = Some("LIVE"))
+      "mode" -> PanelView(mode = "PROP", modeReview = Some("LIVE"))
     )
     for
       (cols, rows) <- Vector((100, 30), (101, 31), (120, 40), (160, 45))
