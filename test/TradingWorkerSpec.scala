@@ -2457,6 +2457,32 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
+  test("a reduce or a close is sent reduce-only and an opening order is not") {
+    for (held, intent, reduceOnly) <- Vector(
+        ("40", OrderIntent(Side.Sell, OrderKind.Hard), true),
+        ("-40", OrderIntent(Side.Buy, OrderKind.Hard), true),
+        ("40", OrderIntent(Side.Sell, OrderKind.Close), true),
+        ("-40", OrderIntent(Side.Buy, OrderKind.Close), true),
+        ("40", OrderIntent(Side.Buy, OrderKind.Hard), false),
+        ("-40", OrderIntent(Side.Sell, OrderKind.Hard), false),
+        ("0", OrderIntent(Side.Sell, OrderKind.Hard), false)
+      )
+    do
+      val f = new Fixture()
+      try
+        f.ready()
+        holding(f, held)
+        val review = f.review(intent)
+        assertEquals(review.plan.reduceOnly, reduceOnly, (held, intent))
+        assert(f.worker.submitReviewed(review))
+        assert(f.entered.await(3, TimeUnit.SECONDS))
+        val order = f.lastPost.get()("action")("orders")(0)
+        assertEquals(order("r"), ujson.Bool(reduceOnly), (held, intent))
+        assertEquals(order("s").str, Trading.format(review.plan.quantity))
+        assertEquals(f.orderPosts.get(), 1)
+      finally f.close()
+  }
+
   test("review equality covers every plan field and the intent") {
     val f = new Fixture()
     try
@@ -2643,7 +2669,18 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
-  private def heldReview(change: Fixture => Unit, cancel: Boolean): Unit =
+  private def holding(f: Fixture, held: String): Unit =
+    f.position = held
+    Wait.until("position was not observed")(
+      f.worker.view.position.contains(BigDecimal(held)) && f.worker.view.ready
+    )
+
+  private def heldReview(
+      change: Fixture => Unit,
+      cancel: Boolean,
+      intent: OrderIntent = buy,
+      held: String = "0"
+  ): Unit =
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)
     val f = new Fixture(beforeOrderSign = () => {
@@ -2651,7 +2688,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
     })
     try
       f.ready()
-      val review = f.review(lifetime = 30000L)
+      holding(f, held)
+      val review = f.review(intent, lifetime = 30000L)
       assert(f.worker.submitReviewed(review))
       assert(entered.await(3, TimeUnit.SECONDS))
       assertEquals(f.posts.get(), 0)
@@ -2663,7 +2701,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
           .contains("canceled before sending")
       }
       assertEquals(f.orderPosts.get(), if cancel then 0 else 1)
-      if !cancel then
+      if cancel then assertEquals(f.worker.view.outcome, Some("XMR canceled before sending"))
+      else
         val order = f.lastPost.get()("action")("orders")(0)
         assertEquals(order("s").str, Trading.format(review.plan.quantity))
         assertEquals(order("p").str, Trading.format(review.plan.limit))
@@ -2687,6 +2726,28 @@ class TradingWorkerSpec extends TempDirectorySuite:
         assert(after.positionAfter != before.positionAfter)
       },
       cancel = true
+    )
+  }
+
+  test("a reduce whose position shrinks before the send is canceled before sending") {
+    val sell = OrderIntent(Side.Sell, OrderKind.Hard)
+    heldReview(
+      f => {
+        val before = f.worker.preview(sell).toOption.get
+        f.position = "30"
+        Wait.until("smaller position was not observed during signing") {
+          f.worker.view.position.contains(BigDecimal(30))
+        }
+        val after = f.worker.preview(sell).toOption.get
+        assert(before.reduceOnly && after.reduceOnly)
+        assertEquals(after.kind, before.kind)
+        assertEquals(after.quantity, before.quantity)
+        assertEquals(after.limit, before.limit)
+        assert(after.positionAfter != before.positionAfter)
+      },
+      cancel = true,
+      intent = sell,
+      held = "40"
     )
   }
 
