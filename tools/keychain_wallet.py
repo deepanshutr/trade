@@ -107,7 +107,9 @@ def create(role, store, generate, before_store=lambda public: None, service=None
 
 
 def acceptable_read_status(status):
-    return status == -25308  # errSecInteractionNotAllowed, not item missing.
+    # errSecInteractionNotAllowed and errSecAuthFailed. macOS 27 gives the second for a
+    # stored item with no trusted program. Success and item missing are not refusals.
+    return status in (-25308, -25293)
 
 
 class Attribute(C.Structure):
@@ -179,7 +181,12 @@ class MacKeychain:
         return [self.cf.CFArrayGetValueAtIndex(array, i)
                 for i in range(self.cf.CFArrayGetCount(array))]
 
-    def access_rules(self, access, configure=False):
+    def access_rules(self, access, configure=False, *, require_password=True):
+        """Checks every read rule has no trusted program and, by default, the password flag.
+
+        The stored item is checked with require_password=False because macOS 27 drops the
+        flag when it saves the item. Every other condition still applies to both checks.
+        """
         entries = C.c_void_p()
         self.check(self.sec.SecAccessCopyACLList(access, C.byref(entries)))
         count = 0
@@ -204,7 +211,7 @@ class MacKeychain:
                     if configure:
                         self.check(self.sec.SecACLSetContents(
                             entry, apps, description, flags.value | 1))
-                    elif not flags.value & 1:
+                    elif require_password and not flags.value & 1:
                         raise SetupError("password prompt is not required")
                     count += 1
                 finally:
@@ -268,7 +275,7 @@ class MacKeychain:
                 raise DuplicateItem("key store status " + str(status))
             self.check(status)
             self.check(self.sec.SecKeychainItemCopyAccess(item, C.byref(saved_access)))
-            self.access_rules(saved_access)
+            self.access_rules(saved_access, require_password=False)
             self.probe(item)
         finally:
             self.release(saved_access, item, keychain, access)
