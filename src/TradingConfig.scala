@@ -15,6 +15,7 @@ final case class TradingConfig(
     positionAgeMs: Long = 2000L,
     propBalance: BigDecimal = BigDecimal("10000"),
     propFee: BigDecimal = BigDecimal("0.0005"),
+    slippage: BigDecimal = Trading.defaultSlippage,
     onchain: Vector[OnchainMarket] = Vector.empty
 ):
   def configured: Boolean = owner.nonEmpty && agent.nonEmpty
@@ -38,6 +39,7 @@ object TradingConfig:
     "positionAgeMs",
     "propBalance",
     "propFee",
+    "slippage",
     "onchain"
   )
   private val marketName = "[A-Z0-9][A-Z0-9._-]{0,19}"
@@ -171,6 +173,11 @@ object TradingConfig:
         val fee = decimal("propFee", d.propFee)
         require(balance > 0 && balance <= BigDecimal("1000000000"), "invalid prop balance")
         require(fee >= 0 && fee <= BigDecimal("0.01"), "invalid prop fee")
+        // A quoted fraction. Any other value stops the start with the same fixed message.
+        val slippage = j.obj
+          .get("slippage")
+          .fold(Option(d.slippage))(_.strOpt.flatMap(text => Try(BigDecimal(text)).toOption))
+        require(slippage.exists(s => s > 0 && s <= BigDecimal("0.01")), "invalid slippage")
         TradingConfig(
           sizes,
           network,
@@ -181,6 +188,7 @@ object TradingConfig:
           millis("positionAgeMs", d.positionAgeMs),
           balance,
           fee,
+          slippage.get,
           onchainMarkets(j)
         )
       }.toEither.left.map { error =>

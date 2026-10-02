@@ -69,7 +69,10 @@ class IndependentOpenProfitSpec extends TempDirectorySuite:
     def fill(side: Side, q: Int, px: Int): Unit =
       assert(
         ledger
-          .fill(OrderPlan("XMR", 0, side, OrderKind.Hard, q, px, px, q, q * px, Some(px), 0), now)
+          .fill(
+            OrderPlan("XMR", 0, side, OrderKind.Hard, q, px, px, q, q * px, Some(px), 0, false),
+            now
+          )
           .isRight
       )
     try

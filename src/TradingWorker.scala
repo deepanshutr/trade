@@ -178,7 +178,8 @@ final class TradingWorker private[desk] (
         touch.exists(t => (BigInt(t.time) - BigInt(e.book.time)).abs <= config.quoteAgeMs)
       )
 
-  private def requiredLeverage: Boolean = coin != "XMR" || activeLeverage == 5
+  // Amounts are sized at five times, so live needs the venue to hold every market at 5x.
+  private def requiredLeverage: Boolean = activeLeverage == 5
 
   private def wakeAccount(): Unit =
     val _ = refreshWake.offer(true)
@@ -207,7 +208,7 @@ final class TradingWorker private[desk] (
       else if !marketReady then Some(ExecutionBlock(BlockCode.Prices, "selected depth stale"))
       else if secret.isEmpty then Some(ExecutionBlock(BlockCode.Blocked, message))
       else if leverageReady && !requiredLeverage then
-        Some(ExecutionBlock(BlockCode.Leverage, "Set XMR leverage to 5x"))
+        Some(ExecutionBlock(BlockCode.Leverage, s"Set $coin leverage to 5x"))
       else if !accountReady || waitingRefresh then
         Some(ExecutionBlock(BlockCode.Account, "account data stale"))
       else None
@@ -301,18 +302,26 @@ final class TradingWorker private[desk] (
       case _ => ()
   }
 
+  // An unknown position refuses every plan. Planning it as flat could turn a reduce or a
+  // Close into an opening order.
   private def estimate(intent: OrderIntent): Either[String, OrderPlan] =
     if !marketReady then Left("Waiting for fresh selected-market depth")
     else
-      Trading.plan(
-        coin,
-        rules.get,
-        exact.get.book,
-        if intent.side == Side.Buy then touch.get.ask else touch.get.bid,
-        position.getOrElse(BigDecimal(0)),
-        intent,
-        config.sizes
-      )
+      position
+        .toRight("Position unknown")
+        .flatMap(held =>
+          Trading.plan(
+            coin,
+            rules.get,
+            exact.get.book,
+            if intent.side == Side.Buy then touch.get.ask else touch.get.bid,
+            held,
+            intent,
+            config.sizes,
+            activeLeverage,
+            config.slippage
+          )
+        )
 
   def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized(
     estimate(intent)

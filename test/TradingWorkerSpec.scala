@@ -46,14 +46,16 @@ class TradingWorkerSpec extends TempDirectorySuite:
       balanceMode: String = "disabled",
       beforeAccountRead: Int => Unit = _ => (),
       missing: String = "",
-      failJournalOpen: Boolean = false
+      failJournalOpen: Boolean = false,
+      slippage: BigDecimal = Trading.defaultSlippage
   ):
     private val key = Array.fill[Byte](32)(1)
     val agent = OrderSigning.address(key)
     val owner = "0x" + "2" * 40
     val config = TradingConfig(
       owner = Option.when(missing != "owner")(owner),
-      agent = Option.when(missing != "agent")(agent)
+      agent = Option.when(missing != "agent")(agent),
+      slippage = slippage
     )
     val clock = new AtomicLong(10000L)
     // Wall time runs ahead of the monotonic clock by this step.
@@ -633,7 +635,9 @@ class TradingWorkerSpec extends TempDirectorySuite:
         BigDecimal(100),
         BigDecimal(0),
         buy,
-        f.config.sizes
+        f.config.sizes,
+        1,
+        f.config.slippage
       )
       .toOption
       .get
@@ -1139,7 +1143,10 @@ class TradingWorkerSpec extends TempDirectorySuite:
   test("view mode has previews without protected key access or submissions") {
     val f = new Fixture(enabled = false)
     try
-      Wait.until("metadata missing")(f.worker.view.rules.nonEmpty)
+      Wait.until("metadata, leverage or position missing")(
+        f.worker.view.rules.nonEmpty && f.worker.view.leverage.nonEmpty &&
+          f.worker.view.position.nonEmpty
+      )
       assert(f.worker.preview(buy).isRight)
       assert(!f.worker.submit(buy, "XMR"))
       assertEquals(f.loads.get(), 0)
@@ -1192,7 +1199,10 @@ class TradingWorkerSpec extends TempDirectorySuite:
   test("an equal-time fuller book replaces a short exact book") {
     val f = new Fixture(enabled = false)
     try
-      Wait.until("metadata missing")(f.worker.view.rules.nonEmpty)
+      Wait.until("metadata, leverage or position missing")(
+        f.worker.view.rules.nonEmpty && f.worker.view.leverage.nonEmpty &&
+          f.worker.view.position.nonEmpty
+      )
       f.worker.observe(
         Event.BookUpdate(
           "XMR",
@@ -1215,9 +1225,10 @@ class TradingWorkerSpec extends TempDirectorySuite:
           false
         )
       )
+      // Five times $500 at $100 asks for 25. Only the fuller book shows 21 of it.
       assertEquals(
         f.worker.preview(buy).toOption.get.estimatedQuantity,
-        BigDecimal("5")
+        BigDecimal("21")
       )
     finally f.close()
   }
@@ -2330,6 +2341,71 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
+  test("live needs five times leverage on every market and names the selected market") {
+    val f = new Fixture()
+    try
+      f.ready()
+      assertEquals(f.worker.view.leverage, Some(5))
+      assertEquals(f.worker.view.block, None)
+      // The account holds BTC at 40, inside the BTC market limit.
+      f.leverage = 40
+      f.worker.select("BTC")
+      f.fresh(f.worker, coin = "BTC", time = 2000)
+      Wait.until("BTC account was not observed")(
+        f.worker.view.leverage.contains(40) && f.worker.view.position.nonEmpty
+      )
+      val view = f.worker.view
+      assertEquals(view.coin, "BTC")
+      assert(!view.ready)
+      assertEquals(view.block, Some("Set BTC leverage to 5x"))
+      assertEquals(view.blockCode, BlockCode.Leverage)
+      assert(!f.worker.submit(buy, "BTC"))
+      assertEquals(f.orderPosts.get(), 0)
+    finally f.close()
+  }
+
+  test("live plans with the observed leverage and the configured slippage") {
+    val f = new Fixture(slippage = BigDecimal("0.005"))
+    try
+      f.ready()
+      val long = f.worker.preview(buy).fold(reason => fail(reason), identity)
+      assertEquals(long.quantity, BigDecimal(25))
+      assertEquals(long.limit, BigDecimal("100.5"))
+      assertEquals(long.reduceOnly, false)
+      val short =
+        f.worker.preview(buy.copy(side = Side.Sell)).fold(reason => fail(reason), identity)
+      assertEquals(short.quantity, BigDecimal("25.002"))
+      assertEquals(short.limit, BigDecimal("99.491"))
+      val review = f.review()
+      assertEquals(review.plan, long)
+      assert(f.worker.submitReviewed(review))
+      assert(f.entered.await(3, TimeUnit.SECONDS))
+      val order = f.lastPost.get()("action")("orders")(0)
+      assertEquals(order("s").str, "25")
+      assertEquals(order("p").str, "100.5")
+    finally f.close()
+  }
+
+  test("every plan is refused while the account position is unknown") {
+    val gate = new CountDownLatch(1)
+    val f = new Fixture(beforeAccountRead = _ => gate.await())
+    try
+      Wait.until("leverage was not observed")(f.worker.view.leverage.contains(5))
+      assertEquals(f.worker.view.position, None)
+      for intent <- Vector(
+          OrderIntent(Side.Sell, OrderKind.Hard),
+          OrderIntent(Side.Buy, OrderKind.Hard),
+          OrderIntent(Side.Sell, OrderKind.Close),
+          OrderIntent(Side.Buy, OrderKind.Close)
+        )
+      do assertEquals(f.worker.preview(intent), Left("Position unknown"), intent)
+      assert(!f.worker.submit(OrderIntent(Side.Sell, OrderKind.Hard), "XMR"))
+      assertEquals(f.posts.get(), 0)
+    finally
+      gate.countDown()
+      f.close()
+  }
+
   test("XMR below five stays disabled without an account mutation") {
     val f = new Fixture(initialLeverage = 1, marketMaximum = 2)
     try
@@ -2396,7 +2472,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
         p.copy(estimatedQuantity = p.estimatedQuantity + 1),
         p.copy(estimatedValue = p.estimatedValue + 1),
         p.copy(average = None),
-        p.copy(positionAfter = p.positionAfter + 1)
+        p.copy(positionAfter = p.positionAfter + 1),
+        p.copy(reduceOnly = !p.reduceOnly)
       )
       changes.foreach { changed =>
         assert(

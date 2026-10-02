@@ -15,9 +15,21 @@ class TradingSpec extends munit.FunSuite:
       reference: String = "100",
       position: String = "0",
       amounts: TradeSizes = sizes,
-      market: MarketRules = rules
+      market: MarketRules = rules,
+      leverage: Int = 1,
+      slippage: BigDecimal = Trading.defaultSlippage
   ): Either[String, OrderPlan] =
-    Trading.plan("XMR", market, depth, d(reference), d(position), intent, amounts)
+    Trading.plan(
+      "XMR",
+      market,
+      depth,
+      d(reference),
+      d(position),
+      intent,
+      amounts,
+      leverage,
+      slippage
+    )
   private def accepted(value: Either[String, OrderPlan]): OrderPlan =
     value.fold(message => fail(message), identity)
   private val sellBook = book(
@@ -94,14 +106,14 @@ class TradingSpec extends munit.FunSuite:
       result(
         OrderIntent(Side.Sell, OrderKind.Hard),
         book(Vector("100" -> "1"), Vector("100.01" -> "20")),
-        position = "3"
+        position = "10"
       )
     )
     assertEquals(p.quantity, d("5"))
     assertEquals(p.estimatedQuantity, d("1"))
     assertEquals(p.estimatedValue, d("100"))
     assertEquals(p.average, Some(d("100")))
-    assertEquals(p.positionAfter, d("2"))
+    assertEquals(p.positionAfter, d("9"))
   }
 
   test("Hard can have zero visible fills without inventing an average or position change") {
@@ -109,39 +121,206 @@ class TradingSpec extends munit.FunSuite:
       result(
         OrderIntent(Side.Buy, OrderKind.Hard),
         book(asks = Vector("101" -> "20")),
-        position = "-3"
+        position = "-10"
       )
     )
     assertEquals(p.quantity, d("5"))
     assertEquals(p.estimatedQuantity, d("0"))
     assertEquals(p.estimatedValue, d("0"))
     assertEquals(p.average, None)
-    assertEquals(p.positionAfter, d("-3"))
+    assertEquals(p.positionAfter, d("-10"))
   }
 
   test("Best has no request without eligible visible quantity") {
     assert(result(OrderIntent(Side.Buy, OrderKind.Best), book(asks = Vector("101" -> "20"))).isLeft)
   }
 
-  test("Hard rounds requested quantity down without clamping to an opposite position") {
+  test("Hard rounds requested quantity down to the lot") {
     val depth = book(Vector("101" -> "20"), Vector("101.01" -> "20"))
-    val p = accepted(result(OrderIntent(Side.Sell, OrderKind.Hard), depth, "101", "1"))
+    val p = accepted(result(OrderIntent(Side.Sell, OrderKind.Hard), depth, "101"))
     assertEquals(p.quantity, d("4.950"))
-    assertEquals(p.positionAfter, d("-3.950"))
+    assertEquals(p.positionAfter, d("-4.950"))
     assert(p.quantity * p.reference <= sizes.small)
     assert((p.quantity + d("0.001")) * p.reference > sizes.small)
   }
 
-  test("visible fills reduce an opposite position before opening excess") {
-    for (side, depth, before, after) <- Vector(
-        (Side.Buy, book(), "-7", "-2"),
-        (Side.Buy, book(), "-3", "2"),
-        (Side.Sell, sellBook, "7", "2"),
-        (Side.Sell, sellBook, "3", "-2")
+  test("the opposite side reduces a position reduce only and stops at flat") {
+    for (side, depth, before, quantity, after) <- Vector(
+        (Side.Buy, book(), "-7", "5", "-2"),
+        (Side.Buy, book(), "-3", "3", "0"),
+        (Side.Sell, sellBook, "7", "5", "2"),
+        (Side.Sell, sellBook, "3", "3", "0")
       )
     do
       val p = accepted(result(OrderIntent(side, OrderKind.Hard), depth, position = before))
-      assertEquals(p.positionAfter, d(after))
+      assertEquals(p.reduceOnly, true, before)
+      assertEquals(p.quantity, d(quantity), before)
+      assertEquals(p.positionAfter, d(after), before)
+      assert(p.positionAfter.signum * d(before).signum >= 0, before)
+  }
+
+  test("a reduce at five times leverage is capped at the whole position") {
+    for (side, depth, before, quantity, after) <- Vector(
+        (Side.Sell, sellBook, "30", "25", "5"),
+        (Side.Sell, sellBook, "20", "20", "0"),
+        (Side.Buy, book(), "-30", "25", "-5"),
+        (Side.Buy, book(), "-20", "20", "0")
+      )
+    do
+      val p = accepted(
+        result(
+          OrderIntent(side, OrderKind.Hard),
+          depth.copy(
+            bids = depth.bids.map(_.copy(sz = "40")),
+            asks = depth.asks.map(_.copy(sz = "40"))
+          ),
+          position = before,
+          leverage = 5
+        )
+      )
+      assertEquals(p.reduceOnly, true, before)
+      assertEquals(p.quantity, d(quantity), before)
+      assertEquals(p.positionAfter, d(after), before)
+  }
+
+  test("the same side grows a position without reduce only") {
+    for (side, depth, before, after) <- Vector(
+        (Side.Buy, book(), "3", "8"),
+        (Side.Sell, sellBook, "-3", "-8"),
+        (Side.Buy, book(), "0", "5"),
+        (Side.Sell, sellBook, "0", "-5")
+      )
+    do
+      val p = accepted(result(OrderIntent(side, OrderKind.Hard), depth, position = before))
+      assertEquals(p.reduceOnly, false, before)
+      assertEquals(p.kind, OrderKind.Hard, before)
+      assertEquals(p.quantity, d("5"), before)
+      assertEquals(p.positionAfter, d(after), before)
+  }
+
+  test("Close exits the whole position on the side that faces it") {
+    for (side, depth, before) <- Vector(
+        (Side.Sell, sellBook, "7.5"),
+        (Side.Buy, book(), "-7.5")
+      )
+    do
+      val intent = OrderIntent(side, OrderKind.Close)
+      val p = accepted(result(intent, depth, position = before))
+      assertEquals(p.side, side)
+      assertEquals(p.kind, OrderKind.Close)
+      assertEquals(p.quantity, d("7.5"))
+      assertEquals(p.reduceOnly, true)
+      assertEquals(p.positionAfter, d("0"))
+      assertEquals(result(intent.copy(big = true), depth, position = before), Right(p))
+      assertEquals(result(intent, depth, position = before, leverage = 5), Right(p))
+  }
+
+  test("Close refuses a flat account and a side that does not face the position") {
+    for side <- Vector(Side.Buy, Side.Sell) do
+      assertEquals(
+        result(OrderIntent(side, OrderKind.Close), if side == Side.Buy then book() else sellBook),
+        Left("No position to close")
+      )
+    assertEquals(
+      result(OrderIntent(Side.Buy, OrderKind.Close), position = "2"),
+      Left("No position to close")
+    )
+    assertEquals(
+      result(OrderIntent(Side.Sell, OrderKind.Close), sellBook, position = "-2"),
+      Left("No position to close")
+    )
+  }
+
+  test("an opening order under ten dollars of position value is refused") {
+    val floor = Left("Requested order must reach ten dollars at the quote and limit")
+    val intent = OrderIntent(Side.Buy, OrderKind.Hard)
+    assertEquals(result(intent, amounts = sizes.copy(small = d("1.9")), leverage = 5), floor)
+    val p = accepted(result(intent, amounts = sizes.copy(small = d("2")), leverage = 5))
+    assertEquals(p.quantity, d("0.1"))
+    assertEquals(p.reduceOnly, false)
+  }
+
+  test("a reduce that would leave under ten dollars is planned as a Close of the whole position") {
+    for (side, depth, before) <- Vector(
+        (Side.Sell, sellBook, "5.05"),
+        (Side.Buy, book(), "-5.05")
+      )
+    do
+      val p = accepted(result(OrderIntent(side, OrderKind.Hard), depth, position = before))
+      assertEquals(p.kind, OrderKind.Close, before)
+      assertEquals(p.quantity, d("5.05"), before)
+      assertEquals(p.reduceOnly, true, before)
+      assertEquals(p.positionAfter, d("0"), before)
+    for (side, depth, before, after) <- Vector(
+        (Side.Sell, sellBook, "5.1", "0.1"),
+        (Side.Buy, book(), "-5.1", "-0.1")
+      )
+    do
+      val p = accepted(result(OrderIntent(side, OrderKind.Hard), depth, position = before))
+      assertEquals(p.kind, OrderKind.Hard, before)
+      assertEquals(p.quantity, d("5"), before)
+      assertEquals(p.reduceOnly, true, before)
+      assertEquals(p.positionAfter, d(after), before)
+  }
+
+  test("a Close under ten dollars is planned") {
+    val close =
+      accepted(result(OrderIntent(Side.Sell, OrderKind.Close), sellBook, position = "0.05"))
+    assertEquals(close.kind, OrderKind.Close)
+    assertEquals(close.quantity, d("0.05"))
+    assertEquals(close.reduceOnly, true)
+    val reduce =
+      accepted(result(OrderIntent(Side.Sell, OrderKind.Hard), sellBook, position = "0.05"))
+    assertEquals(reduce, close)
+  }
+
+  test("leverage multiplies the amount into the position value") {
+    val depth = book(Vector("499.99" -> "20"), Vector("500" -> "20"))
+    val market = MarketRules(7, 2, 5)
+    val amounts = sizes.copy(small = d("20"))
+    val intent = OrderIntent(Side.Buy, OrderKind.Hard)
+    val five =
+      accepted(result(intent, depth, "500", amounts = amounts, market = market, leverage = 5))
+    assertEquals(five.quantity, d("0.2"))
+    val one = accepted(result(intent, depth, "500", amounts = amounts, market = market))
+    assertEquals(one.quantity, d("0.04"))
+    val big = accepted(result(intent.copy(big = true), leverage = 5))
+    assertEquals(big.quantity, d("50"))
+  }
+
+  test("leverage outside one to the market limit is refused") {
+    val intent = OrderIntent(Side.Buy, OrderKind.Hard)
+    for leverage <- Vector(0, -1, 6) do
+      assertEquals(
+        result(intent, leverage = leverage),
+        Left("Leverage is outside the market limit"),
+        leverage
+      )
+    assert(result(intent, leverage = 5).isRight)
+    assertEquals(
+      result(intent, market = rules.copy(maxLeverage = 40), leverage = 41),
+      Left("Leverage is outside the market limit")
+    )
+  }
+
+  test("the limit moves the quote by the configured slippage and rounds inward") {
+    val depth = book(Vector("123.44" -> "20"), Vector("123.45" -> "20"))
+    val slippage = d("0.002")
+    val buy =
+      accepted(result(OrderIntent(Side.Buy, OrderKind.Hard), depth, "123.45", slippage = slippage))
+    val sell =
+      accepted(result(OrderIntent(Side.Sell, OrderKind.Hard), depth, "123.44", slippage = slippage))
+    assertEquals(buy.limit, d("123.69"))
+    assertEquals(sell.limit, d("123.2"))
+    val close = accepted(
+      result(
+        OrderIntent(Side.Sell, OrderKind.Close),
+        sellBook,
+        position = "2",
+        slippage = d("0.005")
+      )
+    )
+    assertEquals(close.limit, d("99.5"))
   }
 
   test("Target sums exact visible levels and reports their weighted average") {
@@ -296,7 +475,11 @@ class TradingSpec extends munit.FunSuite:
     assert(result(intent, reference = "0").isLeft)
     assert(result(intent, reference = "100.001").isLeft)
     assert(result(intent, position = "0.0001").isLeft)
-    assert(Trading.plan("", rules, book(), d("100"), d("0"), intent, sizes).isLeft)
+    assert(
+      Trading
+        .plan("", rules, book(), d("100"), d("0"), intent, sizes, 1, Trading.defaultSlippage)
+        .isLeft
+    )
   }
 
   test("an order below ten dollars is rejected even when it only reduces a position") {
@@ -304,7 +487,7 @@ class TradingSpec extends munit.FunSuite:
       result(
         OrderIntent(Side.Sell, OrderKind.Hard),
         sellBook,
-        position = "0.05",
+        position = "1",
         amounts = sizes.copy(small = d("5"))
       ).isLeft
     )
@@ -390,7 +573,9 @@ class TradingSpec extends munit.FunSuite:
         view.reference(intent.side).get,
         BigDecimal(1),
         intent,
-        TradeSizes()
+        TradeSizes(),
+        1,
+        Trading.defaultSlippage
       )
     val initial = Some(Side.Buy -> view.reference(Side.Buy).get)
     assertEquals(Trading.displayExact(initial.get._2), "1e100")
@@ -431,7 +616,9 @@ class TradingSpec extends munit.FunSuite:
           view.reference(intent.side).get,
           BigDecimal(1),
           intent,
-          TradeSizes()
+          TradeSizes(),
+          1,
+          Trading.defaultSlippage
         )
       val intent = OrderIntent(Side.Buy, OrderKind.Target, target = target.map(_._2))
       assertEquals(preview(intent), Left("Book contains an invalid number"))
@@ -466,7 +653,9 @@ class TradingSpec extends munit.FunSuite:
             view.reference(intent.side).get,
             BigDecimal(1),
             intent,
-            sizes
+            sizes,
+            1,
+            Trading.defaultSlippage
           )
         val reason = preview(
           OrderIntent(direction, OrderKind.Target, target = target.map(_._2))

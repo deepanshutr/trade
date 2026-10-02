@@ -614,7 +614,9 @@ class KeyNamesSpec extends TempDirectorySuite:
         BigDecimal(100),
         BigDecimal(0),
         OrderIntent(Side.Buy, OrderKind.Hard),
-        TradeSizes()
+        TradeSizes(),
+        1,
+        Trading.defaultSlippage
       )
       .toOption
       .get

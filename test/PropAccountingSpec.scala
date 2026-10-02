@@ -20,7 +20,8 @@ class PropAccountingSpec extends TempDirectorySuite:
       quantity,
       quantity * price,
       Some(price),
-      BigDecimal(0)
+      BigDecimal(0),
+      false
     )
 
   private def temporary[A](body: Path => A): A =

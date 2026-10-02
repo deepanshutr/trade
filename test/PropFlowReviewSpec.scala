@@ -340,7 +340,9 @@ class PropFlowReviewSpec extends TempDirectorySuite:
           BigDecimal(f.latest.asks.head.px),
           f.route.view.position.get,
           intent,
-          f.config.sizes
+          f.config.sizes,
+          1,
+          f.config.slippage
         )
         .toOption
         .get

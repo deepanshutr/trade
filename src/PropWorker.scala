@@ -190,7 +190,9 @@ final class PropWorker(
               touch.get.quote(intent.side),
               position,
               intent,
-              config.sizes
+              config.sizes,
+              1,
+              config.slippage
             )
             .map(plan =>
               if intent.side == Side.Sell then plan.copy(quantity = plan.quantity.min(position))

@@ -67,7 +67,8 @@ class UiBoundarySpec extends munit.FunSuite:
     BigDecimal(5),
     BigDecimal(500),
     Some(BigDecimal(100)),
-    BigDecimal(5)
+    BigDecimal(5),
+    false
   )
   private val view = TradingView(
     "XMR",

@@ -10,7 +10,7 @@ class StorageReviewSpec extends TempDirectorySuite:
   private def plan(side: Side, quantity: String, price: String): OrderPlan =
     val q = BigDecimal(quantity)
     val p = BigDecimal(price)
-    OrderPlan("XMR", 0, side, OrderKind.Hard, q, p, p, q, q * p, Some(p), BigDecimal(0))
+    OrderPlan("XMR", 0, side, OrderKind.Hard, q, p, p, q, q * p, Some(p), BigDecimal(0), false)
 
   private def actualBytes(directory: Path): Long =
     val paths = Files.list(directory)

@@ -29,7 +29,9 @@ class InteractionSpec extends munit.FunSuite:
           ready.reference(order.side).get,
           BigDecimal(0),
           order,
-          TradeSizes()
+          TradeSizes(),
+          1,
+          Trading.defaultSlippage
         ),
       order => { sent :+= order; view = view.copy(ready = false, pending = true); true },
       mode => { modes :+= mode; Right(()) }

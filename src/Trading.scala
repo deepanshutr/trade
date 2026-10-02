@@ -3,7 +3,7 @@ package desk
 import java.math.{MathContext, RoundingMode}
 
 enum OrderKind:
-  case Hard, Best, Target
+  case Hard, Best, Target, Close
 
 final case class MarketRules(asset: Int, szDecimals: Int, maxLeverage: Int)
 
@@ -31,11 +31,14 @@ final case class OrderPlan(
     estimatedQuantity: BigDecimal,
     estimatedValue: BigDecimal,
     average: Option[BigDecimal],
-    positionAfter: BigDecimal
+    positionAfter: BigDecimal,
+    reduceOnly: Boolean
 )
 
 object Trading:
+  val defaultSlippage: BigDecimal = BigDecimal("0.001")
   private val zero = BigDecimal("0")
+  private val one = BigDecimal("1")
   private val ten = BigDecimal("10")
   private val averageContext = new MathContext(34, RoundingMode.HALF_EVEN)
   private final case class Quote(price: BigDecimal, quantity: BigDecimal)
@@ -176,14 +179,15 @@ object Trading:
   private def limitFor(
       intent: OrderIntent,
       reference: BigDecimal,
-      rules: MarketRules
+      rules: MarketRules,
+      slippage: BigDecimal
   ): Either[String, BigDecimal] =
     if intent.kind == OrderKind.Target then
       intent.target.filter(validPrice(_, rules)).toRight("Select a valid target price")
     else if intent.target.nonEmpty then Left("Only Target uses a selected price")
     else
       val buy = intent.side == Side.Buy
-      val raw = multiply(reference, BigDecimal(if buy then "1.001" else "0.999"))
+      val raw = multiply(reference, if buy then add(one, slippage) else subtract(one, slippage))
       boundary(raw, rules, up = !buy, strict = intent.kind == OrderKind.Best)
         .toRight("No valid price fits the selected boundary")
 
@@ -241,13 +245,21 @@ object Trading:
       reference: BigDecimal,
       position: BigDecimal,
       intent: OrderIntent,
-      sizes: TradeSizes
+      sizes: TradeSizes,
+      leverage: Int,
+      slippage: BigDecimal
   ): Either[String, OrderPlan] =
+    // A press against the open side only shrinks the position. It is sent reduce only.
+    val reducing = position.signum == (if intent.side == Side.Buy then -1 else 1)
     for
       _ <- check(coin.nonEmpty, "Select a market")
       _ <- check(
         rules.asset >= 0 && validDecimals(rules) && rules.maxLeverage >= 1,
         "Market rules contain invalid asset, precision or leverage limits"
+      )
+      _ <- check(
+        leverage >= 1 && leverage <= rules.maxLeverage,
+        "Leverage is outside the market limit"
       )
       _ <- check(
         sizes.small > zero && sizes.big >= sizes.small && sizes.target > zero,
@@ -258,20 +270,24 @@ object Trading:
         position.bigDecimal.stripTrailingZeros().scale() <= rules.szDecimals,
         "Position does not match market precision"
       )
+      _ <- check(intent.kind != OrderKind.Close || reducing, "No position to close")
       bids <- levels(book.bids, rules, ascending = false)
       asks <- levels(book.asks, rules, ascending = true)
       _ <- check(bids.head.price < asks.head.price, "Book sides cross")
-      limit <- limitFor(intent, reference, rules)
+      limit <- limitFor(intent, reference, rules, slippage)
       lot = power(-rules.szDecimals)
       side = if intent.side == Side.Buy then asks else bids
       eligible = side.takeWhile(q =>
         if intent.side == Side.Buy then q.price <= limit else q.price >= limit
       )
       available = eligible.foldLeft(zero)((sum, q) => add(sum, q.quantity))
-      dollars =
+      // An amount is the money put up. The position value is the amount times the leverage.
+      dollars = multiply(
         if intent.kind == OrderKind.Target then sizes.target
         else if intent.big then sizes.big
-        else sizes.small
+        else sizes.small,
+        BigDecimal(leverage)
+      )
       cap = quantityFor(dollars, reference.max(limit), lot)
       reachesTarget =
         if intent.side == Side.Buy then limit <= side.last.price else limit >= side.last.price
@@ -279,14 +295,20 @@ object Trading:
         intent.kind != OrderKind.Target || reachesTarget || available >= cap,
         "Target extends beyond the known exact book"
       )
-      quantity = intent.kind match
+      requested = intent.kind match
         case OrderKind.Hard => quantityFor(dollars, reference, lot)
         case OrderKind.Best =>
           available.min(cap).min(quantityFor(dollars, reference, lot, strict = true))
         case OrderKind.Target => available.min(cap)
-      _ <- check(quantity > zero, "No visible quantity fits this order")
+        case OrderKind.Close  => position.abs
+      _ <- check(requested > zero, "No visible quantity fits this order")
+      // A reduce that would leave under ten dollars at the quote closes the whole position.
+      // This also stops every reduce at flat.
+      closing = reducing && multiply(subtract(position.abs, requested), reference) < ten
+      quantity = if closing then position.abs else requested
+      kind = if closing then OrderKind.Close else intent.kind
       _ <- check(
-        multiply(quantity, reference.min(limit)) >= ten,
+        kind == OrderKind.Close || multiply(quantity, reference.min(limit)) >= ten,
         "Requested order must reach ten dollars at the quote and limit"
       )
       estimate = walk(eligible, quantity)
@@ -299,12 +321,13 @@ object Trading:
       coin,
       rules.asset,
       intent.side,
-      intent.kind,
+      kind,
       quantity,
       limit,
       reference,
       filled,
       value,
       average,
-      after
+      after,
+      reducing
     )
