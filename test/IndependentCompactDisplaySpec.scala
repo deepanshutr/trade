@@ -144,7 +144,7 @@ class IndependentCompactDisplaySpec extends munit.FunSuite:
           assert(
             !plain.drop(1).exists(_.startsWith(if selected == "BTC" then "BTC " else "PAXG ("))
           )
-        assert(plain(rows - 15).contains("PAPER " + selected))
+        assert(plain(rows - 15).contains("PROP " + selected))
         assertEquals(plain.size, rows)
         assert(plain.forall(_.length == cols))
     }

@@ -3,21 +3,21 @@ package desk
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-class PaperBackupSpec extends TempDirectorySuite:
+class PropBackupSpec extends TempDirectorySuite:
 
   private final class Fixture:
     val now = new AtomicLong(1800000000000L)
     val rest = new Rest:
       def post(body: String): Option[String] =
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
-    val ledger = PaperLedger.open(
+    val ledger = PropLedger.open(
       tempDirectory("backup-"),
       "mainnet",
       BigDecimal(10000),
       BigDecimal(0)
     )
     val worker =
-      new PaperWorker(TradingConfig(), "XMR", ledger, rest, () => now.get(), () => now.get())
+      new PropWorker(TradingConfig(), "XMR", ledger, rest, () => now.get(), () => now.get())
     worker.start()
     Wait.until("metadata was not loaded")(worker.view.rules.nonEmpty)
     def book(time: Long = now.get(), market: String = "XMR", socket: Boolean = false): Unit =
@@ -85,21 +85,21 @@ class PaperBackupSpec extends TempDirectorySuite:
     val f = new Fixture
     try
       f.book()
-      assertEquals(f.worker.view.message, "Paper ready: backup prices")
+      assertEquals(f.worker.view.message, "Prop ready: backup prices")
       f.worker.observe(Event.SocketUp)
       assert(f.worker.view.ready)
-      assertEquals(f.worker.view.message, "Paper ready: backup prices")
+      assertEquals(f.worker.view.message, "Prop ready: backup prices")
       f.now.incrementAndGet()
       f.book(socket = true)
-      assertEquals(f.worker.view.message, "Paper ready")
+      assertEquals(f.worker.view.message, "Prop ready")
       f.book(f.now.get() - 1)
-      assertEquals(f.worker.view.message, "Paper ready")
+      assertEquals(f.worker.view.message, "Prop ready")
       f.now.incrementAndGet()
       f.book()
-      assertEquals(f.worker.view.message, "Paper ready: backup prices")
+      assertEquals(f.worker.view.message, "Prop ready: backup prices")
       f.worker.observe(Event.SocketDown)
       assert(f.worker.view.ready)
-      assertEquals(f.worker.view.message, "Paper ready: backup prices")
+      assertEquals(f.worker.view.message, "Prop ready: backup prices")
       assertEquals(f.ledger.account.count, 0L)
     finally f.worker.close()
   }
@@ -136,18 +136,18 @@ class PaperBackupSpec extends TempDirectorySuite:
       else
         reads += 1
         if reads == 1 then now - 1 else now
-    val ledger = PaperLedger.open(
+    val ledger = PropLedger.open(
       tempDirectory("backup-clock-step"),
       "mainnet",
-      config.paperBalance,
-      config.paperFee
+      config.propBalance,
+      config.propFee
     )
     val rest = new Rest:
       def post(body: String): Option[String] = fail("unexpected metadata request")
     val metadata = ujson.read(
       """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}"""
     )
-    val worker = new PaperWorker(
+    val worker = new PropWorker(
       config,
       "XMR",
       ledger,
@@ -172,7 +172,7 @@ class PaperBackupSpec extends TempDirectorySuite:
       previewing = true
       assertEquals(
         worker.preview(OrderIntent(Side.Buy, OrderKind.Hard)),
-        Left("Paper prices stale. Waiting for fresh depth")
+        Left("Prop prices stale. Waiting for fresh depth")
       )
       assertEquals(reads, 1)
       assertEquals(ledger.account.count, 0L)

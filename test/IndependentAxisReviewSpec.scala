@@ -43,7 +43,7 @@ class IndependentAxisReviewSpec extends munit.FunSuite:
     Workspace.draw(
       state,
       view,
-      PanelView(mode = "PAPER", outlook = outlook(price)),
+      PanelView(mode = "PROP", outlook = outlook(price)),
       100,
       30,
       now,

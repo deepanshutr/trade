@@ -65,7 +65,7 @@ class MarketSelectionSpec extends munit.FunSuite:
         f.state.get().marketNotice,
         Some("Colon markets are not supported. Press m to retry")
       )
-      for flags <- Vector(Seq.empty, Seq("--paper"), Seq("--trade"), Seq("--record")) do
+      for flags <- Vector(Seq.empty, Seq("--prop"), Seq("--trade"), Seq("--record")) do
         assertEquals(
           Main.parseArgs(Seq("xyz:TSLA") ++ flags).swap.toOption,
           Some("Colon markets are not supported.")
@@ -245,7 +245,7 @@ class MarketSelectionSpec extends munit.FunSuite:
     var previews = 0
     var sends = 0
     val controller = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => 1000L,
       _ => { previews += 1; Left("must not preview") },
       _ => { sends += 1; true },
@@ -315,7 +315,7 @@ class MarketSelectionSpec extends munit.FunSuite:
     val frame = Workspace.draw(
       snapshot,
       view,
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       100,
       30,
       1000L,

@@ -15,13 +15,13 @@ class MarketNamesSpec extends TempDirectorySuite:
     intercept[IllegalArgumentException](Exchange.market(listed, "../x"))
   }
 
-  test("paper becomes ready for a listed mixed-case market with fresh prices") {
+  test("prop becomes ready for a listed mixed-case market with fresh prices") {
     val now = 1800000000000L
     val directory = tempDirectory("desk-market-names")
     val rest = new Rest:
       def post(body: String): Option[String] = Some(meta)
-    val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(10000), BigDecimal(0))
-    val worker = new PaperWorker(TradingConfig(), "kPEPE", ledger, rest, () => now, () => now)
+    val ledger = PropLedger.open(directory, "mainnet", BigDecimal(10000), BigDecimal(0))
+    val worker = new PropWorker(TradingConfig(), "kPEPE", ledger, rest, () => now, () => now)
     try
       worker.start()
       worker.observe(Event.SocketUp)
@@ -34,7 +34,7 @@ class MarketNamesSpec extends TempDirectorySuite:
       )
       val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
       while !worker.view.ready && System.nanoTime() < deadline do Thread.sleep(5)
-      assertEquals(worker.view.message, "Paper ready")
+      assertEquals(worker.view.message, "Prop ready")
       assert(worker.view.ready)
       assertEquals(worker.view.rules, Some(MarketRules(0, 0, 10)))
     finally worker.close()

@@ -2,15 +2,15 @@ package desk
 
 import java.nio.file.Files
 
-class PaperSpec extends TempDirectorySuite:
+class PropSpec extends TempDirectorySuite:
   private def plan(side: Side, quantity: String, price: String): OrderPlan =
     val q = BigDecimal(quantity)
     val p = BigDecimal(price)
     OrderPlan("XMR", 0, side, OrderKind.Hard, q, p, p, q, q * p, Some(p), BigDecimal(0))
 
-  test("paper fills charge fees and persist cash, average entry and realized outcome") {
-    val directory = tempDirectory("desk-paper-test")
-    val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
+  test("prop fills charge fees and persist cash, average entry and realized outcome") {
+    val directory = tempDirectory("desk-prop-test")
+    val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
       assert(ledger.fill(plan(Side.Buy, "2", "100"), 1000L).isRight)
       assertEquals(ledger.account.cash, BigDecimal("799.8"))
@@ -21,7 +21,7 @@ class PaperSpec extends TempDirectorySuite:
       assertEquals(ledger.account.positions("XMR").quantity, BigDecimal(1))
       assertEquals(ledger.account.positions("XMR").entry, BigDecimal(100))
     finally ledger.close()
-    val reopened = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
+    val reopened = PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
       assertEquals(reopened.account.cash, BigDecimal("909.69"))
       assertEquals(reopened.account.orders.size, 2)
@@ -29,8 +29,8 @@ class PaperSpec extends TempDirectorySuite:
   }
 
   test("partial fills use actual depth quantity and reject excess exposure without mutation") {
-    val ledger = PaperLedger.open(
-      tempDirectory("desk-paper-test"),
+    val ledger = PropLedger.open(
+      tempDirectory("desk-prop-test"),
       "testnet",
       BigDecimal(1000),
       BigDecimal("0.001")
@@ -60,18 +60,18 @@ class PaperSpec extends TempDirectorySuite:
     finally ledger.close()
   }
 
-  test("paper account refuses a second writer and corruption never resets a balance") {
-    val directory = tempDirectory("desk-paper-test")
-    val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
+  test("prop account refuses a second writer and corruption never resets a balance") {
+    val directory = tempDirectory("desk-prop-test")
+    val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
       intercept[Exception](
-        PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
+        PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
       )
       assert(ledger.fill(plan(Side.Buy, "1", "100"), 1000L).isRight)
     finally ledger.close()
     Files.writeString(directory.resolve("wallet-mainnet.json"), "broken")
     intercept[Exception](
-      PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
+      PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     )
     assertEquals(Files.readString(directory.resolve("wallet-mainnet.json")), "broken")
   }

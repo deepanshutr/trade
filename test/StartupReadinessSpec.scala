@@ -19,8 +19,8 @@ class StartupReadinessSpec extends TempDirectorySuite:
         else Some("""{"universe":[{"name":"XMR","szDecimals":3,"maxLeverage":5}]}""")
     val directory = temporary("ledger-")
     val config = TradingConfig()
-    val ledger = PaperLedger.open(directory, "mainnet", config.paperBalance, config.paperFee)
-    val worker = new PaperWorker(config, "XMR", ledger, rest, () => at, () => at)
+    val ledger = PropLedger.open(directory, "mainnet", config.propBalance, config.propFee)
+    val worker = new PropWorker(config, "XMR", ledger, rest, () => at, () => at)
     worker.observe(Event.SocketUp)
     worker.observe(
       Event.BookUpdate(
@@ -232,7 +232,7 @@ class StartupReadinessSpec extends TempDirectorySuite:
       while router.view.rules.isEmpty && System.nanoTime() < acceptedBy do Thread.sleep(5L)
       assert(router.view.rules.nonEmpty, "initial read-only worker did not accept metadata")
       router.observe(Event.SocketUp)
-      assert(router.switchMode("PAPER").isRight)
+      assert(router.switchMode("PROP").isRight)
       router.observe(
         Event.BookUpdate(
           "XMR",

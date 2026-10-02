@@ -4,11 +4,11 @@ import java.time.ZoneOffset
 
 class OpenProfitSpec extends munit.FunSuite:
   private val now = 1_800_000_000_000L
-  private val held = PaperAccount(
+  private val held = PropAccount(
     cash = BigDecimal("9519.75"),
     realized = BigDecimal(20),
     fees = BigDecimal("0.25"),
-    positions = Map("XMR" -> PaperPosition(5, 100)),
+    positions = Map("XMR" -> PropPosition(5, 100)),
     deposit = BigDecimal(10000)
   )
 
@@ -16,7 +16,7 @@ class OpenProfitSpec extends munit.FunSuite:
     val frame = Workspace.draw(
       Snapshot.initial("XMR", now),
       TradingView("XMR", message = "Ready", portfolio = portfolio),
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       cols,
       rows,
       now,
@@ -29,32 +29,32 @@ class OpenProfitSpec extends munit.FunSuite:
 
   test("open gains exclude previous sales while total net retains them and fees") {
     for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
-      val text = row(PortfolioView.paper(held, "XMR", Some(102)), cols, rows)
+      val text = row(PortfolioView.prop(held, "XMR", Some(102)), cols, rows)
       assert(text.contains("Open P&L $10"), text)
       assert(text.contains("Net P&L $29.75"), text)
   }
 
   test("an open loss remains negative while earlier realized gains keep total net positive") {
-    val text = row(PortfolioView.paper(held, "XMR", Some(98)))
+    val text = row(PortfolioView.prop(held, "XMR", Some(98)))
     assert(text.contains("Open P&L $-10"), text)
     assert(text.contains("Net P&L $9.75"), text)
   }
 
   test("closing the holding resets open profit and keeps the total result") {
     val closed = held.copy(cash = BigDecimal("10019.75"), positions = Map.empty)
-    val text = row(PortfolioView.paper(closed, "XMR", None))
+    val text = row(PortfolioView.prop(closed, "XMR", None))
     assert(text.contains("Open P&L $0"), text)
     assert(text.contains("Net P&L $19.75"), text)
   }
 
   test("a missing mark never invents an open or total result for held tokens") {
-    val text = row(PortfolioView.paper(held, "XMR", None))
+    val text = row(PortfolioView.prop(held, "XMR", None))
     assert(text.contains("Open P&L --"), text)
     assert(text.contains("Net P&L --"), text)
   }
 
   test("another market has no selected holding and cannot show the previous market profit") {
-    val text = row(PortfolioView.paper(held, "BTC", Some(100)))
+    val text = row(PortfolioView.prop(held, "BTC", Some(100)))
     assert(text.contains("Open P&L $0"), text)
     assert(text.contains("Net P&L --"), text)
   }

@@ -321,12 +321,12 @@ object Workspace:
         case Some(name) =>
           line(
             tradeTop + 12,
-            if name == "LIVE" then "LIVE: one click sends real orders" else "Use simulated trading?"
+            if name == "LIVE" then "LIVE: one click sends real orders" else "Use prop trading?"
           )
           button(tradeTop + 13, 0, "Enter " + name, DeskAction.ConfirmMode(name), !view.pending)
           button(tradeTop + 13, 17, "Esc Cancel", DeskAction.Cancel)
         case None => ()
-      button(rows - 1, 0, "p Paper", DeskAction.Mode("PAPER"), choosing)
+      button(rows - 1, 0, "p Prop", DeskAction.Mode("PROP"), choosing)
       button(rows - 1, 10, "l Live", DeskAction.Mode("LIVE"), choosing)
       right(rows - 1) =
         right(rows - 1).padTo(20, ' ') + "m Market c Chart v " + (if panel.muted then "Muted"

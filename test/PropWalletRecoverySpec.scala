@@ -2,9 +2,9 @@ package desk
 
 import java.nio.file.{Files, Path}
 
-class PaperWalletRecoverySpec extends TempDirectorySuite:
+class PropWalletRecoverySpec extends TempDirectorySuite:
   private def savedWallet(directory: Path): Path =
-    val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
+    val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     val plan = OrderPlan("XMR", 0, Side.Buy, OrderKind.Hard, 1, 100, 100, 1, 100, Some(100), 1)
     try assert(ledger.fill(plan, 1800000000000L).isRight)
     finally ledger.close()
@@ -21,11 +21,11 @@ class PaperWalletRecoverySpec extends TempDirectorySuite:
       LocalFiles.write(legacyPath, legacy)
       val oldLock = LocalFiles.lock(directory.resolve("paper-mainnet.lock"))
       try
-        val wallet = PaperLedger.open(directory, "mainnet", BigDecimal(500), BigDecimal(0))
+        val wallet = PropLedger.open(directory, "mainnet", BigDecimal(500), BigDecimal(0))
         try
-          assertEquals(wallet.account, PaperAccount(BigDecimal(500), deposit = BigDecimal(500)))
+          assertEquals(wallet.account, PropAccount(BigDecimal(500), deposit = BigDecimal(500)))
           intercept[Exception](
-            PaperLedger.open(directory, "mainnet", BigDecimal(900), BigDecimal(0))
+            PropLedger.open(directory, "mainnet", BigDecimal(900), BigDecimal(0))
           )
           assertEquals(Files.readString(legacyPath), legacy)
         finally wallet.close()
@@ -43,7 +43,7 @@ class PaperWalletRecoverySpec extends TempDirectorySuite:
         LocalFiles.write(path, bytes)
         for _ <- 0 until 2 do
           intercept[Exception](
-            PaperLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+            PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
           )
           assertEquals(Files.readString(path), bytes)
         val released = LocalFiles.lock(directory.resolve("wallet-mainnet.lock"))
@@ -60,7 +60,7 @@ class PaperWalletRecoverySpec extends TempDirectorySuite:
         val bytes = ujson.write(damaged)
         LocalFiles.write(path, bytes)
         intercept[Exception](
-          PaperLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+          PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
         )
         assertEquals(Files.readString(path), bytes)
       }
@@ -89,7 +89,7 @@ class PaperWalletRecoverySpec extends TempDirectorySuite:
         LocalFiles.write(path, saved)
         for _ <- 0 until 2 do
           intercept[IllegalArgumentException](
-            PaperLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+            PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
           )
           assertEquals(Files.readString(path), saved)
         val released = LocalFiles.lock(directory.resolve("wallet-mainnet.lock"))

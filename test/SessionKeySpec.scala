@@ -207,7 +207,7 @@ class SessionKeySpec extends TempDirectorySuite:
     try
       route.start()
       Wait.until("the first live worker never took the key")(handed.size() == 1)
-      assert(route.switchMode("PAPER").isRight)
+      assert(route.switchMode("PROP").isRight)
       assert(route.switchMode("LIVE").isRight)
       Wait.until("the second live worker never took the key")(handed.size() == 2)
       assertEquals(reads.get(), 1)

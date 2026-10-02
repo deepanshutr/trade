@@ -39,7 +39,7 @@ final case class PortfolioView(
     }
 
 object PortfolioView:
-  def paper(account: PaperAccount, coin: String, mark: Option[BigDecimal]): PortfolioView =
+  def prop(account: PropAccount, coin: String, mark: Option[BigDecimal]): PortfolioView =
     val held = account.positions.get(coin)
     val price = mark.filter(_ > 0)
     val exposure = held.fold(Option(BigDecimal(0)))(p =>

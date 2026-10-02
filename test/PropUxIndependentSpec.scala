@@ -3,27 +3,27 @@ package desk
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong, AtomicReference}
 
-class PaperUxIndependentSpec extends munit.FunSuite:
+class PropUxIndependentSpec extends munit.FunSuite:
   private val epoch = 1800000000000L
 
   private def openLedger(
-      initial: PaperAccount,
+      initial: PropAccount,
       fee: BigDecimal,
-      save: PaperAccount => Unit
-  ): PaperLedger =
-    new PaperLedger(initial, fee, save, new AutoCloseable { def close(): Unit = () })
+      save: PropAccount => Unit
+  ): PropLedger =
+    new PropLedger(initial, fee, save, new AutoCloseable { def close(): Unit = () })
 
   private class Fixture(
-      initial: PaperAccount,
+      initial: PropAccount,
       fee: BigDecimal = BigDecimal("0.001"),
       size: BigDecimal = BigDecimal(500),
-      save: PaperAccount => Unit = _ => ()
+      save: PropAccount => Unit = _ => ()
   ):
     val clock = new AtomicLong(epoch)
     val writes = new AtomicInteger(0)
     val ledger = openLedger(initial, fee, next => { save(next); writes.incrementAndGet(); () })
     val config = TradingConfig().copy(sizes = TradeSizes(size, size, size))
-    val worker = new PaperWorker(
+    val worker = new PropWorker(
       config,
       "XMR",
       ledger,
@@ -70,31 +70,31 @@ class PaperUxIndependentSpec extends munit.FunSuite:
         !worker.view.pending && worker.view.outcome.nonEmpty
       )
     def orderThread: Thread =
-      val field = classOf[PaperWorker].getDeclaredFields.find(_.getName == "threads").get
+      val field = classOf[PropWorker].getDeclaredFields.find(_.getName == "threads").get
       field.setAccessible(true)
-      field.get(worker).asInstanceOf[Vector[Thread]].find(_.getName == "paper-orders").get
+      field.get(worker).asInstanceOf[Vector[Thread]].find(_.getName == "prop-orders").get
     def close(): Unit = worker.close()
 
   for side <- Vector(Side.Buy, Side.Sell) do
     test(side.toString + " cannot review an order without the required wallet balance") {
-      val f = new Fixture(PaperAccount(BigDecimal(500), deposit = BigDecimal(500)))
+      val f = new Fixture(PropAccount(BigDecimal(500), deposit = BigDecimal(500)))
       try
         if side == Side.Buy then f.open() else f.open("100", "100.01")
         val result = f.worker.preview(OrderIntent(side, OrderKind.Hard))
         assert(result.isLeft, result.toString)
         assert(result.swap.toOption.get.contains(if side == Side.Buy then "limit" else "No XMR"))
-        assertEquals(f.ledger.account, PaperAccount(BigDecimal(500), deposit = BigDecimal(500)))
+        assertEquals(f.ledger.account, PropAccount(BigDecimal(500), deposit = BigDecimal(500)))
         assertEquals(f.writes.get(), 0)
       finally f.close()
     }
 
     test(side.toString + " affordable partial uses actual fees and preserves requested quantity") {
-      val initial = PaperAccount(
+      val initial = PropAccount(
         BigDecimal(100),
         deposit = if side == Side.Buy then BigDecimal(100) else BigDecimal(600),
         positions =
           if side == Side.Buy then Map.empty
-          else Map("XMR" -> PaperPosition(BigDecimal(5), BigDecimal(100)))
+          else Map("XMR" -> PropPosition(BigDecimal(5), BigDecimal(100)))
       )
       val f = new Fixture(initial)
       try
@@ -115,7 +115,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
         assertEquals(account.realized, BigDecimal(0))
         assertEquals(
           account.positions("XMR"),
-          PaperPosition(
+          PropPosition(
             if side == Side.Buy then BigDecimal("0.99") else BigDecimal("4.01"),
             BigDecimal(100)
           )
@@ -126,12 +126,12 @@ class PaperUxIndependentSpec extends munit.FunSuite:
     }
 
     test(side.toString + " fresh best quote excludes stale capacity and stale preview estimates") {
-      val initial = PaperAccount(
+      val initial = PropAccount(
         BigDecimal(200),
         deposit = if side == Side.Buy then BigDecimal(200) else BigDecimal(700),
         positions =
           if side == Side.Buy then Map.empty
-          else Map("XMR" -> PaperPosition(BigDecimal(5), BigDecimal(100)))
+          else Map("XMR" -> PropPosition(BigDecimal(5), BigDecimal(100)))
       )
       val f = new Fixture(initial)
       try
@@ -161,7 +161,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
         f.send(review)
         assertEquals(
           f.ledger.account.positions("XMR"),
-          PaperPosition(
+          PropPosition(
             if side == Side.Buy then BigDecimal(1) else BigDecimal(4),
             if side == Side.Buy then expectedPrice else BigDecimal(100)
           )
@@ -175,11 +175,11 @@ class PaperUxIndependentSpec extends munit.FunSuite:
     }
 
   test("a wallet with no stables can sell held tokens after a loss, but cannot spend absent cash") {
-    val initial = PaperAccount(
+    val initial = PropAccount(
       BigDecimal(0),
       deposit = BigDecimal(1000),
       positions = Map(
-        "XMR" -> PaperPosition(BigDecimal(10), BigDecimal(100))
+        "XMR" -> PropPosition(BigDecimal(10), BigDecimal(100))
       )
     )
     val f = new Fixture(initial, size = BigDecimal(80))
@@ -194,7 +194,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
       val account = f.ledger.account
       assertEquals(
         account.positions("XMR"),
-        PaperPosition(BigDecimal(9), BigDecimal(100))
+        PropPosition(BigDecimal(9), BigDecimal(100))
       )
       assertEquals(account.cash, BigDecimal("79.92"))
       assertEquals(account.realized, BigDecimal(-20))
@@ -208,11 +208,11 @@ class PaperUxIndependentSpec extends munit.FunSuite:
   }
 
   test("an oversized selected sell is capped at the held tokens") {
-    val initial = PaperAccount(
+    val initial = PropAccount(
       BigDecimal(100),
       deposit = BigDecimal(1100),
       positions = Map(
-        "XMR" -> PaperPosition(BigDecimal(10), BigDecimal(100))
+        "XMR" -> PropPosition(BigDecimal(10), BigDecimal(100))
       )
     )
     val f = new Fixture(initial, size = BigDecimal(1900))
@@ -221,18 +221,18 @@ class PaperUxIndependentSpec extends munit.FunSuite:
       val review = f.review(Side.Sell)
       assertEquals(review.plan.quantity, BigDecimal(10))
       f.send(review)
-      assertEquals(f.ledger.account.positions, Map.empty[String, PaperPosition])
+      assertEquals(f.ledger.account.positions, Map.empty[String, PropPosition])
       assertEquals(f.ledger.account.cash, BigDecimal(1099))
       assertEquals(f.writes.get(), 1)
     finally f.close()
   }
 
   test("closing a losing wallet holding returns its sale proceeds and removes its entry") {
-    val initial = PaperAccount(
+    val initial = PropAccount(
       BigDecimal(100),
       deposit = BigDecimal(1100),
       positions = Map(
-        "XMR" -> PaperPosition(BigDecimal(10), BigDecimal(100))
+        "XMR" -> PropPosition(BigDecimal(10), BigDecimal(100))
       )
     )
     val price = BigDecimal(80)
@@ -254,17 +254,17 @@ class PaperUxIndependentSpec extends munit.FunSuite:
       assert(ledger.check(plan, initial).isRight)
       assertEquals(ledger.account, initial)
       assert(ledger.fill(plan, epoch, Some(0L)).isRight)
-      assertEquals(ledger.account.positions, Map.empty[String, PaperPosition])
+      assertEquals(ledger.account.positions, Map.empty[String, PropPosition])
       assertEquals(ledger.account.cash, BigDecimal("899.2"))
       assertEquals(ledger.account.realized, BigDecimal(-200))
     finally ledger.close()
   }
 
   test("another held market is named before review and returning to it preserves the account") {
-    val initial = PaperAccount(
+    val initial = PropAccount(
       BigDecimal(1000),
       deposit = BigDecimal(1200),
-      positions = Map("XMR" -> PaperPosition(BigDecimal(2), BigDecimal(100)))
+      positions = Map("XMR" -> PropPosition(BigDecimal(2), BigDecimal(100)))
     )
     val f = new Fixture(initial)
     try
@@ -284,7 +284,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
 
   test("an intervening writer invalidates the captured account revision after fill calculation") {
     val f =
-      new Fixture(PaperAccount(BigDecimal(600), deposit = BigDecimal(600)), fee = BigDecimal(0))
+      new Fixture(PropAccount(BigDecimal(600), deposit = BigDecimal(600)), fee = BigDecimal(0))
     try
       f.open()
       val review = f.review(Side.Buy)
@@ -300,7 +300,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
         Wait.until("order did not reach the ledger writer lock")(
           f.orderThread.getState == Thread.State.BLOCKED &&
             f.orderThread.getStackTrace.exists(e =>
-              e.getClassName == "desk.PaperLedger" && e.getMethodName == "fill"
+              e.getClassName == "desk.PropLedger" && e.getMethodName == "fill"
             )
         )
         assert(f.ledger.fill(one, epoch).isRight)
@@ -318,7 +318,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
     var identities = Vector.empty[Long]
     for _ <- 1 to 3 do
       val f =
-        new Fixture(PaperAccount(BigDecimal(200), deposit = BigDecimal(200)), fee = BigDecimal(0))
+        new Fixture(PropAccount(BigDecimal(200), deposit = BigDecimal(200)), fee = BigDecimal(0))
       try
         f.open()
         f.depth("99.99", "100", askSize = "1")
@@ -338,13 +338,13 @@ class PaperUxIndependentSpec extends munit.FunSuite:
   }
 
   for fail <- Vector(false, true) do
-    test("held paper save publishes only after success, failure=" + fail) {
+    test("held prop save publishes only after success, failure=" + fail) {
       val entered = new CountDownLatch(1)
       val release = new CountDownLatch(1)
       val read = new CountDownLatch(1)
       val observed = new AtomicReference[TradingView]()
       val f = new Fixture(
-        PaperAccount(BigDecimal(1000), deposit = BigDecimal(1000)),
+        PropAccount(BigDecimal(1000), deposit = BigDecimal(1000)),
         save = _ => {
           entered.countDown()
           if !release.await(5, TimeUnit.SECONDS) then
@@ -353,13 +353,13 @@ class PaperUxIndependentSpec extends munit.FunSuite:
         }
       )
       val reader =
-        new Thread(() => { observed.set(f.worker.view); read.countDown() }, "paper-ux-read")
+        new Thread(() => { observed.set(f.worker.view); read.countDown() }, "prop-ux-read")
       try
         f.open()
         assert(f.worker.submitReviewed(f.review(Side.Buy)))
         assert(entered.await(2, TimeUnit.SECONDS))
         reader.start()
-        assert(read.await(300, TimeUnit.MILLISECONDS), "view blocked on paper storage")
+        assert(read.await(300, TimeUnit.MILLISECONDS), "view blocked on prop storage")
         assert(observed.get().pending)
         assertEquals(observed.get().position, Some(BigDecimal(0)))
         assertEquals(observed.get().outcome, None)
@@ -368,7 +368,7 @@ class PaperUxIndependentSpec extends munit.FunSuite:
         release.countDown()
         Wait.until("save result missing")(!f.worker.view.pending)
         if fail then
-          assertEquals(f.ledger.account, PaperAccount(BigDecimal(1000), deposit = BigDecimal(1000)))
+          assertEquals(f.ledger.account, PropAccount(BigDecimal(1000), deposit = BigDecimal(1000)))
           assert(f.worker.view.outcome.exists(_.contains("storage failed")))
         else
           assertEquals(f.ledger.account.cash, BigDecimal("499.5"))

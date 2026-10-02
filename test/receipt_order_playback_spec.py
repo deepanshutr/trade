@@ -30,7 +30,7 @@ def trace(start, count):
             held += direction
             cash -= direction * 500 + Decimal('0.25')
             fees += Decimal('0.25')
-            text = f'PAPER XMR {side} filled 1 at 500\nFee $0.25 | #{len(filled)+1} offline'
+            text = f'PROP XMR {side} filled 1 at 500\nFee $0.25 | #{len(filled)+1} offline'
             filled.append(text)
             result = {'kind': 'order', 'text': text}
         if click == start:

@@ -4,7 +4,7 @@ import java.nio.file.{Files, Path}
 import java.time.ZoneOffset
 import java.util.concurrent.atomic.AtomicBoolean
 
-class PaperAccountingSpec extends TempDirectorySuite:
+class PropAccountingSpec extends TempDirectorySuite:
   private val now = 1800000000000L
   private val fee = BigDecimal("0.001")
 
@@ -27,13 +27,13 @@ class PaperAccountingSpec extends TempDirectorySuite:
     val directory = tempDirectory("desk-accounting-check-")
     body(directory)
 
-  private def workerFor(ledger: PaperLedger, bid: String = "99", ask: String = "100"): PaperWorker =
+  private def workerFor(ledger: PropLedger, bid: String = "99", ask: String = "100"): PropWorker =
     val rest = new Rest:
       def post(body: String): Option[String] = None
     val metadata = ujson.read(
       """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}"""
     )
-    val worker = new PaperWorker(
+    val worker = new PropWorker(
       TradingConfig(),
       "XMR",
       ledger,
@@ -54,7 +54,7 @@ class PaperAccountingSpec extends TempDirectorySuite:
 
   test("buys spend stables, sells return stables and saved profit reconciles to wallet value") {
     temporary { directory =>
-      val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), fee)
+      val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), fee)
       // Independently calculated quantities, entry prices, cash, realized profit, fees and net.
       val steps = Vector(
         (Side.Buy, "2", "100", "100", "2", "100", "799.8", "0", "0.2", "-0.2"),
@@ -78,7 +78,7 @@ class PaperAccountingSpec extends TempDirectorySuite:
           val before = ledger.account.cash
           assert(ledger.fill(plan(side, q, price), now + index).isRight)
           val saved = ledger.account
-          val view = PortfolioView.paper(saved, "XMR", Some(mark))
+          val view = PortfolioView.prop(saved, "XMR", Some(mark))
           assertEquals(saved.cash, BigDecimal(cash))
           assertEquals(saved.cash - before, -signed * price - q * price * fee)
           assertEquals(
@@ -98,12 +98,12 @@ class PaperAccountingSpec extends TempDirectorySuite:
           assertEquals(view.net, Some(view.stables.get + view.tokenValue.get - 1000))
         }
       finally ledger.close()
-      val reopened = PaperLedger.open(directory, "mainnet", BigDecimal(50000), fee)
+      val reopened = PropLedger.open(directory, "mainnet", BigDecimal(50000), fee)
       try
         assertEquals(reopened.account.count, 4L)
         assertEquals(reopened.account.cash, BigDecimal("969.37"))
         assertEquals(
-          PortfolioView.paper(reopened.account, "XMR", None).net,
+          PortfolioView.prop(reopened.account, "XMR", None).net,
           Some(BigDecimal("-30.63"))
         )
       finally reopened.close()
@@ -114,7 +114,7 @@ class PaperAccountingSpec extends TempDirectorySuite:
     "wallet rejects selling absent or insufficient tokens and spending more than cash including fees"
   ) {
     temporary { directory =>
-      val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), fee)
+      val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), fee)
       try
         val empty = ledger.account
         assert(ledger.fill(plan(Side.Sell, 1, 100), now).isLeft)
@@ -131,7 +131,7 @@ class PaperAccountingSpec extends TempDirectorySuite:
 
   test("an exact break-even round trip has zero net even with a repeating average entry") {
     temporary { directory =>
-      val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(100000), BigDecimal(0))
+      val ledger = PropLedger.open(directory, "mainnet", BigDecimal(100000), BigDecimal(0))
       try
         for (side, quantity, price) <- Vector(
             (Side.Buy, 1, 100),
@@ -141,11 +141,11 @@ class PaperAccountingSpec extends TempDirectorySuite:
           )
         do assert(ledger.fill(plan(side, quantity, price), now).isRight)
         assertEquals(ledger.account.cash, BigDecimal(100000))
-        assertEquals(ledger.account.positions, Map.empty[String, PaperPosition])
-        assertEquals(PortfolioView.paper(ledger.account, "XMR", None).net, Some(BigDecimal(0)))
+        assertEquals(ledger.account.positions, Map.empty[String, PropPosition])
+        assertEquals(PortfolioView.prop(ledger.account, "XMR", None).net, Some(BigDecimal(0)))
       finally ledger.close()
-      val reopened = PaperLedger.open(directory, "mainnet", BigDecimal(500000), BigDecimal(0))
-      try assertEquals(PortfolioView.paper(reopened.account, "XMR", None).net, Some(BigDecimal(0)))
+      val reopened = PropLedger.open(directory, "mainnet", BigDecimal(500000), BigDecimal(0))
+      try assertEquals(PortfolioView.prop(reopened.account, "XMR", None).net, Some(BigDecimal(0)))
       finally reopened.close()
     }
   }
@@ -161,13 +161,13 @@ class PaperAccountingSpec extends TempDirectorySuite:
         val cost = new java.math.BigDecimal("100").multiply(new java.math.BigDecimal(feeText))
         val expected = balance.subtract(new java.math.BigDecimal("100")).subtract(cost)
         val ledger =
-          PaperLedger.open(directory, "mainnet", BigDecimal(balance), BigDecimal(feeText))
+          PropLedger.open(directory, "mainnet", BigDecimal(balance), BigDecimal(feeText))
         try
           assert(ledger.fill(plan(Side.Buy, 1, 100), now).isRight)
           assertEquals(ledger.account.cash, BigDecimal(expected))
           assertEquals(ledger.account.fees, BigDecimal(cost))
           assertEquals(
-            PortfolioView.paper(ledger.account, "XMR", Some(100)).net,
+            PortfolioView.prop(ledger.account, "XMR", Some(100)).net,
             Some(BigDecimal(cost.negate()))
           )
         finally ledger.close()
@@ -178,19 +178,19 @@ class PaperAccountingSpec extends TempDirectorySuite:
     "same-price round trip loses exactly fees and a price move changes profit by held quantity"
   ) {
     temporary { directory =>
-      val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), fee)
+      val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), fee)
       try
         assert(ledger.fill(plan(Side.Buy, 2, 100), now).isRight)
-        val same = PortfolioView.paper(ledger.account, "XMR", Some(BigDecimal(100)))
-        val moved = PortfolioView.paper(ledger.account, "XMR", Some(BigDecimal(110)))
+        val same = PortfolioView.prop(ledger.account, "XMR", Some(BigDecimal(100)))
+        val moved = PortfolioView.prop(ledger.account, "XMR", Some(BigDecimal(110)))
         assertEquals(same.net, Some(BigDecimal("-0.2")))
         assertEquals(moved.net.get - same.net.get, BigDecimal(20))
-        assertEquals(PortfolioView.paper(ledger.account, "XMR", None).net, None)
-        assertEquals(PortfolioView.paper(ledger.account, "BTC", Some(BigDecimal(100))).net, None)
+        assertEquals(PortfolioView.prop(ledger.account, "XMR", None).net, None)
+        assertEquals(PortfolioView.prop(ledger.account, "BTC", Some(BigDecimal(100))).net, None)
         assert(ledger.fill(plan(Side.Sell, 2, 100), now + 1).isRight)
-        assertEquals(ledger.account.positions, Map.empty[String, PaperPosition])
+        assertEquals(ledger.account.positions, Map.empty[String, PropPosition])
         assertEquals(ledger.account.cash, BigDecimal("999.6"))
-        assertEquals(PortfolioView.paper(ledger.account, "XMR", None).net, Some(BigDecimal("-0.4")))
+        assertEquals(PortfolioView.prop(ledger.account, "XMR", None).net, Some(BigDecimal("-0.4")))
       finally ledger.close()
     }
   }
@@ -199,7 +199,7 @@ class PaperAccountingSpec extends TempDirectorySuite:
     "partial fills move only actual tokens, proceeds and fees and preserve the remaining entry"
   ) {
     temporary { directory =>
-      val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), fee)
+      val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), fee)
       try
         assert(
           ledger
@@ -219,12 +219,12 @@ class PaperAccountingSpec extends TempDirectorySuite:
         assertEquals(ledger.account.cash, BigDecimal("754.645"))
         assertEquals(
           ledger.account.positions("XMR"),
-          PaperPosition(BigDecimal("2.5"), BigDecimal(100))
+          PropPosition(BigDecimal("2.5"), BigDecimal(100))
         )
         assertEquals(ledger.account.realized, BigDecimal(5))
         assertEquals(ledger.account.fees, BigDecimal("0.355"))
         assertEquals(
-          PortfolioView.paper(ledger.account, "XMR", Some(BigDecimal(110))).net,
+          PortfolioView.prop(ledger.account, "XMR", Some(BigDecimal(110))).net,
           Some(BigDecimal("29.645"))
         )
       finally ledger.close()
@@ -233,7 +233,7 @@ class PaperAccountingSpec extends TempDirectorySuite:
 
   test("a selected dollar sell closes a smaller holding without opening a short") {
     temporary { directory =>
-      val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), fee)
+      val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), fee)
       assert(ledger.fill(plan(Side.Buy, BigDecimal("0.75"), 100), now).isRight)
       val worker = workerFor(ledger)
       try
@@ -244,7 +244,7 @@ class PaperAccountingSpec extends TempDirectorySuite:
         assertEquals(selected.positionAfter, BigDecimal(0))
         assert(ledger.fill(selected, now).isRight)
         assertEquals(ledger.account.cash, BigDecimal("999.10075"))
-        assertEquals(ledger.account.positions, Map.empty[String, PaperPosition])
+        assertEquals(ledger.account.positions, Map.empty[String, PropPosition])
         assert(worker.preview(OrderIntent(Side.Sell, OrderKind.Hard)).isLeft)
       finally worker.close()
     }
@@ -252,7 +252,7 @@ class PaperAccountingSpec extends TempDirectorySuite:
 
   test("the compact wallet values add up and no extra trading text is needed") {
     temporary { directory =>
-      val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), fee)
+      val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), fee)
       try
         assert(ledger.fill(plan(Side.Buy, 2, 100), now).isRight)
         val view = TradingView(
@@ -260,12 +260,12 @@ class PaperAccountingSpec extends TempDirectorySuite:
           Some(BigDecimal(2)),
           "ready",
           ready = true,
-          portfolio = PortfolioView.paper(ledger.account, "XMR", Some(BigDecimal(100)))
+          portfolio = PortfolioView.prop(ledger.account, "XMR", Some(BigDecimal(100)))
         )
         val frame = Workspace.draw(
           Snapshot.initial("XMR", now),
           view,
-          PanelView(mode = "PAPER"),
+          PanelView(mode = "PROP"),
           100,
           30,
           now,
@@ -283,7 +283,7 @@ class PaperAccountingSpec extends TempDirectorySuite:
 
   test("the marked wallet uses an exact midpoint for accepted large integer prices") {
     temporary { directory =>
-      val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal(0))
+      val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal(0))
       assert(ledger.fill(plan(Side.Buy, 1, 100), now).isRight)
       val bid = new java.math.BigDecimal("1e40")
       val ask = bid.add(java.math.BigDecimal.ONE)
@@ -312,15 +312,15 @@ class PaperAccountingSpec extends TempDirectorySuite:
         legacy,
         java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
       )
-      val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(1000), fee)
+      val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), fee)
       try
-        assertEquals(ledger.account, PaperAccount(BigDecimal(1000), deposit = BigDecimal(1000)))
+        assertEquals(ledger.account, PropAccount(BigDecimal(1000), deposit = BigDecimal(1000)))
         assert(ledger.fill(plan(Side.Buy, 1, 100), now).isRight)
         assert(Files.exists(directory.resolve("wallet-mainnet.json")))
         assertEquals(Files.readString(legacy), old)
-        intercept[Exception](PaperLedger.open(directory, "mainnet", BigDecimal(1000), fee))
+        intercept[Exception](PropLedger.open(directory, "mainnet", BigDecimal(1000), fee))
       finally ledger.close()
-      val reopened = PaperLedger.open(directory, "mainnet", BigDecimal(50000), fee)
+      val reopened = PropLedger.open(directory, "mainnet", BigDecimal(50000), fee)
       try assertEquals(reopened.account.cash, BigDecimal("899.9"))
       finally reopened.close()
     }
@@ -329,20 +329,20 @@ class PaperAccountingSpec extends TempDirectorySuite:
   test("position quantity and money use one saved account when a fill commits during the view") {
     val armed = new AtomicBoolean(false)
     var duringRead = () => ()
-    val original = Map("XMR" -> PaperPosition(BigDecimal(2), BigDecimal(100)))
-    val positions = new scala.collection.immutable.AbstractMap[String, PaperPosition]:
-      def get(key: String): Option[PaperPosition] =
+    val original = Map("XMR" -> PropPosition(BigDecimal(2), BigDecimal(100)))
+    val positions = new scala.collection.immutable.AbstractMap[String, PropPosition]:
+      def get(key: String): Option[PropPosition] =
         val result = original.get(key)
         if armed.compareAndSet(true, false) then duringRead()
         result
-      def iterator: Iterator[(String, PaperPosition)] = original.iterator
-      def removed(key: String): Map[String, PaperPosition] = original.removed(key)
-      def updated[V1 >: PaperPosition](key: String, value: V1): Map[String, V1] =
+      def iterator: Iterator[(String, PropPosition)] = original.iterator
+      def removed(key: String): Map[String, PropPosition] = original.removed(key)
+      def updated[V1 >: PropPosition](key: String, value: V1): Map[String, V1] =
         original.updated(key, value)
-    val save: PaperAccount => Unit = _ => ()
+    val save: PropAccount => Unit = _ => ()
     val lease: AutoCloseable = () => ()
-    val ledger = new PaperLedger(
-      PaperAccount(
+    val ledger = new PropLedger(
+      PropAccount(
         BigDecimal("799.8"),
         fees = BigDecimal("0.2"),
         positions = positions,
@@ -376,13 +376,13 @@ class PaperAccountingSpec extends TempDirectorySuite:
         directory.resolve("wallet-mainnet.json"),
         """{"cash":"799.8","deposit":"1000","realized":"12","fees":"0.2","positions":{"XMR":{"quantity":"2","entry":"100"}},"orders":["previous fill"],"count":1}"""
       )
-      val ledger = PaperLedger.open(directory, "mainnet", BigDecimal(50000), fee)
-      val expected = PaperAccount(
+      val ledger = PropLedger.open(directory, "mainnet", BigDecimal(50000), fee)
+      val expected = PropAccount(
         cash = BigDecimal("799.8"),
         deposit = BigDecimal(1000),
         realized = BigDecimal(12),
         fees = BigDecimal("0.2"),
-        positions = Map("XMR" -> PaperPosition(BigDecimal(2), BigDecimal(100))),
+        positions = Map("XMR" -> PropPosition(BigDecimal(2), BigDecimal(100))),
         orders = Vector("previous fill"),
         count = 1L
       )
@@ -391,7 +391,7 @@ class PaperAccountingSpec extends TempDirectorySuite:
         assert(ledger.fill(plan(Side.Buy, BigDecimal(1), BigDecimal(100)), now).isRight)
         ledger.account
       finally ledger.close()
-      val reopened = PaperLedger.open(directory, "mainnet", BigDecimal(50000), fee)
+      val reopened = PropLedger.open(directory, "mainnet", BigDecimal(50000), fee)
       try
         assertEquals(reopened.account, filled)
         assertEquals(reopened.account.cash, BigDecimal("699.7"))

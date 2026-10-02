@@ -11,7 +11,7 @@ class CompactInteractionSpec extends munit.FunSuite:
     var sent = 0
     var muted = Vector.empty[Boolean]
     val controller = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => now,
       _ => Left("Order price is unavailable"),
       _ => { sent += 1; true },
@@ -39,7 +39,7 @@ class CompactInteractionSpec extends munit.FunSuite:
     f.draw()
     f.key(Command.Confirm)
     assert(f.draw().lines.mkString.contains("Account unavailable"))
-    assertEquals(f.controller.panel.mode, "PAPER")
+    assertEquals(f.controller.panel.mode, "PROP")
     assertEquals(f.sent, 0)
   }
 

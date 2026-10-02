@@ -18,7 +18,7 @@ final class ExecutionRouter(
   private var coin = initialCoin
   private var live = initialLive
   private var liveEnabled = initialMode == "LIVE"
-  private var paper = Option.empty[PaperWorker]
+  private var prop = Option.empty[PropWorker]
   private var connected = false
   private var retirement = Option.empty[Thread]
   private var retirementFailed = false
@@ -53,15 +53,15 @@ final class ExecutionRouter(
       thread.setDaemon(true)
       retirement = Some(thread)
       thread.start()
-  private def paperWorker(): PaperWorker =
-    paper.getOrElse {
-      val ledger = PaperLedger.open(
-        directory.resolve("paper"),
+  private def propWorker(): PropWorker =
+    prop.getOrElse {
+      val ledger = PropLedger.open(
+        directory.resolve("prop"),
         config.network,
-        config.paperBalance,
-        config.paperFee
+        config.propBalance,
+        config.propFee
       )
-      val worker = new PaperWorker(
+      val worker = new PropWorker(
         config,
         coin,
         ledger,
@@ -70,15 +70,15 @@ final class ExecutionRouter(
         monotonic,
         live.acceptedMetadata
       )
-      paper = Some(worker)
+      prop = Some(worker)
       if connected then worker.observe(Event.SocketUp)
       worker.start()
       worker
     }
   def mode: String = synchronized(selected)
   def start(): Unit = synchronized {
-    if selected == "PAPER" then
-      val _ = paperWorker()
+    if selected == "PROP" then
+      val _ = propWorker()
     else live.start()
   }
   def observe(event: Event): Unit = synchronized {
@@ -87,15 +87,15 @@ final class ExecutionRouter(
       case Event.SocketDown => connected = false
       case _                => ()
     live.observe(event)
-    paper.foreach(_.observe(event))
+    prop.foreach(_.observe(event))
   }
   def select(next: String): Unit = synchronized {
     coin = next
     live.select(next)
-    paper.foreach(_.select(next))
+    prop.foreach(_.select(next))
   }
   def view: TradingView = synchronized {
-    if selected == "PAPER" then paperWorker().view
+    if selected == "PROP" then propWorker().view
     else if selected == "LIVE" && !liveEnabled then
       TradingView(
         coin,
@@ -107,15 +107,15 @@ final class ExecutionRouter(
   }
   def switchMode(next: String): Either[String, Unit] = synchronized {
     if closed then Left("Trading stopped")
-    else if live.view.pending || paper.exists(_.view.pending) then
+    else if live.view.pending || prop.exists(_.view.pending) then
       Left("Wait for the pending order outcome before changing mode")
-    else if next == "PAPER" then
+    else if next == "PROP" then
       Try {
-        val _ = paperWorker()
-        selected = "PAPER"
+        val _ = propWorker()
+        selected = "PROP"
         retireLive()
         ()
-      }.toEither.left.map(_ => "Paper storage cannot be opened. Its saved balance was preserved")
+      }.toEither.left.map(_ => "Prop storage cannot be opened. Its saved balance was preserved")
     else if next == "LIVE" && !config.configured then Left(TradingWorker.setupMessage)
     else if next == "LIVE" && retirementFailed then Left(transitionReason)
     else if next == "LIVE" then
@@ -126,19 +126,19 @@ final class ExecutionRouter(
     else Left("Unknown trading mode")
   }
   def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized {
-    if selected == "PAPER" then paperWorker().preview(intent)
+    if selected == "PROP" then propWorker().preview(intent)
     else if selected == "LIVE" && !liveEnabled then Left(transitionReason)
     else live.preview(intent)
   }
   def submitReviewed(review: OrderReview): Boolean = synchronized {
-    if selected == "PAPER" then paperWorker().submitReviewed(review)
+    if selected == "PROP" then propWorker().submitReviewed(review)
     else selected == "LIVE" && liveEnabled && live.submitReviewed(review)
   }
   def close(): Unit =
     val (current, simulation, stopping) = synchronized {
       closed = true
       live.disable()
-      (live, paper, retirement)
+      (live, prop, retirement)
     }
     try
       stopping match

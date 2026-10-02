@@ -219,7 +219,7 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
       "XMR",
       f.worker,
       _ => fail("unexpected live worker replacement"),
-      new Rest { def post(body: String): Option[String] = fail("unexpected paper market request") },
+      new Rest { def post(body: String): Option[String] = fail("unexpected prop market request") },
       f.directory,
       () => f.clock.get(),
       () => f.clock.get()

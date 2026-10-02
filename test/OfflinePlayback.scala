@@ -266,7 +266,7 @@ object OfflinePlayback:
         "XMR",
         true,
         config = Some(args(2)),
-        paper = args.length == 4,
+        prop = args.length == 4,
         stateDirectory = Some(Path.of(args(2)).getParent.resolve("state").toString),
         audio = "mute"
       ),

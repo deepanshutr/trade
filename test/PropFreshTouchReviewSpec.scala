@@ -3,7 +3,7 @@ package desk
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-class PaperFreshTouchReviewSpec extends TempDirectorySuite:
+class PropFreshTouchReviewSpec extends TempDirectorySuite:
   private val start = 1800000000000L
 
   private class Fixture(side: Side):
@@ -15,19 +15,19 @@ class PaperFreshTouchReviewSpec extends TempDirectorySuite:
     if held > 0 then
       LocalFiles.write(
         directory.resolve("wallet-mainnet.json"),
-        s"""{"cash":"${config.paperBalance}","deposit":"${config.paperBalance + held * 100}","realized":"0","fees":"0","orders":[],"count":"0","positions":{"XMR":{"quantity":"$held","entry":"100"}}}"""
+        s"""{"cash":"${config.propBalance}","deposit":"${config.propBalance + held * 100}","realized":"0","fees":"0","orders":[],"count":"0","positions":{"XMR":{"quantity":"$held","entry":"100"}}}"""
       )
-    val ledger = PaperLedger.open(
+    val ledger = PropLedger.open(
       directory,
       "mainnet",
-      config.paperBalance,
-      config.paperFee
+      config.propBalance,
+      config.propFee
     )
     val rest = new Rest:
       def post(body: String): Option[String] =
         assertEquals(ujson.read(body), ujson.Obj("type" -> "meta"))
         Some("""{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5}]}""")
-    val worker = new PaperWorker(config, "XMR", ledger, rest, () => clock.get(), () => clock.get())
+    val worker = new PropWorker(config, "XMR", ledger, rest, () => clock.get(), () => clock.get())
     val offers = if buy then
       Vector(
         Level("100", "1", 1),
@@ -48,7 +48,7 @@ class PaperFreshTouchReviewSpec extends TempDirectorySuite:
       worker.start()
       worker.observe(Event.SocketUp)
       worker.observe(Event.BookUpdate("XMR", book, true))
-      Wait.until("paper did not become ready")(worker.view.ready)
+      Wait.until("prop did not become ready")(worker.view.ready)
     def review(): OrderReview =
       val intent = OrderIntent(side, OrderKind.Hard)
       val plan = worker.preview(intent).toOption.get
@@ -79,7 +79,7 @@ class PaperFreshTouchReviewSpec extends TempDirectorySuite:
         ledger.account.positions("XMR").entry,
         if buy then value / quantity else BigDecimal(100)
       )
-      assertEquals(ledger.account.fees, value * config.paperFee)
+      assertEquals(ledger.account.fees, value * config.propFee)
       assertEquals(worker.view.position, Some(if buy then quantity else held - quantity))
     def close(): Unit = worker.close()
 
@@ -104,7 +104,7 @@ class PaperFreshTouchReviewSpec extends TempDirectorySuite:
           f.settle()
           assertEquals(f.ledger.account.count, 0L)
           assertEquals(f.worker.view.position, Some(f.held))
-          assertEquals(f.ledger.account.cash, f.config.paperBalance)
+          assertEquals(f.ledger.account.cash, f.config.propBalance)
           assert(
             f.worker.view.outcome.exists(text =>
               text.contains("no fill") || text.contains("not filled")

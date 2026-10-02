@@ -3,7 +3,7 @@ package desk
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-class PaperBoundaryReviewSpec extends TempDirectorySuite:
+class PropBoundaryReviewSpec extends TempDirectorySuite:
   private val start = 1800000000000L
 
   private class Fixture(val held: BigDecimal = BigDecimal(0)):
@@ -13,16 +13,16 @@ class PaperBoundaryReviewSpec extends TempDirectorySuite:
     if held > 0 then
       LocalFiles.write(
         directory.resolve("wallet-mainnet.json"),
-        s"""{"cash":"${config.paperBalance}","deposit":"${config.paperBalance + held * 100}","realized":"0","fees":"0","orders":[],"count":"0","positions":{"XMR":{"quantity":"$held","entry":"100"}}}"""
+        s"""{"cash":"${config.propBalance}","deposit":"${config.propBalance + held * 100}","realized":"0","fees":"0","orders":[],"count":"0","positions":{"XMR":{"quantity":"$held","entry":"100"}}}"""
       )
-    val ledger = PaperLedger.open(directory, "mainnet", config.paperBalance, config.paperFee)
+    val ledger = PropLedger.open(directory, "mainnet", config.propBalance, config.propFee)
     val rest = new Rest:
       def post(body: String): Option[String] =
         assertEquals(ujson.read(body), ujson.Obj("type" -> "meta"))
         Some(
           """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5},{"name":"BTC","szDecimals":2,"maxLeverage":40}]}"""
         )
-    val worker = new PaperWorker(config, "XMR", ledger, rest, () => clock.get(), () => clock.get())
+    val worker = new PropWorker(config, "XMR", ledger, rest, () => clock.get(), () => clock.get())
     var latest = Book(Vector(Level("99.99", "50", 1)), Vector(Level("100", "50", 1)), start)
     def publish(book: Book = latest, coin: String = "XMR"): Unit =
       latest = book.copy(time = clock.incrementAndGet())
@@ -31,18 +31,18 @@ class PaperBoundaryReviewSpec extends TempDirectorySuite:
       worker.start()
       worker.observe(Event.SocketUp)
       publish()
-      Wait.until("paper did not become ready")(worker.view.ready)
+      Wait.until("prop did not become ready")(worker.view.ready)
     def review(intent: OrderIntent = Trading.action(0)): OrderReview =
       val plan = worker.preview(intent).toOption.get
       OrderReview(intent, plan, clock.get(), clock.get() + 30000)
     def settle(): Unit =
-      Wait.until("paper order remained pending")(
+      Wait.until("prop order remained pending")(
         !worker.view.pending && worker.view.outcome.nonEmpty
       )
     def alterRules(rules: MarketRules): Unit = worker.synchronized {
       // Simulate only the periodic metadata result. This avoids a minute-long
       // sleep and adds no production hook. All submission uses the public API.
-      val field = classOf[PaperWorker].getDeclaredFields.find(_.getName == "rules").get
+      val field = classOf[PropWorker].getDeclaredFields.find(_.getName == "rules").get
       field.setAccessible(true)
       field.set(worker, Some(rules))
     }
@@ -282,7 +282,7 @@ class PaperBoundaryReviewSpec extends TempDirectorySuite:
           f.settle()
           if scenario == "outside limit" then
             assertEquals(f.ledger.account.count, 0L)
-            assertEquals(f.ledger.account.cash, f.config.paperBalance)
+            assertEquals(f.ledger.account.cash, f.config.propBalance)
             assertEquals(f.worker.view.position, Some(f.held))
             assert(
               f.worker.view.outcome.exists(text =>
@@ -300,7 +300,7 @@ class PaperBoundaryReviewSpec extends TempDirectorySuite:
               f.ledger.account.positions("XMR").entry,
               if buy then fillPrice else BigDecimal(100)
             )
-            assertEquals(f.ledger.account.fees, filled * fillPrice * f.config.paperFee)
+            assertEquals(f.ledger.account.fees, filled * fillPrice * f.config.propFee)
             assertEquals(f.worker.view.position, Some(if buy then filled else f.held - filled))
             assert(f.worker.view.outcome.exists(_.contains(if scenario == "partial" then "partial"
             else "filled")))

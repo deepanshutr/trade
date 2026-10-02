@@ -215,17 +215,17 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
     assertEquals(errors.asScala.toVector, Vector.empty)
   }
 
-  private class PaperFixture(held: BigDecimal = BigDecimal(0)):
+  private class PropFixture(held: BigDecimal = BigDecimal(0)):
     val now = new AtomicLong(at)
     val config = TradingConfig()
-    val root = tempDirectory("review-paper-")
+    val root = tempDirectory("review-prop-")
     if held > 0 then
       LocalFiles.write(
         root.resolve("wallet-mainnet.json"),
         ujson.write(
           ujson.Obj(
-            "cash" -> config.paperBalance.toString,
-            "deposit" -> (config.paperBalance + held * 100).toString,
+            "cash" -> config.propBalance.toString,
+            "deposit" -> (config.propBalance + held * 100).toString,
             "realized" -> "0",
             "fees" -> "0",
             "orders" -> ujson.Arr(),
@@ -239,12 +239,12 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
           )
         )
       )
-    val ledger = PaperLedger.open(root, "mainnet", config.paperBalance, config.paperFee)
+    val ledger = PropLedger.open(root, "mainnet", config.propBalance, config.propFee)
     val rest = new Rest:
       def post(body: String): Option[String] =
         assertEquals(ujson.read(body), ujson.Obj("type" -> "meta"))
         Some(metadata)
-    val worker = new PaperWorker(config, "XMR", ledger, rest, () => now.get(), () => now.get())
+    val worker = new PropWorker(config, "XMR", ledger, rest, () => now.get(), () => now.get())
     val bids = (0 until 5)
       .map(i => Level((BigDecimal("99.99") - BigDecimal(i) / 100).toString, "0.20", 1))
       .toVector
@@ -273,7 +273,7 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
 
   for side <- Vector(Side.Buy, Side.Sell) do
     test(s"$side subscription-time five-level prices only fill visible liquidity") {
-      val f = new PaperFixture(if side == Side.Buy then BigDecimal(0) else BigDecimal(10))
+      val f = new PropFixture(if side == Side.Buy then BigDecimal(0) else BigDecimal(10))
       val errors = new ConcurrentLinkedQueue[Throwable]()
       val delivered = new CountDownLatch(1)
       val close = new AtomicReference[() => Unit](() => ())
@@ -331,8 +331,8 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
       assertEquals(errors.asScala.toVector, Vector.empty)
     }
 
-  test("old duplicate and malformed fast frames cannot renew expired paper depth") {
-    val f = new PaperFixture
+  test("old duplicate and malformed fast frames cannot renew expired prop depth") {
+    val f = new PropFixture
     try
       f.start()
       f.worker.observe(Event.SocketUp)
@@ -361,7 +361,7 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
 
   for side <- Vector(Side.Buy, Side.Sell) do
     test(s"$side a fast five-level book reduces the actual fill after a deeper REST preview") {
-      val f = new PaperFixture(if side == Side.Buy then BigDecimal(0) else BigDecimal(10))
+      val f = new PropFixture(if side == Side.Buy then BigDecimal(0) else BigDecimal(10))
       try
         f.start()
         f.worker.observe(Event.SocketUp)

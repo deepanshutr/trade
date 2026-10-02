@@ -10,14 +10,15 @@ object Main:
       mono: Boolean,
       trade: Boolean = false,
       config: Option[String] = None,
-      paper: Boolean = false,
+      prop: Boolean = false,
       record: Boolean = false,
       stateDirectory: Option[String] = None,
       audio: String = "voice",
       keys: Boolean = false
-  )
+  ):
+    def mode: String = if trade then "LIVE" else if prop then "PROP" else "VIEW"
   val usage =
-    "usage: desk [COIN] [--mono] [--paper | --trade | --record | --keys] [--config PATH] [--state PATH] [--chime | --mute]"
+    "usage: desk [COIN] [--mono] [--prop | --trade | --record | --keys] [--config PATH] [--state PATH] [--chime | --mute]"
   val escapeWaitNanos = 40_000_000L
 
   private[desk] def announcements(args: Args, output: AnnouncementOutput): Announcements =
@@ -30,13 +31,13 @@ object Main:
     def loop(rest: List[String], chosen: Args, hasCoin: Boolean): Either[String, Args] =
       rest match
         case Nil =>
-          if Vector(chosen.trade, chosen.paper, chosen.record, chosen.keys).count(identity) > 1 then
-            Left("choose one of paper, live, public recording or keys")
+          if Vector(chosen.trade, chosen.prop, chosen.record, chosen.keys).count(identity) > 1 then
+            Left("choose one of prop, live, public recording or keys")
           else Right(chosen)
         case "--no-analysis" :: tail => loop(tail, chosen, hasCoin)
         case "--mono" :: tail        => loop(tail, chosen.copy(mono = true), hasCoin)
         case "--trade" :: tail       => loop(tail, chosen.copy(trade = true), hasCoin)
-        case "--paper" :: tail       => loop(tail, chosen.copy(paper = true), hasCoin)
+        case "--prop" :: tail        => loop(tail, chosen.copy(prop = true), hasCoin)
         case "--record" :: tail      => loop(tail, chosen.copy(record = true), hasCoin)
         case "--keys" :: tail        => loop(tail, chosen.copy(keys = true), hasCoin)
         case "--chime" :: tail if chosen.audio == "voice" =>

@@ -23,16 +23,16 @@ class MessageHistoryRemovalSpec extends TempDirectorySuite:
   test("order notices survive ignored prose and remain responsive to keyboard input") {
     val now = 1800000000000L
     val controller = new DeskController(
-      PanelView(mode = "PAPER"),
+      PanelView(mode = "PROP"),
       () => now,
       _ => Left("unused"),
       _ => false,
       _ => Left("unused")
     )
     val market = Snapshot.initial("XMR", now)
-    val view = TradingView("XMR", Some(BigDecimal(5)), "Paper ready", ready = true)
+    val view = TradingView("XMR", Some(BigDecimal(5)), "Prop ready", ready = true)
     for (side, visible, number) <- Vector(("buy", "Bought", 1L), ("sell", "Sold", 2L)) do
-      controller.addMessage("order", s"PAPER XMR $side filled 5")
+      controller.addMessage("order", s"PROP XMR $side filled 5")
       for i <- 1 to 400 do controller.addMessage("analysis", s"Ignored prose $i")
       val frame = Workspace.draw(
         market,

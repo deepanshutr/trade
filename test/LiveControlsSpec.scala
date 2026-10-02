@@ -64,14 +64,14 @@ class LiveControlsSpec extends munit.FunSuite:
   }
 
   test("simulated wallet controls keep buy and sell without suggesting borrowed tokens") {
-    val paper = frame(500, "PAPER", 100, 30)
-    val execution = paper.lines
+    val prop = frame(500, "PROP", 100, 30)
+    val execution = prop.lines
       .drop(15)
       .map(_.drop(Layout.workspaceMarketWidth(100) + 1))
       .mkString("\n")
     assert(!execution.contains("5x"))
     assert(!execution.contains("LONG"))
     assert(!execution.contains("SHORT"))
-    assert(paper.buttons.exists(_.label == "1 BUY $500"))
-    assert(paper.buttons.exists(_.label == "3 SELL $500"))
+    assert(prop.buttons.exists(_.label == "1 BUY $500"))
+    assert(prop.buttons.exists(_.label == "3 SELL $500"))
   }

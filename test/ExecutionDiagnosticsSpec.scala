@@ -18,15 +18,15 @@ class ExecutionDiagnosticsSpec extends munit.FunSuite:
       TradingView(
         "XMR",
         message = "waiting",
-        block = Some("Paper waiting for market details"),
+        block = Some("Prop waiting for market details"),
         blockCode = BlockCode.Market
       )
-    log.execution("PAPER", waiting)
-    for _ <- 1 to 100 do log.execution("PAPER", waiting)
+    log.execution("PROP", waiting)
+    for _ <- 1 to 100 do log.execution("PROP", waiting)
     time.addAndGet(1250L)
-    log.execution("PAPER", waiting.copy(ready = true, block = None))
+    log.execution("PROP", waiting.copy(ready = true, block = None))
     time.addAndGet(30000L)
-    log.execution("PAPER", waiting.copy(ready = true, block = None))
+    log.execution("PROP", waiting.copy(ready = true, block = None))
     log.start()
     log.close()
     val events = saved.records.filter(_("event").str == "execution")
@@ -34,7 +34,7 @@ class ExecutionDiagnosticsSpec extends munit.FunSuite:
     assertEquals(events.map(_("state").str), Vector("market", "ready", "ready"))
     assertEquals(events(1)("previous_ms").str.toLong, 1250L)
     assertEquals(events(2)("state_ms").str.toLong, 30000L)
-    assert(events.forall(_("mode").str == "simulated"))
+    assert(events.forall(_("mode").str == "prop"))
   }
 
   test("readiness records keep fixed categories and exclude private values") {
@@ -59,17 +59,17 @@ class ExecutionDiagnosticsSpec extends munit.FunSuite:
         "leverage"
       ),
       (
-        "PAPER",
+        "PROP",
         base.copy(
-          block = Some("Paper prices stale. Waiting for fresh depth"),
+          block = Some("Prop prices stale. Waiting for fresh depth"),
           blockCode = BlockCode.Prices
         ),
         "prices"
       ),
       (
-        "PAPER",
+        "PROP",
         base.copy(
-          block = Some("Paper storage unavailable. Restart to recover"),
+          block = Some("Prop storage unavailable. Restart to recover"),
           blockCode = BlockCode.Storage
         ),
         "storage"
