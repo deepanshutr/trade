@@ -5,32 +5,59 @@ Run `desk XMR --prop` for prop trading on Monero, `desk XMR` for viewing, or
 in a local wallet. Run `desk --keys` to make, restore, rename or choose the
 trading key. It opens a key screen before any workspace and exits when you leave
 it. See [live trading settings](trading.md).
-Read the mode and full market name above Buy and Sell. The minimum size is 100
+Read the mode and full market name above the trade buttons. The minimum size is 100
 columns by 30 rows. Use 120 by 40 for more chart space.
 
-Choose an amount, then click Buy or Sell once to submit it. Each button covers
+Choose an amount, then click a trade button once to submit it. Each button covers
 five rows and repeats the selected amount. There is no separate Send step.
 Mouse submission requires a press and release on the same currently visible
 button. A changed market, mode, size or terminal geometry invalidates old controls.
+So does a position change that changes a button's label.
 Switching between prop and real trading still needs an explicit confirmation.
 
 In prop trading, the right side shows the token's current dollar value,
 spendable stables, open profit and total net profit. Open profit covers the tokens
 still held at their current price, excluding past sales and fees. Buy spends stables plus the fee.
-Sell returns stables minus the fee and sells at most the tokens held. Net profit
+Sell returns stables minus the fee and sells at most the tokens held. A sell that
+would leave less than ten dollars of tokens at the quote sells all of them. Net profit
 equals stables plus the current token value minus the starting balance.
 For real trading, the token value is signed position exposure and the stable
 figure depends on the venue's account mode. Unknown or stale values show `--`.
 Real open profit comes from the venue. Real lifetime net profit is currently unavailable.
-The live controls show Buy/Long and Sell/Short, the observed leverage, and the
-current position direction. XMR orders require observed leverage of five times.
+The live heading shows the observed leverage and the current position direction.
+Real orders on every market require observed leverage of five times.
 Entry and liquidation prices use the graph's existing price scale. Off-screen
 prices have an arrow. Prop trading has no liquidation price.
+
+In real trading, a button amount is the money put up. The position value is the
+amount times the observed leverage, so at 5x `$20` means a $100 position. The two
+trade buttons keep their place and keys, and their labels follow the position. Each
+label starts with its key. `x5` is the observed leverage. It is missing while the
+leverage is unknown.
+
+| Position | Key 1 or 2 | Key 3 or 4 |
+| --- | --- | --- |
+| Flat or unknown | `LONG $20 x5` | `SHORT $20 x5` |
+| Long | `LONG $20 x5` | `REDUCE $20 x5` |
+| Short | `REDUCE $20 x5` | `SHORT $20 x5` |
+
+REDUCE only shrinks the position and stops at flat. It never opens the other side.
+To turn a long into a short, press CLOSE, then SHORT.
+
+CLOSE sits on the size row after the two amounts. Press `x` or click it to exit the
+whole position. Its label names the position, for example `x Close 0.2 XMR`. It is
+enabled only in real trading with ready account data, an open position and no
+pending order. Otherwise it reads `x Close` and is dimmed. With ready account data
+and no position, `x` shows "Not sent: controls changed". A close that fills in part
+leaves the rest open. Press CLOSE again. Prop trading keeps Buy and Sell, and CLOSE
+stays disabled there for now. In prop or view mode `x` does nothing. See
+[live trading settings](trading.md) for amounts and the price allowance.
 
 | Input | Action |
 | --- | --- |
 | 1 or 3 with the small amount selected | Buy or sell that amount immediately |
 | 2 or 4 with the large amount selected | Buy or sell that amount immediately |
+| x | Close the whole real position immediately |
 | p or l | Open the prop or real mode confirmation |
 | Enter with a mode confirmation | Confirm the displayed mode |
 | Escape | Cancel mode confirmation or market entry |
