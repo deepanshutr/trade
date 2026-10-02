@@ -2,6 +2,7 @@ package desk
 
 enum DeskAction:
   case Prepare(intent: OrderIntent)
+  case Close
   case OrderSize(big: Boolean)
   case Cancel
   case Mode(name: String)
@@ -303,16 +304,30 @@ object Workspace:
       button(tradeTop + 5, small.length + 3, big, DeskAction.OrderSize(true), choosing)
       val canTrade = choosing && view.ready && panel.mode != "VIEW" &&
         heading.length <= rightWidth
+      // Live labels follow the position. The side facing an open position only reduces it.
+      val held = if live then view.position.filter(_ != 0) else None
+      val close = held.filter(_ => canTrade)
+      button(
+        tradeTop + 5,
+        small.length + big.length + 6,
+        close.fold("x Close")(p => s"x Close ${Trading.format(p.abs)} ${s.coin}"),
+        DeskAction.Close,
+        close.nonEmpty
+      )
+      val times = if live then view.leverage.fold("")(n => s" x$n") else ""
       Vector(Side.Buy, Side.Sell).zipWithIndex.foreach { (side, i) =>
         val intent = OrderIntent(side, OrderKind.Hard, big = panel.bigOrder)
         val key = (if side == Side.Buy then 1 else 3) + (if panel.bigOrder then 1 else 0)
         val size = if panel.bigOrder then panel.sizes.big else panel.sizes.small
-        val label = if live then (if side == Side.Buy then "BUY/LONG" else "SELL/SHORT")
-        else side.toString.toUpperCase
+        val reduces = held.exists(p => p.signum == (if side == Side.Buy then -1 else 1))
+        val label = if !live then side.toString.toUpperCase
+        else if reduces then "REDUCE"
+        else if side == Side.Buy then "LONG"
+        else "SHORT"
         tile(
           i * half,
           if i == 0 then half - 1 else rightWidth - half,
-          s"$key $label $$${Trading.format(size)}",
+          s"$key $label $$${Trading.format(size)}$times",
           DeskAction.Prepare(intent),
           canTrade
         )
@@ -346,20 +361,27 @@ object Workspace:
               Screen.bold + value.fold("")(p => if p >= 0 then style.bid else style.ask)
             content = style.wrap(profitStyle(view.portfolio.openProfit), content.take(half)) +
               style.wrap(profitStyle(view.portfolio.net), content.drop(half))
-          else if i >= tradeTop + 7 && i <= tradeTop + 11 then
-            (active ++ inactive).filter(_.height > 1).sortBy(-_.x).foreach { b =>
-              val colour = if inactive.contains(b) then Screen.dim
-              else
-                b.action match
-                  case DeskAction.Prepare(intent) if intent.side == Side.Sell =>
-                    style.ask + Screen.bold
-                  case _ => style.bid + Screen.bold
-              val start = b.x - leftWidth - 2
-              content = content.take(start) + style.wrap(
-                colour,
-                content.slice(start, start + b.width)
-              ) + content.drop(start + b.width)
-            }
+          else
+            (active ++ inactive)
+              .filter(b =>
+                (b.height > 1 || b.action == DeskAction.Close) && i >= b.y - 1 &&
+                  i < b.y - 1 + b.height
+              )
+              .sortBy(-_.x)
+              .foreach { b =>
+                val colour = if inactive.contains(b) then Screen.dim
+                else
+                  b.action match
+                    case DeskAction.Prepare(intent) if intent.side == Side.Sell =>
+                      style.ask + Screen.bold
+                    case DeskAction.Close => style.ask + Screen.bold
+                    case _                => style.bid + Screen.bold
+                val start = b.x - leftWidth - 2
+                content = content.take(start) + style.wrap(
+                  colour,
+                  content.slice(start, start + b.width)
+                ) + content.drop(start + b.width)
+              }
         val publicLine =
           if i == 0 && warnings.nonEmpty then left + style.wrap(style.ask, warnings)
           else left
@@ -375,6 +397,7 @@ object Workspace:
         Some(outlook),
         disabledButtons = inactive,
         shortcuts = active.collect {
-          case b if b.action.isInstanceOf[DeskAction.Prepare] => b.action
+          case b if b.action.isInstanceOf[DeskAction.Prepare] || b.action == DeskAction.Close =>
+            b.action
         }.toSet
       )

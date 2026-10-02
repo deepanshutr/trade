@@ -13,26 +13,35 @@ class InteractionSpec extends munit.FunSuite:
     bid = Some(BigDecimal(99)),
     ask = Some(BigDecimal(100))
   )
-  private class Fixture:
+  private val long = ready.copy(
+    position = Some(BigDecimal("0.2")),
+    leverage = Some(5),
+    marginMode = Some("cross")
+  )
+  private class Fixture(mode: String = "PROP", start: TradingView = ready):
     var snapshot = initial
-    var view = ready
+    var view = start
+    var held = start.position.getOrElse(BigDecimal(0))
+    var planned = Vector.empty[OrderIntent]
     var sent = Vector.empty[OrderReview]
     var modes = Vector.empty[String]
     val controller = new DeskController(
-      PanelView(mode = "PROP"),
+      PanelView(mode = mode),
       () => now,
-      order =>
+      order => {
+        planned :+= order
         Trading.plan(
           "XMR",
           ready.rules.get,
           Book(Vector(Level("99", "50", 1)), Vector(Level("100", "50", 1)), now),
           ready.reference(order.side).get,
-          BigDecimal(0),
+          held,
           order,
           TradeSizes(),
-          1,
+          start.leverage.getOrElse(1),
           Trading.defaultSlippage
-        ),
+        )
+      },
       order => { sent :+= order; view = view.copy(ready = false, pending = true); true },
       mode => { modes :+= mode; Right(()) }
     )
@@ -53,6 +62,8 @@ class InteractionSpec extends munit.FunSuite:
       controller.handle(command, snapshot, view, size, snapshot.prompt.nonEmpty)
     def press(button: DeskButton): Unit = key(Command.PointerPress(button.x, button.y, 0))
     def release(button: DeskButton): Unit = key(Command.Pointer(button.x, button.y, 0))
+    def x(): Unit = key(Keys.step(Vector.empty, 'x'.toInt, snapshot.prompt.nonEmpty)._2.get)
+    def notice: Option[String] = controller.panel.actionNotice
 
   test("a displayed shortcut submits immediately once and Enter cannot repeat it") {
     val f = new Fixture
@@ -220,4 +231,126 @@ class InteractionSpec extends munit.FunSuite:
       Command.Confirm
     ).foreach(command => f.key(command))
     assertEquals(f.sent.size, 0)
+  }
+
+  test("key x sends a reduce-only close of the whole long or short position") {
+    for (position, side) <- Vector("0.2" -> Side.Sell, "-0.2" -> Side.Buy) do
+      val f = new Fixture("LIVE", long.copy(position = Some(BigDecimal(position))))
+      f.draw()
+      f.x()
+      val close = OrderIntent(side, OrderKind.Close)
+      assertEquals(f.planned, Vector(close), position)
+      assertEquals(f.sent.map(_.intent), Vector(close), position)
+      val review = f.sent.head
+      assertEquals(review.plan.kind, OrderKind.Close)
+      assertEquals(review.plan.side, side)
+      assertEquals(review.plan.quantity, BigDecimal("0.2"))
+      assert(review.plan.reduceOnly)
+      assertEquals((review.leverage, review.marginMode), (Some(5), Some("cross")))
+      assertEquals(f.notice, Some("Sending"))
+      f.draw()
+      f.x()
+      assertEquals(f.sent.size, 1, "a pending close refuses a second press")
+  }
+
+  test("CLOSE ignores the selected amount and a click sends the same close") {
+    val f = new Fixture("LIVE", long)
+    val size = f.draw().buttons.find(_.action == DeskAction.OrderSize(true)).get
+    f.press(size)
+    f.release(size)
+    assert(f.controller.panel.bigOrder)
+    val close = f.draw().buttons.find(_.action == DeskAction.Close).get
+    f.press(close)
+    f.release(close)
+    assertEquals(f.sent.map(_.intent), Vector(OrderIntent(Side.Sell, OrderKind.Close)))
+  }
+
+  test("key x while flat answers through the disabled button and sends nothing") {
+    val flat = new Fixture("LIVE", long.copy(position = Some(BigDecimal(0))))
+    flat.draw()
+    flat.x()
+    assertEquals((flat.planned, flat.sent), (Vector.empty, Vector.empty))
+    assertEquals(flat.notice, Some("Not sent: controls changed"))
+    val stale = new Fixture("LIVE", long.copy(ready = false, block = Some("account data stale")))
+    stale.draw()
+    stale.x()
+    assertEquals((stale.planned, stale.sent), (Vector.empty, Vector.empty))
+    assertEquals(stale.notice, Some("account data stale"))
+  }
+
+  test("a close planned on a flat account reports that there is no position to close") {
+    val f = new Fixture("LIVE", long)
+    f.held = BigDecimal(0)
+    f.draw()
+    f.x()
+    assertEquals(f.planned, Vector(OrderIntent(Side.Sell, OrderKind.Close)))
+    assertEquals(f.sent, Vector.empty)
+    assertEquals(f.notice, Some("No position to close"))
+  }
+
+  test("key x does nothing in prop or view mode") {
+    for (mode, view) <- Vector(
+        "PROP" -> long.copy(leverage = None, marginMode = None),
+        "VIEW" -> long.copy(ready = false, block = Some("View only"))
+      )
+    do
+      val f = new Fixture(mode, view)
+      f.draw()
+      f.x()
+      assertEquals((f.planned, f.sent), (Vector.empty, Vector.empty), mode)
+      assertEquals(f.notice, None, mode)
+      assertEquals(f.controller.panel.actionNumber, 0L, mode)
+  }
+
+  test("key x sends nothing during a market prompt, a mode review or a pending order") {
+    val prompt = new Fixture("LIVE", long)
+    prompt.draw()
+    prompt.snapshot = initial.copy(prompt = Some("BT"))
+    prompt.x()
+    prompt.key(Command.Close)
+    val review = new Fixture("LIVE", long)
+    review.draw()
+    review.key(Command.Mode("PROP"))
+    review.draw()
+    review.x()
+    val pending = new Fixture("LIVE", long.copy(ready = false, pending = true))
+    pending.draw()
+    pending.x()
+    for f <- Vector(prompt, review, pending) do
+      assertEquals((f.planned, f.sent), (Vector.empty, Vector.empty))
+    assertEquals(review.notice, Some("Not sent: controls changed"))
+    assertEquals(pending.notice, Some("Order pending"))
+  }
+
+  test("key x is refused when the view stops being ready or starts pending before a redraw") {
+    for (changed, expected) <- Vector(
+        long.copy(ready = false, block = Some("account data stale")) -> "account data stale",
+        long.copy(pending = true) -> "Order pending"
+      )
+    do
+      val f = new Fixture("LIVE", long)
+      f.draw()
+      f.view = changed
+      f.x()
+      assertEquals((f.planned, f.sent), (Vector.empty, Vector.empty), expected)
+      assertEquals(f.notice, Some(expected))
+  }
+
+  test("a live close needs the observed margin mode like any live order") {
+    val f = new Fixture("LIVE", long.copy(marginMode = None))
+    f.draw()
+    f.x()
+    assertEquals((f.planned, f.sent), (Vector.empty, Vector.empty))
+    assertEquals(f.notice, Some("Not sent: price or account changed"))
+  }
+
+  test("a position change during a CLOSE press reports changed controls and sends nothing") {
+    val f = new Fixture("LIVE", long)
+    val close = f.draw().buttons.find(_.action == DeskAction.Close).get
+    f.press(close)
+    f.view = long.copy(position = Some(BigDecimal("0.3")))
+    f.draw()
+    f.release(close)
+    assertEquals(f.sent, Vector.empty)
+    assertEquals(f.notice, Some("Not sent: controls changed"))
   }

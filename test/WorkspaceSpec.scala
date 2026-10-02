@@ -162,3 +162,38 @@ class WorkspaceSpec extends munit.FunSuite:
         case _ => ()
     }
   }
+
+  test("CLOSE is coloured like a sell tile when enabled and dimmed when disabled") {
+    val live = view.copy(ready = true, leverage = Some(5))
+    def sizeRow(position: BigDecimal): String =
+      Workspace
+        .draw(
+          s,
+          live.copy(position = Some(position)),
+          PanelView(mode = "LIVE"),
+          100,
+          30,
+          now,
+          java.time.ZoneOffset.UTC,
+          Style.colour
+        )
+        .lines(30 - 15 + 5)
+    val sell = Style.colour.ask + Screen.bold
+    assert(sizeRow(BigDecimal("0.2")).contains(sell + "[x Close 0.2 XMR]" + Screen.reset))
+    assert(sizeRow(BigDecimal(0)).contains(Screen.dim + "[x Close]" + Screen.reset))
+  }
+
+  test("the CLOSE label starts with the key that presses it") {
+    val frame = Workspace.draw(
+      s,
+      view.copy(ready = true, leverage = Some(5), position = Some(BigDecimal("-0.2"))),
+      PanelView(mode = "LIVE"),
+      120,
+      40,
+      now,
+      java.time.ZoneId.of("UTC"),
+      Style.mono
+    )
+    val close = frame.buttons.find(_.action == DeskAction.Close).get
+    assertEquals(Keys.step(Vector.empty, close.label.head.toInt, false)._2, Some(Command.Close))
+  }
