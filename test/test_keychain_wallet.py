@@ -94,6 +94,107 @@ def run_main(*argv, data=b"", store=None, stdin=None, failure=None):
     return Result(code, out.getvalue(), err.getvalue(), keychain, stdin, files, made)
 
 
+READ_TAG = 99
+
+
+class Native:
+    """Stands in for CoreFoundation and Security around one access object.
+
+    The object holds `rules` rules. Each rule has the authorizations in `tags`, where
+    READ_TAG is the read tag. The trusted application list is null when `apps` is 0,
+    else it holds `listed` programs. `flags` is the rule's prompt flags. `read_status`
+    is what a read with no prompt returns. When `honor_set` is False the system drops
+    the flags it is asked to set.
+    """
+
+    def __init__(self, flags=0, listed=0, apps=3, tags=(READ_TAG,), rules=1,
+                 read_status=-25293, honor_set=True):
+        self.flags, self.listed, self.apps, self.tags = flags, listed, apps, tags
+        self.rules, self.read_status, self.honor_set = rules, read_status, honor_set
+        self.set_flags = []
+        self.interactions = []
+        self.buffer = C.create_string_buffer(FIXTURE, len(FIXTURE))
+
+    def values(self, array):
+        handle = array.value if isinstance(array, C.c_void_p) else array
+        return {1: [42] * self.rules, 2: list(self.tags)}[handle]
+
+    def CFEqual(self, left, right):
+        return left == right
+
+    def CFArrayGetCount(self, array):
+        return self.listed
+
+    def CFStringCreateWithCString(self, allocator, text, encoding):
+        return 5
+
+    def CFArrayCreate(self, allocator, values, count, callbacks):
+        return 6
+
+    def SecAccessCreate(self, title, trusted, result):
+        C.cast(result, C.POINTER(C.c_void_p)).contents.value = 7
+        return 0
+
+    def SecAccessCopyACLList(self, access, result):
+        C.cast(result, C.POINTER(C.c_void_p)).contents.value = 1
+        return 0
+
+    def SecACLCopyAuthorizations(self, entry):
+        return 2
+
+    def SecACLCopyContents(self, entry, apps, description, flags):
+        C.cast(apps, C.POINTER(C.c_void_p)).contents.value = self.apps
+        C.cast(description, C.POINTER(C.c_void_p)).contents.value = 4
+        C.cast(flags, C.POINTER(C.c_uint16)).contents.value = self.flags
+        return 0
+
+    def SecACLSetContents(self, entry, apps, description, flags):
+        self.set_flags.append(flags)
+        if self.honor_set:
+            self.flags = flags
+        return 0
+
+    def SecKeychainOpen(self, path, result):
+        C.cast(result, C.POINTER(C.c_void_p)).contents.value = 17
+        return 0
+
+    def SecKeychainItemCreateFromContent(self, kind, attrs, size, raw, chain, access, item):
+        C.cast(item, C.POINTER(C.c_void_p)).contents.value = 23
+        return 0
+
+    def SecKeychainItemCopyAccess(self, item, result):
+        C.cast(result, C.POINTER(C.c_void_p)).contents.value = 29
+        return 0
+
+    def SecKeychainGetUserInteractionAllowed(self, result):
+        C.cast(result, C.POINTER(C.c_ubyte)).contents.value = 1
+        return 0
+
+    def SecKeychainSetUserInteractionAllowed(self, allowed):
+        self.interactions.append(allowed.value if isinstance(allowed, C.c_ubyte) else int(allowed))
+        return 0
+
+    def SecKeychainItemCopyContent(self, item, kind, attributes, size, data):
+        # A refused read hands back no bytes. Only a read that succeeds does.
+        if self.read_status == 0:
+            C.cast(size, C.POINTER(C.c_uint32)).contents.value = len(FIXTURE)
+            C.cast(data, C.POINTER(C.c_void_p)).contents.value = C.addressof(self.buffer)
+        return self.read_status
+
+    def SecKeychainItemFreeContent(self, attributes, data):
+        return 0
+
+
+def native_store(**options):
+    native = Native(**options)
+    store = wallet.MacKeychain.__new__(wallet.MacKeychain)
+    store.cf = store.sec = native
+    store.read_tags = [READ_TAG]
+    store.values = native.values
+    store.release = lambda *references: None
+    return store, native
+
+
 class KeychainWalletTests(unittest.TestCase):
     def test_unexpected_errors_keep_fixed_message(self):
         for failure in (ValueError(FIXTURE.hex()), RuntimeError(FIXTURE.hex())):
@@ -178,8 +279,13 @@ class KeychainWalletTests(unittest.TestCase):
         self.assertEqual(store.calls, [])
 
     def test_noninteractive_probe_accepts_only_access_refusal(self):
-        self.assertTrue(wallet.acceptable_read_status(-25308))
-        for status in (0, -25300, -25293, -50):
+        # -25308 is errSecInteractionNotAllowed. -25293 is errSecAuthFailed, which macOS 27
+        # returns for a stored item whose read rule has an empty trusted list.
+        for status in (-25308, -25293):
+            with self.subTest(refused=status):
+                self.assertTrue(wallet.acceptable_read_status(status))
+        # 0 is a read that worked. -25300 is an item that is not there.
+        for status in (0, -25300, -25299, -50, 1):
             with self.subTest(status=status):
                 self.assertFalse(wallet.acceptable_read_status(status))
 
@@ -226,7 +332,15 @@ class KeychainWalletTests(unittest.TestCase):
                 store.sec = FakeSecurity(status)
                 store.access = lambda label: 31
                 store.release = lambda *args: None
-                store.access_rules = lambda value: store.sec.later_calls.append("verify access")
+                # The saved item is checked once, on the saved access only, with the
+                # relaxed rule. The in-memory access object (31) is never checked here.
+                checks = []
+
+                def verify(value, **options):
+                    checks.append((value.value, options))
+                    store.sec.later_calls.append("verify access")
+
+                store.access_rules = verify
                 store.probe = lambda item: store.sec.later_calls.append("probe")
                 if status:
                     with self.assertRaisesRegex(RuntimeError, str(status)) as raised:
@@ -236,9 +350,11 @@ class KeychainWalletTests(unittest.TestCase):
                     self.assertEqual(isinstance(raised.exception, wallet.DuplicateItem),
                                      status == -25299)
                     self.assertEqual(store.sec.later_calls, [])
+                    self.assertEqual(checks, [])
                 else:
                     store.add("desk", PUBLIC, "Desk agent key", bytearray(FIXTURE.hex().encode()))
                     self.assertEqual(store.sec.later_calls, ["copy access", "verify access", "probe"])
+                    self.assertEqual(checks, [(29, {"require_password": False})])
                 self.assertEqual(store.sec.assert_kind, wallet.fourcc("genp"))
                 self.assertEqual(store.sec.attributes, {
                     wallet.fourcc("svce"): b"desk", wallet.fourcc("acct"): PUBLIC.encode(),
@@ -268,45 +384,18 @@ class KeychainWalletReviewTests(unittest.TestCase):
                         wallet.address(value)
             derive.assert_not_called()
 
-    def test_read_acl_without_password_requirement_is_rejected(self):
-        class FakeCF:
-            def CFEqual(self, left, right):
-                return left == right
-
-            def CFArrayGetCount(self, array):
-                return 0
-
-        class FakeSecurity:
-            def __init__(self, flags):
-                self.flags = flags
-
-            def SecAccessCopyACLList(self, access, result):
-                C.cast(result, C.POINTER(C.c_void_p)).contents.value = 1
-                return 0
-
-            def SecACLCopyAuthorizations(self, entry):
-                return 2
-
-            def SecACLCopyContents(self, entry, apps, description, flags):
-                C.cast(apps, C.POINTER(C.c_void_p)).contents.value = 3
-                C.cast(description, C.POINTER(C.c_void_p)).contents.value = 4
-                C.cast(flags, C.POINTER(C.c_uint16)).contents.value = self.flags
-                return 0
-
-        for flags in (0, 1):
-            with self.subTest(flags=flags):
-                store = wallet.MacKeychain.__new__(wallet.MacKeychain)
-                store.cf = FakeCF()
-                store.sec = FakeSecurity(flags)
-                store.read_tags = [99]
-                store.values = lambda array: {1: [42], 2: [99]}[
-                    array.value if isinstance(array, C.c_void_p) else array]
-                store.release = lambda *references: None
-                if flags == 0:
-                    with self.assertRaisesRegex(RuntimeError, "password prompt is not required"):
-                        store.access_rules(17)
-                else:
-                    self.assertEqual(store.access_rules(17), 1)
+    def test_in_memory_check_rejects_a_read_rule_without_the_password_flag(self):
+        # This was the stored-item check test. The stored item no longer needs the flag, so
+        # it now targets the strict check that MacKeychain.access runs on its own object.
+        for flags, accepted in ((0, False), (0x100, False), (1, True), (0x101, True)):
+            for options in ({}, {"require_password": True}):
+                with self.subTest(flags=flags, options=options):
+                    store, _ = native_store(flags=flags)
+                    if accepted:
+                        self.assertEqual(store.access_rules(17, **options), 1)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "password prompt is not required"):
+                            store.access_rules(17, **options)
 
     def test_encoded_buffer_is_wiped_after_storage_success_or_failure(self):
         class RetainedBufferStore(Store):
@@ -350,11 +439,12 @@ class KeychainWalletReviewTests(unittest.TestCase):
                 self.freed.append(C.string_at(data, len(FIXTURE)))
                 return 0
 
-        for status in (-25308, 0, -25300):
+        # -25308 and -25293 are refusals. 0 is a read that worked and -25300 is no item.
+        for status in (-25308, -25293, 0, -25300):
             with self.subTest(status=status):
                 store = wallet.MacKeychain.__new__(wallet.MacKeychain)
                 store.sec = FakeSecurity(status)
-                if status == -25308:
+                if status in (-25308, -25293):
                     store.probe(17)
                 else:
                     with self.assertRaisesRegex(RuntimeError, "did not refuse access"):
@@ -362,6 +452,120 @@ class KeychainWalletReviewTests(unittest.TestCase):
                 self.assertEqual(store.sec.freed, [bytes(32)])
                 self.assertEqual(store.sec.buffer.raw, bytes(32))
                 self.assertEqual(store.sec.interactions, [0, 1])
+
+
+class StoredItemRuleTests(unittest.TestCase):
+    """The stored item has no trusted program and refuses a read without a prompt.
+
+    macOS 27 stores the read rule with prompt flags 0x100 and drops the 0x1 flag. The
+    stored-item check therefore skips the flag and keeps every other condition.
+    """
+
+    def store_with(self, **options):
+        store, _ = native_store(**options)
+        return store
+
+    def test_stored_check_accepts_flags_0x100_with_an_empty_application_list(self):
+        for flags in (0x100, 0, 1, 0x101):
+            with self.subTest(flags=flags):
+                store, native = native_store(flags=flags)
+                self.assertEqual(store.access_rules(17, require_password=False), 1)
+                self.assertEqual(native.set_flags, [])
+
+    def test_stored_check_counts_every_read_rule(self):
+        store, _ = native_store(flags=0x100, rules=2)
+        self.assertEqual(store.access_rules(17, require_password=False), 2)
+
+    def test_stored_check_still_refuses_a_non_empty_application_list(self):
+        for flags in (0x100, 1):
+            with self.subTest(flags=flags):
+                store = self.store_with(flags=flags, listed=1)
+                with self.assertRaisesRegex(RuntimeError, "a key reader is preauthorized"):
+                    store.access_rules(17, require_password=False)
+
+    def test_stored_check_still_refuses_a_null_application_list(self):
+        # A null list means any application may read.
+        for flags in (0x100, 1):
+            with self.subTest(flags=flags):
+                store = self.store_with(flags=flags, apps=0)
+                with self.assertRaisesRegex(RuntimeError, "a key reader is preauthorized"):
+                    store.access_rules(17, require_password=False)
+
+    def test_stored_check_still_needs_a_read_rule(self):
+        for name, options in (("no rule at all", {"rules": 0}),
+                              ("a rule that cannot read", {"tags": (98,)})):
+            with self.subTest(name):
+                store = self.store_with(flags=0x100, **options)
+                with self.assertRaisesRegex(RuntimeError, "no secret read authorization found"):
+                    store.access_rules(17, require_password=False)
+
+    def test_in_memory_check_keeps_the_application_list_and_read_rule_conditions(self):
+        cases = (("non-empty list", {"listed": 1}, "a key reader is preauthorized"),
+                 ("null list", {"apps": 0}, "a key reader is preauthorized"),
+                 ("no rule at all", {"rules": 0}, "no secret read authorization found"),
+                 ("a rule that cannot read", {"tags": (98,)}, "no secret read authorization found"))
+        for name, options, message in cases:
+            for call in ({}, {"require_password": True}):
+                with self.subTest(name, call=call):
+                    store = self.store_with(flags=1, **options)
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        store.access_rules(17, **call)
+
+    def test_require_password_is_keyword_only_and_defaults_to_strict(self):
+        store, _ = native_store(flags=0x100)
+        with self.assertRaises(TypeError):
+            store.access_rules(17, False, False)
+        with self.assertRaisesRegex(RuntimeError, "password prompt is not required"):
+            store.access_rules(17)
+
+    def test_configure_still_sets_the_password_flag(self):
+        for flags in (0, 0x100):
+            for options in ({}, {"require_password": True}, {"require_password": False}):
+                with self.subTest(flags=flags, options=options):
+                    store, native = native_store(flags=flags)
+                    self.assertEqual(store.access_rules(17, configure=True, **options), 1)
+                    self.assertEqual(native.set_flags, [flags | 1])
+
+    def test_check_mode_never_sets_a_flag(self):
+        for options in ({}, {"require_password": False}):
+            with self.subTest(options=options):
+                store, native = native_store(flags=1)
+                store.access_rules(17, **options)
+                self.assertEqual(native.set_flags, [])
+
+    def test_the_in_memory_object_is_built_with_the_strict_check(self):
+        # If the system kept the flag it was asked to set, the object passes.
+        store, native = native_store(flags=0)
+        self.assertEqual(store.access("Desk test").value, 7)
+        self.assertEqual(native.set_flags, [1])
+        # If the system dropped the flag, the strict check refuses the object. The relaxed
+        # check would have let it through.
+        store, native = native_store(flags=0, honor_set=False)
+        with self.assertRaisesRegex(RuntimeError, "password prompt is not required"):
+            store.access("Desk test")
+
+    def test_add_accepts_the_item_macos_27_stores(self):
+        # Flags 0x100, an empty application list, and a read with no prompt that returns
+        # -25293 with no bytes. This is the stored item that failed before.
+        for status in (-25293, -25308):
+            with self.subTest(status=status):
+                store, native = native_store(flags=0x100, read_status=status)
+                store.access = lambda label: 31
+                store.add("desk", PUBLIC, "Desk agent key", bytearray(HEX))
+                self.assertEqual(native.interactions, [0, 1])
+
+    def test_add_refuses_a_stored_item_that_is_not_locked_down(self):
+        cases = (("trusted program", {"listed": 1}, "a key reader is preauthorized"),
+                 ("any application", {"apps": 0}, "a key reader is preauthorized"),
+                 ("no read rule", {"rules": 0}, "no secret read authorization found"),
+                 ("read works", {"read_status": 0}, "did not refuse access"),
+                 ("no item", {"read_status": -25300}, "did not refuse access"))
+        for name, options, message in cases:
+            with self.subTest(name):
+                store, _ = native_store(flags=0x100, **options)
+                store.access = lambda label: 31
+                with self.assertRaisesRegex(RuntimeError, message):
+                    store.add("desk", PUBLIC, "Desk agent key", bytearray(HEX))
 
 
 class StoreModeTests(unittest.TestCase):
