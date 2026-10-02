@@ -2406,18 +2406,20 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.close()
   }
 
-  test("XMR below five stays disabled without an account mutation") {
-    val f = new Fixture(initialLeverage = 1, marketMaximum = 2)
-    try
-      Wait.until("account was not observed")(f.worker.view.position.nonEmpty)
-      assert(!f.worker.view.ready)
-      assertEquals(f.worker.view.block, Some("Set XMR leverage to 5x"))
-      assertEquals(f.worker.view.blockCode, BlockCode.Leverage)
-      assertEquals(f.worker.view.leverage, Some(1))
-      assertEquals(f.posts.get(), 0)
-      assert(f.worker.preview(buy).isRight)
-    finally f.close()
-  }
+  for (leverage, maximum) <- Vector(1 -> 2, 4 -> 10, 6 -> 10) do
+    test(s"XMR at $leverage within a $maximum limit stays disabled without an account mutation") {
+      val f = new Fixture(initialLeverage = leverage, marketMaximum = maximum)
+      try
+        Wait.until("account was not observed")(f.worker.view.position.nonEmpty)
+        assert(!f.worker.view.ready)
+        assertEquals(f.worker.view.block, Some("Set XMR leverage to 5x"))
+        assertEquals(f.worker.view.blockCode, BlockCode.Leverage)
+        assertEquals(f.worker.view.leverage, Some(leverage))
+        assert(!f.worker.submit(buy, "XMR"))
+        assertEquals(f.posts.get(), 0)
+        assert(f.worker.preview(buy).isRight)
+      finally f.close()
+    }
 
   test(
     "invalid leverage never becomes ready and never triggers a corrective post"

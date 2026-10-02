@@ -172,12 +172,16 @@ object TradingConfig:
         val balance = decimal("propBalance", d.propBalance)
         val fee = decimal("propFee", d.propFee)
         require(balance > 0 && balance <= BigDecimal("1000000000"), "invalid prop balance")
-        require(fee >= 0 && fee <= BigDecimal("0.01"), "invalid prop fee")
+        // At most eight decimal places. An extreme exponent would make every order sum slow.
+        require(fee.scale <= 8 && fee >= 0 && fee <= BigDecimal("0.01"), "invalid prop fee")
         // A quoted fraction. Any other value stops the start with the same fixed message.
         val slippage = j.obj
           .get("slippage")
           .fold(Option(d.slippage))(_.strOpt.flatMap(text => Try(BigDecimal(text)).toOption))
-        require(slippage.exists(s => s > 0 && s <= BigDecimal("0.01")), "invalid slippage")
+        require(
+          slippage.exists(s => s.scale <= 8 && s > 0 && s <= BigDecimal("0.01")),
+          "invalid slippage"
+        )
         TradingConfig(
           sizes,
           network,
