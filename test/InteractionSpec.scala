@@ -366,3 +366,15 @@ class InteractionSpec extends munit.FunSuite:
       assertEquals(f.sent.head.plan.quantity, BigDecimal(position))
       assert(f.sent.head.plan.reduceOnly)
   }
+
+  test("key x sends nothing when a frame drawn before a mode review is published after it") {
+    val f = new Fixture("LIVE", long)
+    f.draw()
+    val before = f.controller.panel
+    f.key(Command.Mode("PROP"))
+    f.controller.publish(
+      Workspace.draw(f.snapshot, f.view, before, 120, 40, now, java.time.ZoneOffset.UTC, Style.mono)
+    )
+    f.x()
+    assertEquals((f.planned, f.sent), (Vector.empty, Vector.empty))
+  }

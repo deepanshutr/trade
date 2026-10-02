@@ -166,11 +166,12 @@ separate user actions.
 
 Real orders on every market require observed leverage of five times. Otherwise the
 controls name the market, for example "Set BTC leverage to 5x", and refuse every
-order. Select 5x for that market at the venue. Desk preserves the observed margin
-mode and never signs a leverage change. The margin mode and leverage are captured
-with each order and rechecked before sending. Changing them at the venue invalidates
-a captured order. Missing or stale position data remains unavailable and is never
-interpreted as a flat account.
+order. Select 5x for that market at the venue. A market whose maximum leverage is
+below 5x cannot trade live. Desk preserves the observed margin mode and never signs
+a leverage change. The margin mode and leverage are captured with each order and
+rechecked before sending. Changing them at the venue invalidates a captured order.
+Missing or stale position data remains unavailable and is never interpreted as a
+flat account.
 
 A new account may already read five times on XMR. An anonymous read on 2026-10-02
 for an address that had never traded showed XMR at 5x and BTC at 20x. That is an
