@@ -238,6 +238,7 @@ object Workspace:
       val half = rightWidth / 2
       def line(row: Int, text: String): Unit =
         if row >= 0 && row < rows then right(row) = safeText(text)
+      def fits(column: Int, label: String): Boolean = column + label.length + 2 <= rightWidth
       def button(
           row: Int,
           column: Int,
@@ -246,7 +247,7 @@ object Workspace:
           enabled: Boolean = true
       ): Unit =
         val text = "[" + label + "]"
-        if column + text.length <= rightWidth then
+        if fits(column, label) then
           right(row) = right(row).padTo(column, ' ') + text
           val b = DeskButton(label, action, leftWidth + 2 + column, row + 1, text.length)
           if enabled && s.marketPending.isEmpty then buttons += b else disabled += b
@@ -307,13 +308,16 @@ object Workspace:
       // Live labels follow the position. The side facing an open position only reduces it.
       val held = if live then view.position.filter(_ != 0) else None
       val close = held.filter(_ => canTrade)
-      button(
-        tradeTop + 5,
-        small.length + big.length + 6,
-        close.fold("x Close")(p => s"x Close ${Trading.format(p.abs)} ${s.coin}"),
-        DeskAction.Close,
-        close.nonEmpty
-      )
+      val closeColumn = small.length + big.length + 6
+      // A label too long for the row drops the coin, then the quantity, rather than the button.
+      val closeLabel = close
+        .fold(Vector.empty[String]) { p =>
+          val quantity = Trading.format(p.abs)
+          Vector(s"x Close $quantity ${s.coin}", s"x Close $quantity")
+        }
+        .find(fits(closeColumn, _))
+        .getOrElse("x Close")
+      button(tradeTop + 5, closeColumn, closeLabel, DeskAction.Close, close.nonEmpty)
       val times = if live then view.leverage.fold("")(n => s" x$n") else ""
       Vector(Side.Buy, Side.Sell).zipWithIndex.foreach { (side, i) =>
         val intent = OrderIntent(side, OrderKind.Hard, big = panel.bigOrder)

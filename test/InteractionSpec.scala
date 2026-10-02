@@ -62,7 +62,8 @@ class InteractionSpec extends munit.FunSuite:
       controller.handle(command, snapshot, view, size, snapshot.prompt.nonEmpty)
     def press(button: DeskButton): Unit = key(Command.PointerPress(button.x, button.y, 0))
     def release(button: DeskButton): Unit = key(Command.Pointer(button.x, button.y, 0))
-    def x(): Unit = key(Keys.step(Vector.empty, 'x'.toInt, snapshot.prompt.nonEmpty)._2.get)
+    def x(size: (Int, Int) = (120, 40)): Unit =
+      key(Keys.step(Vector.empty, 'x'.toInt, snapshot.prompt.nonEmpty)._2.get, size)
     def notice: Option[String] = controller.panel.actionNotice
 
   test("a displayed shortcut submits immediately once and Enter cannot repeat it") {
@@ -353,4 +354,15 @@ class InteractionSpec extends munit.FunSuite:
     f.release(close)
     assertEquals(f.sent, Vector.empty)
     assertEquals(f.notice, Some("Not sent: controls changed"))
+  }
+
+  test("at the narrowest size a position too long for the full CLOSE label still closes by key") {
+    for position <- Vector("1234567890123.45", "1234567890123456789.12") do
+      val f = new Fixture("LIVE", long.copy(position = Some(BigDecimal(position))))
+      val frame = f.draw(100, 30)
+      assert(frame.buttons.exists(_.action == DeskAction.Close), position)
+      f.x((100, 30))
+      assertEquals(f.sent.map(_.intent), Vector(OrderIntent(Side.Sell, OrderKind.Close)), position)
+      assertEquals(f.sent.head.plan.quantity, BigDecimal(position))
+      assert(f.sent.head.plan.reduceOnly)
   }

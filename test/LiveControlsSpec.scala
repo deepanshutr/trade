@@ -159,3 +159,31 @@ class LiveControlsSpec extends munit.FunSuite:
         name
       )
   }
+
+  test("CLOSE shortens its label instead of disappearing when the full label does not fit") {
+    val cases = Vector(
+      ("1234567890123.45", TradeSizes(), "x Close 1234567890123.45"),
+      ("1234567890123456789.12", TradeSizes(), "x Close"),
+      ("0.2", TradeSizes(BigDecimal("1000000000"), BigDecimal("1000000000")), "x Close 0.2")
+    )
+    for (position, sizes, expected) <- cases; big <- Vector(false, true) do
+      val live = draw(
+        readyView.copy(position = Some(BigDecimal(position))),
+        PanelView(mode = "LIVE", sizes = sizes, bigOrder = big)
+      )
+      val close = live.buttons.filter(_.action == DeskAction.Close)
+      assertEquals(close.map(_.label), Vector(expected), position)
+      assert(live.lines(close.head.y - 1).contains("[" + expected + "]"), position)
+      assert(close.head.x + close.head.width - 1 <= 100, position)
+      assert(live.shortcuts.contains(DeskAction.Close), position)
+    val wide = draw(
+      readyView.copy(position = Some(BigDecimal("1234567890123.45"))),
+      PanelView(mode = "LIVE"),
+      160,
+      45
+    )
+    assertEquals(
+      wide.buttons.filter(_.action == DeskAction.Close).map(_.label),
+      Vector("x Close 1234567890123.45 XMR")
+    )
+  }
