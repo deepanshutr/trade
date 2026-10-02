@@ -185,6 +185,7 @@ class OrderJournalSpec extends TempDirectorySuite:
     val first = OrderJournal.open(dir, identity)
     val saved = first.reserve(reduce, owner, 1000L)
     first.close()
+    assert(saved.reduceOnly)
     val file = dir.resolve(identity + ".json")
     val data = ujson.read(Files.readString(file))
     data("pending").obj.remove("reduceOnly")
