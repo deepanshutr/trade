@@ -66,20 +66,80 @@ Trailing zeros count, so `"0.0010000000"` is refused. Any other value stops the 
 with "invalid trading settings: invalid slippage". Real orders, prop orders and CLOSE
 all use it.
 
+## Settings inside Desk
+
+Press `s` in the workspace for settings. The [workspace guide](workspace.md#settings)
+describes the page, the amounts and the key bindings. Desk writes only `small`, `big`
+and `slippage` in the settings file and keeps every other field. The first write
+renders the whole file again with two-space indentation, so comments and hand
+formatting are lost. Each write is checked against the start-up rules, replaces the
+whole file at once with mode `600`, so no reader sees half a file, and is refused with "Settings changed on disk.
+Leave and open settings again" when another program changed the file after settings
+read it. When no settings file exists, the first write creates
+`~/.config/desk/config.json`. When Desk was started with `--config PATH`, it writes that
+file. A write needs the file's folder to be private. Otherwise it is refused with "local
+storage must be private" and the folder's full path. Run `chmod 700` on that folder.
+
+A saved size or slippage applies to the next order without a restart. Every order
+review carries the sizes and slippage it was made with, so an order already reviewed
+still sends what it showed.
+
 Live setup needs the public `owner` address in the settings and an active key. The
 `owner` is the address of the wallet that owns the account. It uses the `0x` prefix
 followed by 40 hexadecimal characters. The settings take no `agent`. A settings file
-that has one stops every start, including `desk --keys`, until the field is removed. The
-message says to remove `agent` and that the trading key is now chosen with
-`desk --keys`. Keep every private value out of the settings, the command line, files and
-chat.
+that has one stops every start until the field is removed. The message says to remove
+`agent` and that the trading key is now chosen in Desk settings. Keep every private
+value out of the settings, the command line, files and chat.
 
-Run `desk --keys` to open the key screen. It opens before the workspace and exits when
-you leave it. `desk XMR --trade` opens it first when no usable key exists. It goes on
-into the workspace only when you leave with a usable active key. Otherwise Desk exits
-with "No trading key". A usable key has an active choice for the selected network, a
-name on that network, and a Keychain item for its address. The check reads the item's
+Live without a usable key or an owner shows "Live setup required. Press s for settings"
+and refuses orders. A usable key has an active choice for the selected network, a name
+on that network, and a Keychain item for its address. The check reads the item's
 attributes only. It never reads the key.
+
+The Keys section of settings has four rows:
+
+- Trading key shows the active key's name and address, or why no key is usable. Enter
+  opens the key screen described below.
+- Owner shows the owner tooling's status and the owner address. Enter makes the owner
+  or continues the step the owner is waiting on, as the status says.
+- Approval shows "approved", "not approved" or "not checked". Enter asks the owner to
+  approve the trading key at the venue. It runs only when the owner is ready, Desk has
+  a usable key and the key is not approved yet.
+- Funding shows the balance at the venue and how long ago it was read. Enter copies the
+  owner's address. Fund it by a transfer to that address at the venue from an account
+  you control. Desk never sends money.
+
+The order of first use on mainnet is Owner, Funding, Approval, then Live.
+
+Desk reads the owner status in the background when settings open, every 15 seconds
+while they stay open, after each step and on `r`. A slow read never delays the screen.
+The owner tooling is optional. Without it the Owner, Approval and Funding rows read
+"Owner tooling is not installed" and Enter does nothing there. A status reply that is
+not exactly the expected fields, fails, or is 4096 bytes or more shows "Owner status
+unavailable". The approval step works only with a settings file inside
+`~/.config/desk`. With a `--config` file elsewhere the Approval row says so.
+
+The key screen and the owner steps run in a short child process that owns the
+terminal. Secrets are typed there, never in the running Desk. Before a child starts,
+Desk stops its live worker, which releases the saved-order lock so the key screen can
+switch keys. While an order is pending, Desk refuses with "Wait for the pending order".
+A live worker that does not stop shows "Trading did not stop. Restart Desk" and no
+child runs. The child's own prompts and refusals stay on the terminal. When it exits,
+Desk prints "Press Enter to return to Desk." A step that fails shows "The step did not
+complete (exit N)".
+
+Control C during a child stops the child, not Desk. Control backslash prints a list of
+Desk's threads on the terminal and Desk keeps running. Do not press Control Z at an
+owner prompt. It stops Desk and the child together, and `fg` in the shell resumes both.
+
+After every child, and on `r`, Desk reads the settings file and the active key again.
+The file's sizes and slippage apply at once. A hand edit made while Desk runs waits
+for `r` or the next child. A changed network is refused with "Restart Desk to change
+the network". When the owner or the active key changed, Desk replaces its live worker.
+In view mode the account figures then show `--` until you switch modes.
+
+The key screen opens from settings. It lists, makes, restores, renames and selects
+keys.
 
 To make a key, press `n`. Desk makes a random seed and copies it to the clipboard. The
 screen never shows the seed. Paste it into Passwords, save it there and press Enter.
@@ -96,7 +156,8 @@ and the passphrase. Rebuilding it needs both. Desk saves neither.
 
 Some copies of the seed, the passphrase and the key can stay in Java and BouncyCastle
 (the cryptography library) memory buffers. Desk cannot clear them until the process
-exits. `desk --keys` exits when you leave it, so it is the cleaner way to make a key.
+exits. The key screen runs in its own process that exits when you leave it, so those
+copies end with it.
 
 The list shows each key with its name, address, network, approval name and an active
 mark. Up and Down move. Enter selects the key. `r` renames it, `n` makes a new key, `s`
@@ -118,6 +179,9 @@ private value.
 
 The key helper keeps the only Keychain write. `make install` copies it to
 `~/.local/lib/desk-keychain.py` and writes the launcher with the Python it will use.
+Run `make install DESK_VAULT=/absolute/path/to/the/vault` once to give settings the
+owner tooling. The launcher then exports `DESK_VAULT` next to the other two variables.
+The path must be absolute and is checked the same way.
 Desk gives the helper the derived key on standard input, and the helper stores it as a
 generic password under service `desk`. The account is the key's address. A custom
 `keyService` setting changes the service name. The helper needs the installed Python
@@ -136,9 +200,14 @@ guide](https://support.apple.com/en-us/guide/keychain-access/kyca1243/mac). Desk
 the key in memory until that process closes. Starting a new chat does not close a
 running Desk process. Each live worker gets its own copy and wipes it when the worker
 closes. A denied or timed-out read leaves Desk running without a key. Live then shows
-its blocking reason, and Desk does not ask again until you restart it. Desk verifies
-that the loaded key matches the active key and that the venue reports delegation to the
-owner.
+its blocking reason. Desk verifies that the loaded key matches the active key and that
+the venue reports delegation to the owner.
+
+After settings change the active key or the owner, Desk reads the new key the same
+way, with the same prompt line. When the read is denied, the Trading key row says "The
+key was not read. Press r to ask again", and each `r` asks again. Each read leaves one
+more copy of the key in Desk's memory until Desk exits, so do not press `r` without a
+reason. An unchanged key is not read again.
 
 Making a key does not register a trading account. The wallet that owns the account must
 approve the key's address at the venue as a named API key. Approve it under the approval
@@ -146,8 +215,8 @@ name that Desk shows. The name is `desk-` followed by the first ten hexadecimal
 characters of the address after `0x`. Each key has its own name, so up to three Desk
 keys can be approved at once. Until the approval is in place the key cannot trade, and
 the role check must pass. An approval can expire. A key whose approval has expired
-cannot trade until the owner approves it again. Keep funding and account setup separate
-from the key screen.
+cannot trade until the owner approves it again. The Approval row in settings runs
+that step through the owner tooling.
 
 Desk's local signer accepts only its supported immediate orders. It rejects fund
 transfers, withdrawals, permission changes and leverage changes before producing
