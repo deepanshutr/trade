@@ -41,18 +41,24 @@ leverage is unknown.
 | Long | `LONG $20 x5` | `REDUCE $20 x5` |
 | Short | `REDUCE $20 x5` | `SHORT $20 x5` |
 
+A key acts on the position at the moment of the press, while a click acts only if
+the button still shows the same label.
+
 REDUCE only shrinks the position and stops at flat. It never opens the other side.
-To turn a long into a short, press CLOSE, then SHORT.
+To turn a long into a short, press CLOSE, then SHORT. For 2 seconds after a REDUCE or
+CLOSE finishes, real trading refuses any order that would open or grow a position,
+with the notice "Opening paused for 2 s after closing".
 
 CLOSE sits on the size row after the two amounts. Press `x` or click it to exit the
 whole position. Its label names the position, for example `x Close 0.2 XMR`. On a
-narrow row the label drops the market, then the quantity. It is enabled only in
-real trading with ready account data, an open position and no pending order.
-Otherwise it reads `x Close` and is dimmed. With ready account data and no
-position, `x` shows "Not sent: controls changed". A close that fills in part leaves
-the rest open. Press CLOSE again. Prop trading keeps Buy and Sell, and CLOSE stays
-disabled there for now. In prop or view mode `x` does nothing. See
-[live trading settings](trading.md) for amounts and the price allowance.
+narrow row the label drops the market, then the quantity. It is enabled only in real
+trading with ready account data and a fresh nonzero position, while no order is
+pending or saved, no mode confirmation or market prompt is open, no market change is
+pending, and the heading fits the row. Otherwise it reads `x Close` and is dimmed.
+With ready account data and no position, `x` shows "Not sent: controls changed". A
+close that fills in part leaves the rest open. Press CLOSE again. Prop trading keeps
+Buy and Sell, and CLOSE stays disabled there for now. In prop or view mode `x` does
+nothing. See [live trading settings](trading.md) for amounts and the price allowance.
 
 | Input | Action |
 | --- | --- |

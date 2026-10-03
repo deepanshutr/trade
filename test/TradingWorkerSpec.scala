@@ -47,12 +47,14 @@ class TradingWorkerSpec extends TempDirectorySuite:
       beforeAccountRead: Int => Unit = _ => (),
       missing: String = "",
       failJournalOpen: Boolean = false,
-      slippage: BigDecimal = Trading.defaultSlippage
+      slippage: BigDecimal = Trading.defaultSlippage,
+      sizes: TradeSizes = TradeSizes()
   ):
     private val key = Array.fill[Byte](32)(1)
     val agent = OrderSigning.address(key)
     val owner = "0x" + "2" * 40
     val config = TradingConfig(
+      sizes = sizes,
       owner = Option.when(missing != "owner")(owner),
       agent = Option.when(missing != "agent")(agent),
       slippage = slippage
@@ -85,6 +87,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     @volatile var hold = false
     @volatile var lose = false
     @volatile var reject = false
+    @volatile var fillSize = "1"
     @volatile var lookupFailure = false
     var openedJournal: OrderJournal = null
     @volatile var position = "0"
@@ -278,7 +281,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
                     ujson.Obj(
                       "filled" ->
                         ujson.Obj(
-                          "totalSz" -> "1",
+                          "totalSz" -> fillSize,
                           "avgPx" -> "100",
                           "oid" -> 9
                         )
@@ -2792,4 +2795,119 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally
       release.countDown()
       f.close()
+  }
+
+  private val sell = OrderIntent(Side.Sell, OrderKind.Hard)
+  // At 5x and a quote near 100, $20 is a $100 position, about 1 XMR.
+  private val twenty = TradeSizes(BigDecimal(20), BigDecimal(100))
+
+  // Sends one reviewed press and waits until the account shows the next position.
+  private def press(f: Fixture, intent: OrderIntent, posts: Int, after: String): OrderPlan =
+    val review = f.review(intent)
+    assert(f.worker.submitReviewed(review), intent)
+    Wait.until("order was not posted")(f.orderPosts.get() == posts)
+    holding(f, after)
+    review.plan
+
+  // Long 1.5: a REDUCE of 1, then a press that would cross flat and closes the last 0.5.
+  private def reduceToFlat(f: Fixture): Unit =
+    f.ready()
+    holding(f, "1.5")
+    val reduce = press(f, sell, 1, "0.5")
+    assert(reduce.reduceOnly && reduce.kind == OrderKind.Hard, reduce)
+    f.fillSize = "0.5"
+    val close = press(f, sell, 2, "0")
+    assert(close.reduceOnly && close.kind == OrderKind.Close, close)
+    f.fillSize = "1"
+
+  // Moves the fake monotonic clock and renews the quotes at the new time.
+  private def advance(f: Fixture, ms: Long, bookTime: Long): Unit =
+    f.clock.addAndGet(ms)
+    f.fresh(f.worker, time = bookTime)
+    f.ready()
+
+  test("the same key pressed after a reduce and a close cannot open a short within 2 s") {
+    val f = new Fixture(sizes = twenty)
+    try
+      reduceToFlat(f)
+      val view = f.worker.view
+      assert(view.ready)
+      assertEquals(f.worker.preview(sell), Left(TradingWorker.openingPausedMessage))
+      assert(!f.worker.submit(sell, "XMR"))
+      val controller = new DeskController(
+        PanelView(mode = "LIVE", sizes = twenty),
+        () => f.clock.get(),
+        f.worker.preview,
+        f.worker.submitReviewed,
+        _ => Right(())
+      )
+      val snapshot = Snapshot.initial("XMR", 1000L)
+      val frame = Workspace.draw(
+        snapshot,
+        view,
+        controller.panel,
+        120,
+        40,
+        1000L,
+        java.time.ZoneOffset.UTC,
+        Style.mono
+      )
+      assert(frame.buttons.exists(_.label == "3 SHORT $20 x5"), frame.buttons.map(_.label))
+      controller.publish(frame)
+      controller.handle(Command.PlaceOrder(sell), snapshot, view, (120, 40), false)
+      assertEquals(controller.panel.actionNotice, Some(TradingWorker.openingPausedMessage))
+      val shown = Workspace.draw(
+        snapshot,
+        view,
+        controller.panel,
+        120,
+        40,
+        1000L,
+        java.time.ZoneOffset.UTC,
+        Style.mono
+      )
+      val status = shown.lines(40 - 15 + 4)
+      assert(status.contains(TradingWorker.openingPausedMessage), status)
+      assertEquals(f.orderPosts.get(), 2)
+    finally f.close()
+  }
+
+  test("an opening press is allowed again 2 s after a reduce-only order completes") {
+    val f = new Fixture(sizes = twenty)
+    try
+      reduceToFlat(f)
+      advance(f, 1999L, 2000L)
+      assertEquals(f.worker.preview(sell), Left(TradingWorker.openingPausedMessage))
+      advance(f, 1L, 3000L)
+      val short = press(f, sell, 3, "-1")
+      assert(!short.reduceOnly, short)
+      assertEquals(f.lastPost.get()("action")("orders")(0)("r"), ujson.Bool(false))
+    finally f.close()
+  }
+
+  test("a reduce and a CLOSE are still sent inside the pause") {
+    val f = new Fixture(sizes = twenty)
+    try
+      f.ready()
+      holding(f, "3")
+      press(f, sell, 1, "2")
+      assertEquals(f.worker.preview(buy), Left(TradingWorker.openingPausedMessage))
+      val reduce = press(f, sell, 2, "1")
+      assert(reduce.reduceOnly && reduce.kind == OrderKind.Hard, reduce)
+      val close = press(f, OrderIntent(Side.Sell, OrderKind.Close), 3, "0")
+      assert(close.reduceOnly && close.kind == OrderKind.Close, close)
+      assertEquals(f.lastPost.get()("action")("orders")(0)("r"), ujson.Bool(true))
+    finally f.close()
+  }
+
+  test("an opening order does not start the pause") {
+    val f = new Fixture(sizes = twenty)
+    try
+      reduceToFlat(f)
+      assertEquals(f.worker.preview(buy), Left(TradingWorker.openingPausedMessage))
+      advance(f, 2000L, 2000L)
+      press(f, buy, 3, "1")
+      val again = press(f, buy, 4, "2")
+      assert(!again.reduceOnly, again)
+    finally f.close()
   }

@@ -36,6 +36,8 @@ object TradingWorker:
   val setupMessage: String =
     "Live setup required: owner in settings and an active key (desk --keys). See docs/trading.md"
   val maximumReviewLifetimeMs: Long = 30000L
+  val openingPauseMs: Long = 2000L
+  val openingPausedMessage: String = "Opening paused for 2 s after closing"
 
   // The loader hands this worker its own copy of the key. The worker wipes it on close.
   def create(
@@ -164,6 +166,8 @@ final class TradingWorker private[desk] (
   // Monotonic time at which this process first saw the saved order.
   private var savedSeenAt = 0L
   private var errOrder = Option.empty[String]
+  // Monotonic time at which the last reduce-only order completed.
+  private var reducedAt = Option.empty[Long]
   private var journal = Option.empty[OrderJournal]
   private var secret = Option.empty[Array[Byte]]
 
@@ -304,6 +308,8 @@ final class TradingWorker private[desk] (
 
   // An unknown position refuses every plan. Planning it as flat could turn a reduce or a
   // Close into an opening order.
+  // For a short time after a reduce-only order completes, only reduce-only plans pass. So a
+  // press repeated on the reducing side cannot run through flat into the other side.
   private def estimate(intent: OrderIntent): Either[String, OrderPlan] =
     if !marketReady then Left("Waiting for fresh selected-market depth")
     else
@@ -321,6 +327,12 @@ final class TradingWorker private[desk] (
             activeLeverage,
             config.slippage
           )
+        )
+        .filterOrElse(
+          plan =>
+            plan.reduceOnly ||
+              reducedAt.forall(at => monotonic() - at >= TradingWorker.openingPauseMs),
+          TradingWorker.openingPausedMessage
         )
 
   def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized(
@@ -425,6 +437,7 @@ final class TradingWorker private[desk] (
         outcome = Some(text)
         outcomeId = OrderUpdates.nextId()
         waitingRefresh = true
+        if p.reduceOnly then reducedAt = Some(monotonic())
         accountVersion += 1
         accountAt = Long.MinValue
         activeAt = Long.MinValue

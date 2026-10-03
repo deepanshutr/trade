@@ -260,6 +260,7 @@ does not establish account readiness. The blocking reason and final order outcom
 remain visible in the controls and latest action notice.
 
 Restart an already running Desk after installing a new build. It continues using
-its previous loaded program until restarted. Resolve any saved order before
-installing an older build. An older build reads a saved reduce-only order as an
-ordinary one.
+its previous loaded program until restarted. No build resends a saved order. A
+restart only looks up its status. An older build would still describe a saved
+reduce-only order as an ordinary one, so resolve any saved order before installing an
+older build.
