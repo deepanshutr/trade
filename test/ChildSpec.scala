@@ -9,7 +9,7 @@ import java.io.{
   PrintStream
 }
 import java.nio.charset.StandardCharsets.UTF_8
-import java.nio.file.Files
+import java.nio.file.{Files, Path}
 import sun.misc.{Signal, SignalHandler}
 
 class ChildSpec extends TempDirectorySuite:
@@ -90,6 +90,16 @@ class ChildSpec extends TempDirectorySuite:
     ).foreach { environment =>
       assertEquals(Child.vault(environment, words), Left(notInstalled), environment.toString)
     }
+  }
+
+  test("a relative DESK_VAULT is refused even when it reaches a real desk_vault.py") {
+    // A relative folder resolves against wherever Desk was started, which could hold a planted
+    // script. This one leads from the working directory to the test's own vault folder.
+    val words = Seq("owner", "new", "--network", "mainnet")
+    val relative = Path.of("").toAbsolutePath.relativize(Path.of(folder))
+    assert(!relative.isAbsolute, relative.toString)
+    assert(Files.isRegularFile(relative.resolve("desk_vault.py")), "the relative path misses")
+    assertEquals(Child.vault(env + ("DESK_VAULT" -> relative.toString), words), Left(notInstalled))
   }
 
   test("nothing runs when DESK_VAULT holds no desk_vault.py as a regular file") {
