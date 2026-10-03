@@ -808,14 +808,14 @@ class InstallLauncherTests(unittest.TestCase):
         return subprocess.run([MAKE, *arguments, "HOME=" + str(home)], cwd=ROOT, env=env,
                               capture_output=True, text=True, timeout=60)
 
-    def install(self, **options):
+    def install(self, *arguments, **options):
         home = options.get("home") or self.home
-        dry = self.make("-n", "install-launcher", **options)
+        dry = self.make("-n", "install-launcher", *arguments, **options)
         self.assertEqual(dry.returncode, 0, dry.stderr)
         shown = dry.stdout.replace(str(home), "")
         for forbidden in (REAL_HOME, "scala-cli", "bin/desk.jar"):
             self.assertNotIn(forbidden, shown)
-        return self.make("install-launcher", **options)
+        return self.make("install-launcher", *arguments, **options)
 
     def launch(self, *arguments, **variables):
         java = self.root / "java"
@@ -972,6 +972,47 @@ class InstallLauncherTests(unittest.TestCase):
         lines = self.launch(DESK_PYTHON="/custom/python3", DESK_KEY_HELPER="")
         self.assertEqual(lines[:2], ["/custom/python3", str(helper)])
         self.assertNotEqual(lines[0], str(python))
+
+    def test_desk_vault_is_written_next_to_the_other_two_only_when_given(self):
+        python = self.fake_python(self.bin)
+        helper = self.home / ".local/lib/desk-keychain.py"
+        launcher = self.home / ".local/bin/desk"
+        for given in ((), ("DESK_VAULT=",)):
+            with self.subTest(given=given):
+                self.assertEqual(self.install(*given).returncode, 0)
+                self.assertNotIn("DESK_VAULT", launcher.read_text())
+        vault = self.root / "my vault"
+        done = self.install("DESK_VAULT=" + str(vault))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(launcher.read_text().splitlines(), [
+            "#!/bin/sh",
+            'export DESK_PYTHON="${DESK_PYTHON:-' + str(python) + '}"',
+            'export DESK_KEY_HELPER="${DESK_KEY_HELPER:-' + str(helper) + '}"',
+            'export DESK_VAULT="${DESK_VAULT:-' + str(vault) + '}"',
+            'exec "${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" '
+            '-XX:+DisableAttachMechanism -jar "$HOME/.local/lib/desk.jar" "$@"'])
+        # The launcher exports the recorded folder, and a value already set wins.
+        java = self.root / "java"
+        java.write_text("#!/bin/sh\nprintf '%s\\n' \"$DESK_VAULT\"\n")
+        java.chmod(0o755)
+        for variables, shown in (({}, str(vault)), ({"DESK_VAULT": "/custom/vault"}, "/custom/vault")):
+            env = {"HOME": str(self.home), "PATH": "/usr/bin:/bin", "DESK_JAVA": str(java), **variables}
+            ran = subprocess.run([str(launcher)], env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertEqual(ran.stdout.splitlines(), [shown])
+
+    def test_a_desk_vault_that_is_relative_or_could_change_the_launcher_stops_the_install(self):
+        self.fake_python(self.bin)
+        for name, value, reason in (
+                ("relative", "vault", "absolute"), ("dot", "./vault", "absolute"),
+                ("dollar", "/opt/a$$b", "unsafe character"), ("quote", '/opt/a"b', "unsafe character"),
+                ("backtick", "/opt/a`b", "unsafe character"),
+                ("backslash", "/opt/a\\b", "unsafe character")):
+            with self.subTest(name):
+                done = self.install("DESK_VAULT=" + value)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn(reason, done.stderr)
+                self.assertFalse((self.home / ".local").exists())
 
 
 if __name__ == "__main__":
