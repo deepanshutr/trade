@@ -69,7 +69,7 @@ object Keys:
       byte: Int,
       promptOpen: Boolean,
       mouseEnabled: Boolean = false,
-      bindings: Bindings = Bindings.defaults
+      bindings: Bindings
   ): (Vector[Int], Option[Command]) =
     val (heldKey, inner) = split(pending)
     // The market prompt ignores bindings, so it drops a held first key.

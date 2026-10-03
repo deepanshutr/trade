@@ -64,8 +64,14 @@ class CandleModeSpec extends munit.FunSuite:
   }
 
   test("c switches the chart outside the market prompt and types inside it") {
-    assertEquals(Keys.step(Vector.empty, 99, false), (Vector.empty, Some(Command.ToggleCandles)))
-    assertEquals(Keys.step(Vector.empty, 99, true), (Vector.empty, Some(Command.PromptChar('c'))))
+    assertEquals(
+      Keys.step(Vector.empty, 99, false, bindings = Bindings.defaults),
+      (Vector.empty, Some(Command.ToggleCandles))
+    )
+    assertEquals(
+      Keys.step(Vector.empty, 99, true, bindings = Bindings.defaults),
+      (Vector.empty, Some(Command.PromptChar('c')))
+    )
   }
 
   test("a market switch retains chart mode and the saved line zoom") {

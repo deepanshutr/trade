@@ -425,7 +425,10 @@ class SettingsScreenSpec extends munit.FunSuite:
     assertEquals(f.notice, "Wait for the pending order")
     assert(!f.run(down * 4 + enter, esc))
     assertEquals(f.notice, "Wait for the pending order")
-    assertEquals((f.keyScreens, f.owners.size), (0, 0))
+    // A reload can replace the live worker too, so r reads only the owner status then.
+    assert(!f.run("r", esc))
+    assertEquals(f.notice, "Wait for the pending order")
+    assertEquals((f.keyScreens, f.owners.size, f.reloads), (0, 0, 0))
   }
 
   test("r reloads, reads the owner again and the settings again") {
@@ -584,7 +587,8 @@ class SettingsScreenSpec extends munit.FunSuite:
     def reader(): SettingsScreen.OwnerReads = new SettingsScreen.OwnerReads(
       () => {
         reads.incrementAndGet()
-        release.await()
+        // Bounded, so a read on the screen's own thread fails the timing check instead of hanging.
+        val _ = release.await(5L, java.util.concurrent.TimeUnit.SECONDS)
         Right(status())
       },
       () => start,
@@ -672,8 +676,8 @@ class SettingsScreenSpec extends munit.FunSuite:
       h.events.toVector,
       Vector(
         "suspend",
-        "restore",
         "handlers on",
+        "restore",
         "start desk --keys",
         "child",
         "enter line",
@@ -692,11 +696,11 @@ class SettingsScreenSpec extends munit.FunSuite:
       h.events.toVector,
       Vector(
         "suspend",
-        "restore",
         "handlers on",
+        "restore",
         "start desk",
-        "handlers off",
         "enter raw",
+        "handlers off",
         "resume"
       )
     )
@@ -770,4 +774,58 @@ class SettingsScreenSpec extends munit.FunSuite:
     )
     // Desk is stopping. The failure handler restores the terminal, so nothing is drawn again.
     assertEquals(failed.toVector, Vector("paused true", "mouse false", "clear"))
+  }
+
+  test("the terminal size is read at most twice a second") {
+    val f = new Fixture
+    var sizes = 0
+    var idles = 0
+    val context = f.context.copy(size = () => { sizes += 1; (100, 30) })
+    // Two idle seconds of 25 ms polls, then Esc.
+    val input = new InputStream:
+      override def available(): Int = if idles < 80 then 0 else 2
+      private var sent = false
+      override def read(): Int =
+        if sent then -1
+        else
+          sent = true
+          27
+    assert(
+      !SettingsScreen.run(
+        context,
+        input,
+        new PrintStream(f.out, true, UTF_8),
+        () => {
+          idles += 1
+          f.clock += 25L
+        }
+      )
+    )
+    assert(sizes >= 4 && sizes <= 6, sizes)
+  }
+
+  // The workspace side
+
+  test("s closes a mode review and is handled, so the keys thread opens settings") {
+    val controller = new DeskController(
+      PanelView(mode = "VIEW", modeReview = Some("LIVE")),
+      () => start,
+      (_, _) => Left("no preview"),
+      _ => false,
+      _ => Right(())
+    )
+    val snapshot = Snapshot.initial("XMR", start)
+    val handled = controller.handle(
+      Command.Settings,
+      snapshot,
+      TradingView("XMR", message = "View only"),
+      (100, 30),
+      false
+    )
+    assert(handled)
+    assertEquals(controller.panel.modeReview, None)
+    val chosen =
+      Bindings.defaults.updated(Bind.Close, Binding(Vector(KeyGroup(Vector(11))))).toOption.get
+    controller.setBindings(chosen)
+    assertEquals(controller.panel.bindings, chosen)
   }

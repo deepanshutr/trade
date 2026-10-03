@@ -49,6 +49,11 @@ final class DeskController(
     current = current.copy(terms = terms)
     shown = None
   }
+  // New bindings change the labels, so the frame drawn with the old ones is dropped.
+  def setBindings(bindings: Bindings): Unit = synchronized {
+    current = current.copy(bindings = bindings)
+    shown = None
+  }
   def outlook(value: OutlookView): Unit = synchronized {
     current = current.copy(outlook = value)
   }
@@ -208,6 +213,11 @@ final class DeskController(
             mute(muted)
             true
           case Command.SelectTarget(_) | Command.Pointer(_, _, _) =>
+            true
+          // The keys thread opens settings after this returns. A mode review does not stay open
+          // behind them.
+          case Command.Settings =>
+            cancel()
             true
           case _ => false
   }

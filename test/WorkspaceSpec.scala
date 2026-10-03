@@ -156,7 +156,9 @@ class WorkspaceSpec extends munit.FunSuite:
       button.action match
         case DeskAction.Mode(name) =>
           assertEquals(
-            Keys.step(Vector.empty, button.label.head.toInt, false)._2,
+            Keys
+              .step(Vector.empty, button.label.head.toInt, false, bindings = Bindings.defaults)
+              ._2,
             Some(Command.Mode(name))
           )
         case _ => ()
@@ -195,5 +197,64 @@ class WorkspaceSpec extends munit.FunSuite:
       Style.mono
     )
     val close = frame.buttons.find(_.action == DeskAction.Close).get
-    assertEquals(Keys.step(Vector.empty, close.label.head.toInt, false)._2, Some(Command.Close))
+    assertEquals(
+      Keys.step(Vector.empty, close.label.head.toInt, false, bindings = Bindings.defaults)._2,
+      Some(Command.Close)
+    )
+  }
+
+  test("buttons and tiles show the bound keys, and each key presses its control") {
+    def key(text: String): KeyGroup = KeyGroup(text.getBytes("UTF-8").toVector.map(_ & 0xff))
+    val bindings = Vector(
+      Bind.Close -> Binding(Vector(key("∫"))),
+      Bind.LongSmall -> Binding(Vector(KeyGroup(Vector(11)))),
+      Bind.Prop -> Binding(Vector(key("g"), key("p"))),
+      Bind.Market -> Binding(Vector(key("M")))
+    ).foldLeft(Bindings.defaults)((all, next) => all.updated(next._1, next._2).toOption.get)
+    val frame = Workspace.draw(
+      s,
+      view.copy(ready = true, leverage = Some(5), position = Some(BigDecimal("-0.2"))),
+      PanelView(mode = "LIVE", bindings = bindings),
+      120,
+      40,
+      now,
+      java.time.ZoneId.of("UTC"),
+      Style.mono
+    )
+    val labels = frame.buttons.map(_.label)
+    assert(labels.exists(_.startsWith("∫ Close 0.2")), labels)
+    assert(labels.exists(_.startsWith("^K REDUCE $500")), labels)
+    assert(labels.contains("g p Prop"), labels)
+    assert(labels.contains("l Live"), labels)
+    val text = frame.lines.mkString("\n")
+    assert(text.contains("M Market c Chart v Sound"), text)
+    assert(text.contains("[g p Prop]  [l Live]"), text)
+    def press(bytes: Vector[Int]): Option[Command] =
+      bytes
+        .foldLeft((Vector.empty[Int], Option.empty[Command])) { case ((pending, _), byte) =>
+          Keys.step(pending, byte, false, bindings = bindings)
+        }
+        ._2
+    assertEquals(press(key("∫").bytes), Some(Command.Close))
+    assertEquals(press(Vector(11)), Some(Command.PlaceOrder(Trading.action(0))))
+    assertEquals(press(Vector('g'.toInt, 'p'.toInt)), Some(Command.Mode("PROP")))
+  }
+
+  test("a key name too long for a tile gives way before the tile does") {
+    val long = Bindings.defaults
+      .updated(Bind.LongSmall, Binding(Vector(KeyGroup("\u001b[15;2~".toVector.map(_.toInt)))))
+      .toOption
+      .get
+    val frame = Workspace.draw(
+      s,
+      view.copy(ready = true, leverage = Some(5), position = Some(BigDecimal("-0.2"))),
+      PanelView(mode = "LIVE", bindings = long),
+      100,
+      30,
+      now,
+      java.time.ZoneId.of("UTC"),
+      Style.mono
+    )
+    val tile = frame.buttons.find(_.action == DeskAction.Prepare(Trading.action(0)))
+    assertEquals(tile.map(_.label), Some("REDUCE $500 x5"))
   }

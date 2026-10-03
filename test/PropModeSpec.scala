@@ -76,7 +76,7 @@ class PropModeSpec extends TempDirectorySuite:
 
   test("key p opens the prop review and Enter confirms it under the PROP XMR heading") {
     val desk = controller
-    val (_, command) = Keys.step(Vector.empty, 'p'.toInt, false)
+    val (_, command) = Keys.step(Vector.empty, 'p'.toInt, false, bindings = Bindings.defaults)
     assertEquals(command, Some(Command.Mode("PROP")))
     desk.publish(draw(desk.panel))
     desk.handle(command.get, snapshot, view, (100, 30), false)

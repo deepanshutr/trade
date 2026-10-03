@@ -3,7 +3,7 @@ package desk
 class ScreenMutationFollowupSpec extends munit.FunSuite:
   private def decode(bytes: Vector[Int], prompt: Boolean = false): (Vector[Int], Vector[Command]) =
     bytes.foldLeft((Vector.empty[Int], Vector.empty[Command])) { case ((pending, out), byte) =>
-      val (next, command) = Keys.step(pending, byte, prompt)
+      val (next, command) = Keys.step(pending, byte, prompt, bindings = Bindings.defaults)
       (next, out ++ command.toVector)
     }
 
@@ -20,7 +20,7 @@ class ScreenMutationFollowupSpec extends munit.FunSuite:
         assertEquals(decode(partial ++ end, prompt), (Vector.empty, Vector.empty))
         assertEquals(
           decode(partial ++ end :+ 49, prompt)._2,
-          Keys.step(Vector.empty, 49, prompt)._2.toVector
+          Keys.step(Vector.empty, 49, prompt, bindings = Bindings.defaults)._2.toVector
         )
       for cut <- 0 until end.size do
         val held = decode(start ++ end.take(cut), prompt)
@@ -70,7 +70,7 @@ class ScreenMutationFollowupSpec extends munit.FunSuite:
               assertEquals(decode(bytes, prompt), (Vector.empty, Vector.empty))
               assertEquals(
                 decode(bytes :+ 49, prompt)._2,
-                Keys.step(Vector.empty, 49, prompt)._2.toVector
+                Keys.step(Vector.empty, 49, prompt, bindings = Bindings.defaults)._2.toVector
               )
               for cut <- prefix.size + 1 until bytes.size do
                 val partial = decode(bytes.take(cut), prompt)
@@ -78,7 +78,8 @@ class ScreenMutationFollowupSpec extends munit.FunSuite:
                 assertEquals(partial._2, Vector.empty)
                 assertEquals(Keys.expire(partial._1, prompt, Long.MaxValue), (partial._1, None))
                 val continued = bytes.drop(cut).foldLeft(partial) { case ((pending, out), byte) =>
-                  val (next, command) = Keys.step(pending, byte, prompt)
+                  val (next, command) =
+                    Keys.step(pending, byte, prompt, bindings = Bindings.defaults)
                   (next, out ++ command.toVector)
                 }
                 assertEquals(continued, (Vector.empty, Vector.empty))

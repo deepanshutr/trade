@@ -645,3 +645,80 @@ class MainRuntimeSpec extends TempDirectorySuite:
     assert(config.configured)
     assertEquals(config.agent, Some(keyAddress))
   }
+
+  // The keys loop
+
+  test("a stray first key expires after a second of silence and the next key acts on its own") {
+    val bindings = Bindings.defaults
+      .updated(
+        Bind.Market,
+        Binding(Vector(KeyGroup(Vector('g'.toInt)), KeyGroup(Vector('m'.toInt))))
+      )
+      .toOption
+      .get
+    // Bytes at fake times in nanoseconds. Each idle poll moves the clock 10 ms.
+    def typed(bytes: Vector[(Long, Int)]): Vector[Command] =
+      var clock = 0L
+      var at = 0
+      val emitted = ArrayBuffer.empty[Command]
+      val input = new java.io.InputStream:
+        override def available(): Int = if at < bytes.size && bytes(at)._1 <= clock then 1 else 0
+        override def read(): Int =
+          at += 1
+          bytes(at - 1)._2
+      WorkspaceApp.readKeys(
+        input,
+        () => at < bytes.size || clock < bytes.last._1 + 3000000000L,
+        () => false,
+        () => bindings,
+        command => { emitted += command; () },
+        () => clock,
+        () => clock += 10000000L
+      )
+      emitted.toVector
+    val second = 1000000000L
+    assertEquals(
+      typed(Vector(5 * second -> 'g'.toInt, 6100000000L -> 'c'.toInt)),
+      Vector(Command.ToggleCandles)
+    )
+    assertEquals(
+      typed(Vector(5 * second -> 'g'.toInt, 5100000000L -> 'm'.toInt)),
+      Vector(Command.StartMarketPrompt)
+    )
+    assertEquals(
+      typed(Vector(5 * second -> 'g'.toInt, 5100000000L -> 'c'.toInt)),
+      Vector.empty[Command]
+    )
+    assertEquals(typed(Vector(5 * second -> 'g'.toInt, 5100000000L -> 27)), Vector(Command.Cancel))
+    assertEquals(typed(Vector(5 * second -> 'm'.toInt)), Vector.empty[Command])
+  }
+
+  test("the approval step takes a --config file only inside ~/.config/desk") {
+    val home = tempDirectory("desk-approve")
+    def args(path: Option[String]): Main.Args = Main.Args("XMR", false, config = path)
+    assertEquals(WorkspaceApp.approveConfig(args(None), home), Right(Nil))
+    val inside = home.resolve(".config/desk/other.json")
+    assertEquals(
+      WorkspaceApp.approveConfig(args(Some(inside.toString)), home),
+      Right(Seq("--config", inside.toAbsolutePath.normalize().toString))
+    )
+    assertEquals(
+      WorkspaceApp.approveConfig(args(Some(home.resolve("elsewhere.json").toString)), home),
+      Left("Approval needs the settings file in ~/.config/desk")
+    )
+  }
+
+  test("a bindings write into a folder others can read is refused and writes nothing") {
+    val home = tempDirectory("desk-bindings")
+    val folder = home.resolve(".config/desk")
+    Files.createDirectories(folder)
+    Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwxr-xr-x"))
+    assertEquals(
+      WorkspaceApp.saveBindings(home, Bindings.defaults),
+      Left(s"local storage must be private ($folder)")
+    )
+    assert(!Files.exists(Bindings.path(home)))
+    Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwx------"))
+    assertEquals(WorkspaceApp.saveBindings(home, Bindings.defaults), Right(()))
+    assertEquals(Bindings.load(Bindings.path(home)), Right(Bindings.defaults))
+  }

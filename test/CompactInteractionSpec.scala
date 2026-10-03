@@ -54,7 +54,8 @@ class CompactInteractionSpec extends munit.FunSuite:
     f.draw()
     var pending = Vector.empty[Int]
     "hv123".foreach { c =>
-      val (next, command) = Keys.step(pending, c.toInt, true, mouseEnabled = true)
+      val (next, command) =
+        Keys.step(pending, c.toInt, true, mouseEnabled = true, bindings = Bindings.defaults)
       pending = next
       command.foreach(f.key)
     }

@@ -96,8 +96,8 @@ object SettingsScreen:
         catch case NonFatal(_) => running.set(false)
 
   // The terminal hand-off for one child. Live is stopped first and resumed last, whatever happens
-  // between. The terminal is back in raw mode before the Control C guard is lifted, so no window
-  // opens where Control C stops Desk.
+  // between. The terminal leaves raw mode only after the Control C guard is on and is back in raw
+  // mode before it comes off, so no window opens where Control C stops Desk.
   private[desk] final case class HandOff(
       suspend: () => Either[String, Unit],
       restore: () => Unit,
@@ -111,24 +111,25 @@ object SettingsScreen:
     def run(command: Seq[String]): Either[String, Int] =
       try
         suspend().flatMap { _ =>
-          restore()
           var back = false
           def takeBack(): Unit =
             if !back then
               back = true
               enterRaw()
-          val outcome =
-            try
-              Child.runOnTerminal(
-                command,
-                start,
-                guard,
-                () => {
-                  enter()
-                  takeBack()
-                }
-              )
-            finally takeBack()
+          val outcome = Child.runOnTerminal(
+            command,
+            start,
+            body =>
+              guard(() => {
+                restore()
+                try body()
+                finally takeBack()
+              }),
+            () => {
+              enter()
+              takeBack()
+            }
+          )
           // The child's result is whatever the files say now.
           outcome.flatMap { exit =>
             val reloaded =
@@ -266,6 +267,16 @@ object SettingsScreen:
     private var quit = false
     // The open amount field: its row and its text.
     private var field = Option.empty[(Row, String)]
+    // Reading the size runs stty, so it is read at most every half second, as the workspace does.
+    private var size = (0, 0)
+    private var sizeAt = Option.empty[Long]
+
+    private def measured(): (Int, Int) =
+      val now = context.now()
+      if sizeAt.forall(at => now - at >= 500L || now < at) then
+        size = context.size()
+        sizeAt = Some(now)
+      size
 
     def loop(): Boolean =
       context.refreshOwner()
@@ -321,11 +332,15 @@ object SettingsScreen:
       snapshot = context.settings()
       drawn = Vector.empty
 
+    // A reload can replace the live worker, which an order pending in it must not see.
     private def again(): Unit =
-      notice = Try(context.reload()).toEither.left
-        .map(_ => reloadFailed)
-        .flatten
-        .fold(safe, _ => "Read again")
+      notice =
+        if context.livePending() then "Wait for the pending order"
+        else
+          Try(context.reload()).toEither.left
+            .map(_ => reloadFailed)
+            .flatten
+            .fold(safe, _ => "Read again")
       afterward()
 
     // A child needs live suspended, which would retire a worker with an order pending.
@@ -565,7 +580,7 @@ object SettingsScreen:
         .map(_.take(width))
 
     private def draw(): Unit =
-      val (width, height) = context.size() match
+      val (width, height) = measured() match
         case (w, h) if w > 0 && h > 0 => (w, h)
         case _                        => (100, 30)
       val lines = page(width, height)

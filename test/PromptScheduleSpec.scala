@@ -27,7 +27,7 @@ class PromptScheduleSpec extends munit.FunSuite:
     var promptOpen = false
 
     def byte(value: Int): Unit =
-      val (next, command) = Keys.step(pending, value, promptOpen)
+      val (next, command) = Keys.step(pending, value, promptOpen, bindings = Bindings.defaults)
       pending = next
       command.foreach { cmd =>
         promptOpen = Main.nextPromptOpen(promptOpen, cmd)

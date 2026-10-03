@@ -1,8 +1,11 @@
 package desk
 
+import java.io.InputStream
+import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Path
 import java.util.concurrent.{CountDownLatch, LinkedBlockingQueue, TimeUnit}
-import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
+import scala.jdk.CollectionConverters.*
 import scala.util.Try
 
 object WorkspaceApp:
@@ -167,6 +170,59 @@ object WorkspaceApp:
       case Command.Pointer(_, _, button) if button != 0 => ()
       case _                                            => { val _ = measure() }
 
+  // The workspace's reader of the terminal. The time of every byte is kept, so a lone escape or
+  // a held first key expires by the time since the last byte, whatever state it is in.
+  private[desk] def readKeys(
+      input: InputStream,
+      running: () => Boolean,
+      promptOpen: () => Boolean,
+      bindings: () => Bindings,
+      emit: Command => Unit,
+      nanoTime: () => Long = () => System.nanoTime(),
+      idle: () => Unit = () => Thread.sleep(10L)
+  ): Unit =
+    var pending = Vector.empty[Int]
+    var lastByte = nanoTime()
+    while running() do
+      if input.available() > 0 then
+        val byte = input.read()
+        lastByte = nanoTime()
+        if byte < 0 then emit(Command.Quit)
+        else
+          val (next, command) =
+            Keys.step(pending, byte, promptOpen(), mouseEnabled = true, bindings = bindings())
+          pending = next
+          command.foreach(emit)
+      else
+        if pending.nonEmpty then
+          val (next, command) = Keys.expire(pending, promptOpen(), nanoTime() - lastByte)
+          pending = next
+          command.foreach(emit)
+        idle()
+
+  // The --config words the approval step takes. The vault's approval works only with a settings
+  // file inside ~/.config/desk.
+  private[desk] def approveConfig(args: Main.Args, home: Path): Either[String, Seq[String]] =
+    args.config.map(Path.of(_).toAbsolutePath.normalize()) match
+      case None => Right(Nil)
+      case Some(path) if path.startsWith(home.resolve(".config/desk").toAbsolutePath.normalize()) =>
+        Right(Seq("--config", path.toString))
+      case Some(_) => Left("Approval needs the settings file in ~/.config/desk")
+
+  // Writes the bindings. The folder rules of LocalFiles name the folder. Nothing else is shown.
+  private[desk] def saveBindings(home: Path, chosen: Bindings): Either[String, Unit] =
+    val path = Bindings.path(home)
+    Try(Bindings.save(path, chosen)).toEither.left.map { error =>
+      Option(error.getMessage)
+        .map(_.stripPrefix("requirement failed: "))
+        .filter(_.startsWith("local storage"))
+        .fold("The key bindings could not be written")(reason => s"$reason (${path.getParent})")
+    }
+
+  private def mouse(on: Boolean): String =
+    if on then Screen.esc + "[?1000h" + Screen.esc + "[?1006h"
+    else Screen.esc + "[?1006l" + Screen.esc + "[?1000l"
+
   private def background(name: String)(body: => Unit): Thread =
     val thread = Threads.daemon(name)(body)
     thread.start()
@@ -251,6 +307,7 @@ object WorkspaceApp:
     val prepared = KeyStartup.prepare(args, loaded, directory, keyHooks)
     val config = prepared.config
     val session = prepared.session
+    val bound = new AtomicReference(bindings)
     val (connector, rest) = sources(config)
     if args.record then record(args, config, directory, connector, rest)
     else
@@ -322,7 +379,8 @@ object WorkspaceApp:
         PanelView(
           mode = mode,
           terms = TradeTerms(config.sizes, config.slippage),
-          muted = args.audio == "mute"
+          muted = args.audio == "mute",
+          bindings = bindings
         ),
         now,
         worker.preview,
@@ -330,6 +388,20 @@ object WorkspaceApp:
         worker.switchMode,
         announcements.setMuted,
         orderResults.handle
+      )
+      // The reload prints the Keychain prompt line over the settings screen, which then repaints.
+      val keyReload = new KeyReload(
+        args,
+        config,
+        session,
+        directory,
+        keyHooks.copy(say = text => {
+          print(Screen.esc + "[2J" + Screen.esc + "[H" + text)
+          Console.flush()
+        }),
+        createWorker,
+        (next, factory) => worker.replaceLive(next, factory),
+        terms => controller.setTerms(terms)
       )
       val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
       val alerts = new AlertPolicy
@@ -341,18 +413,18 @@ object WorkspaceApp:
           recorder,
           worker,
           diagnostics,
-          session
+          keyReload.session
         )
       val saved = enterTerminal(() => Term.enterRaw(), () => closeAll()).getOrElse {
         System.err.println("desk needs a terminal")
         sys.exit(1)
       }
-      print(Screen.esc + "[?1000h" + Screen.esc + "[?1006h")
+      print(mouse(true))
       Console.flush()
       val restoration = new Restoration(
         () => closeAll(),
         () => {
-          print(Screen.esc + "[?1006l" + Screen.esc + "[?1000l")
+          print(mouse(false))
           Term.restore(saved)
         }
       )
@@ -410,15 +482,95 @@ object WorkspaceApp:
         () => { val _ = pendingPrompts.decrementAndGet() },
         diagnostics.folded
       )
+      // While settings are open nothing is drawn. The fold, the feed and the workers go on.
+      val paused = new AtomicBoolean(false)
+      val terminal = new Term.Writer()
+      val ownerReading = new AtomicBoolean(false)
+      val javaCommand =
+        ProcessHandle
+          .current()
+          .info()
+          .command()
+          .orElse(System.getProperty("java.home") + "/bin/java")
+      val jar = System.getProperty("java.class.path")
+      // One child on the terminal. The terminal is back in raw mode before the Control C guard is
+      // lifted, unless Desk is already stopping and restoring the terminal itself.
+      def handOff(command: Seq[String]): Either[String, Int] =
+        SettingsScreen
+          .HandOff(
+            suspend = () => worker.suspendLive(),
+            restore = () => Term.restore(saved),
+            start = words => new ProcessBuilder(words.asJava).inheritIO().start(),
+            guard = Child.ignoreSignals,
+            enter = () => {
+              // A line typed before the child exited would skip the pause.
+              while System.in.available() > 0 do { val _ = System.in.read() }
+              Child.awaitEnter(System.in, System.out)
+            },
+            enterRaw = () =>
+              restoration.synchronized {
+                if !restoration.started then { val _ = Term.enterRaw() }
+              },
+            reload = () => keyReload.reload(),
+            resume = () => worker.resumeLive()
+          )
+          .run(command)
+      // Runs the settings screen on the keys thread. True when it asks Desk to quit.
+      def openSettings(): Boolean =
+        val reads = new SettingsScreen.OwnerReads(
+          () =>
+            OwnerStatus.read(
+              config.network,
+              sys.env,
+              (command, input) => ProcessRun.systemWithin(command, input, 20L)
+            ),
+          now,
+          task => { val _ = background("owner-status")(task.run()) },
+          ownerReading
+        )
+        val context = SettingsScreen.Context(
+          network = config.network,
+          settings = () => SettingsFile.read(args.config.map(Path.of(_)), home),
+          writeSettings = (snapshot, terms) => SettingsFile.write(snapshot, terms),
+          applyTerms = terms => controller.setTerms(terms),
+          bindings = () => bound.get(),
+          writeBindings = chosen => saveBindings(home, chosen),
+          applyBindings = chosen => {
+            bound.set(chosen)
+            controller.setBindings(chosen)
+          },
+          keyRow = () => keyReload.keyRow(),
+          ownerStatus = () => reads.status,
+          refreshOwner = () => reads.refresh(),
+          runKeyScreen = () => handOff(Child.keyScreen(args, javaCommand, jar)),
+          runOwner = words => Child.vault(sys.env, words).flatMap(handOff),
+          copyAddress = address => Clipboard.copySecret(address.getBytes(UTF_8), ProcessRun.system),
+          reload = () => keyReload.reload(),
+          livePending = () => worker.livePending,
+          now = now,
+          size = () => Term.size(),
+          approveConfig = approveConfig(args, home)
+        )
+        SettingsScreen.around(
+          on => inputLock.synchronized(paused.set(on)),
+          on => {
+            print(mouse(on))
+            Console.flush()
+          },
+          () => {
+            print(Screen.esc + "[2J")
+            Console.flush()
+          },
+          () => inputLock.synchronized(terminal.reset()),
+          () => controller.invalidate()
+        )(SettingsScreen.run(context, System.in, System.out))
       val keys = background("keys") {
-        var pending = Vector.empty[Int]
         var marketPrompt = false
-        var escapeAt = 0L
         var quitting = false
         def emit(command: Command): Unit =
           val began = System.nanoTime()
           measureInput(command, () => dimensions.read())
-          inputLock.synchronized {
+          val settings = inputLock.synchronized {
             val measured = actualSize.get()
             val handled = dispatchInput(
               command,
@@ -431,32 +583,19 @@ object WorkspaceApp:
               marketPrompt = Main.nextPromptOpen(marketPrompt, command)
               enqueueInput(command, measured, queue, pendingPrompts)
             if command == Command.Quit then quitting = true
+            handled && command == Command.Settings
           }
           diagnostics.slow(DiagnosticPart.Input, System.nanoTime() - began)
-        while !quitting && !state.get().quit do
-          if System.in.available() > 0 then
-            val byte = System.in.read()
-            if byte < 0 then emit(Command.Quit)
-            else
-              val (next, command) = Keys.step(
-                pending,
-                byte,
-                marketPrompt,
-                mouseEnabled = true,
-                bindings = bindings
-              )
-              pending = next
-              if pending == Vector(27) then escapeAt = System.nanoTime()
-              command.foreach(emit)
-          else
-            if pending.nonEmpty then
-              val (next, command) =
-                Keys.expire(pending, marketPrompt, System.nanoTime() - escapeAt)
-              pending = next
-              command.foreach(emit)
-            Thread.sleep(10L)
+          // The screen runs after the command, outside the input lock.
+          if settings && openSettings() then emit(Command.Quit)
+        readKeys(
+          System.in,
+          () => !quitting && !state.get().quit,
+          () => marketPrompt,
+          () => bound.get(),
+          emit
+        )
       }
-      val terminal = new Term.Writer()
       val zone = java.time.ZoneId.systemDefault()
       val style = Main.style(args, sys.env)
       var size = inputLock.synchronized {
@@ -467,6 +606,8 @@ object WorkspaceApp:
       var sizeAt = 0L
       try
         while !state.get().quit do
+          // Settings own the terminal: no size read, no write and no publish until they close.
+          while paused.get() && !state.get().quit do Thread.sleep(50L)
           val time = now()
           if time - sizeAt >= 500L then
             val _ = dimensions.read()
@@ -503,13 +644,16 @@ object WorkspaceApp:
           var published = false
           inputLock.synchronized {
             lockWait = System.nanoTime() - waiting
-            controller.invalidate()
-            val writing = System.nanoTime()
-            terminal.write(frame.lines, (frame.cols, frame.rows))
-            terminalTime = System.nanoTime() - writing
-            if state.get().coin == frame.coin && actualSize.get() == (frame.cols, frame.rows) then
-              controller.publish(frame)
-              published = true
+            // Settings may have opened while this frame was built.
+            if !paused.get() then
+              controller.invalidate()
+              val writing = System.nanoTime()
+              terminal.write(frame.lines, (frame.cols, frame.rows))
+              terminalTime = System.nanoTime() - writing
+              if state.get().coin == frame.coin && actualSize.get() == (frame.cols, frame.rows)
+              then
+                controller.publish(frame)
+                published = true
           }
           diagnostics.slow(DiagnosticPart.FrameLock, lockWait)
           diagnostics.slow(DiagnosticPart.Terminal, terminalTime)

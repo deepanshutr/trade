@@ -37,7 +37,7 @@ class KeysSpec extends munit.FunSuite:
             assertEquals(feed(bytes, prompt, initial), (Vector.empty, Vector.empty))
             assertEquals(
               feed(bytes :+ 49, prompt, initial)._2,
-              Keys.step(Vector.empty, 49, prompt)._2.toVector
+              Keys.step(Vector.empty, 49, prompt, bindings = Bindings.defaults)._2.toVector
             )
   }
 
@@ -47,13 +47,19 @@ class KeysSpec extends munit.FunSuite:
     for prompt <- Vector(false, true) do
       var pending = Vector(27)
       for byte <- Vector.fill(4096)(35) ++ Vector(32, 40, 47) do
-        val (next, command) = Keys.step(pending, byte, prompt)
+        val (next, command) = Keys.step(pending, byte, prompt, bindings = Bindings.defaults)
         assert(command.isEmpty)
         assert(next.nonEmpty && next.size <= 1)
         assertEquals(Keys.expire(next, prompt, forever), (next, None))
-        assertEquals(Keys.step(next, 3, prompt), (Vector.empty, Some(Command.Quit)))
+        assertEquals(
+          Keys.step(next, 3, prompt, bindings = Bindings.defaults),
+          (Vector.empty, Some(Command.Quit))
+        )
         pending = next
-      assertEquals(Keys.step(pending, 48, prompt), (Vector.empty, None))
+      assertEquals(
+        Keys.step(pending, 48, prompt, bindings = Bindings.defaults),
+        (Vector.empty, None)
+      )
   }
 
   test("legacy mouse and highlight reports consume numeric fields at every read split") {
@@ -64,14 +70,17 @@ class KeysSpec extends munit.FunSuite:
           assertEquals(feed(bytes, prompt), (Vector.empty, Vector.empty))
           assertEquals(
             feed(bytes :+ 49, prompt)._2,
-            Keys.step(Vector.empty, 49, prompt)._2.toVector
+            Keys.step(Vector.empty, 49, prompt, bindings = Bindings.defaults)._2.toVector
           )
           for cut <- prefix.size until bytes.size do
             val partial = feed(bytes.take(cut), prompt)
             assert(partial._1.nonEmpty)
             assertEquals(partial._2, Vector.empty)
             assertEquals(Keys.expire(partial._1, prompt, forever), (partial._1, None))
-            assertEquals(Keys.step(partial._1, 3, prompt), (Vector.empty, Some(Command.Quit)))
+            assertEquals(
+              Keys.step(partial._1, 3, prompt, bindings = Bindings.defaults),
+              (Vector.empty, Some(Command.Quit))
+            )
             assertEquals(feed(bytes.drop(cut), prompt, partial._1), (Vector.empty, Vector.empty))
           val delayed = Keys.expire(Vector(27), prompt, escapeWait)._1
           assertEquals(
@@ -93,14 +102,17 @@ class KeysSpec extends munit.FunSuite:
               assertEquals(feed(bytes, prompt), (Vector.empty, Vector.empty))
               assertEquals(
                 feed(bytes :+ 49, prompt)._2,
-                Keys.step(Vector.empty, 49, prompt)._2.toVector
+                Keys.step(Vector.empty, 49, prompt, bindings = Bindings.defaults)._2.toVector
               )
               for cut <- prefix.size + 1 until bytes.size do
                 val partial = feed(bytes.take(cut), prompt)
                 assert(partial._1.nonEmpty && partial._1.size <= 3)
                 assertEquals(partial._2, Vector.empty)
                 assertEquals(Keys.expire(partial._1, prompt, forever), (partial._1, None))
-                assertEquals(Keys.step(partial._1, 3, prompt), (Vector.empty, Some(Command.Quit)))
+                assertEquals(
+                  Keys.step(partial._1, 3, prompt, bindings = Bindings.defaults),
+                  (Vector.empty, Some(Command.Quit))
+                )
                 assertEquals(
                   feed(bytes.drop(cut), prompt, partial._1),
                   (Vector.empty, Vector.empty)
@@ -115,7 +127,10 @@ class KeysSpec extends munit.FunSuite:
   test("a raw high mouse field reprocesses a noncontinuation as the next field") {
     val bytes = Vector(27, 91, 77, 194, 49, 50)
     assertEquals(feed(bytes), (Vector.empty, Vector.empty))
-    assertEquals(feed(bytes :+ 49)._2, Keys.step(Vector.empty, 49, false)._2.toVector)
+    assertEquals(
+      feed(bytes :+ 49)._2,
+      Keys.step(Vector.empty, 49, false, bindings = Bindings.defaults)._2.toVector
+    )
   }
 
   test("parameterized mouse and highlight control sequences have no fixed field tail") {
@@ -126,7 +141,7 @@ class KeysSpec extends munit.FunSuite:
           assertEquals(feed(bytes, prompt), (Vector.empty, Vector.empty))
           assertEquals(
             feed(bytes :+ 49, prompt)._2,
-            Keys.step(Vector.empty, 49, prompt)._2.toVector
+            Keys.step(Vector.empty, 49, prompt, bindings = Bindings.defaults)._2.toVector
           )
   }
 
@@ -192,20 +207,28 @@ class KeysSpec extends munit.FunSuite:
     val partial = feed(Vector(27) ++ sequence("[15"))
     assertEquals(partial._2, Vector.empty)
     assertEquals(Keys.expire(partial._1, false, forever), (partial._1, None))
-    assertEquals(Keys.step(partial._1, 126, false), (Vector.empty, None))
+    assertEquals(
+      Keys.step(partial._1, 126, false, bindings = Bindings.defaults),
+      (Vector.empty, None)
+    )
   }
 
   test("an overlong sequence has bounded state and remains discarded through its final byte") {
     var pending = Vector.empty[Int]
     val bytes = Vector(27, 91) ++ Vector.fill(1000)(49) ++ Vector(126)
     bytes.foreach { byte =>
-      val (next, command) = Keys.step(pending, byte, false)
+      val (next, command) = Keys.step(pending, byte, false, bindings = Bindings.defaults)
       assert(command.isEmpty)
       assert(next.size <= 32)
       pending = next
     }
     assertEquals(pending, Vector.empty)
-    assert(Keys.step(pending, 49, false)._2.exists(_.isInstanceOf[Command.PlaceOrder]))
+    assert(
+      Keys
+        .step(pending, 49, false, bindings = Bindings.defaults)
+        ._2
+        .exists(_.isInstanceOf[Command.PlaceOrder])
+    )
   }
 
   test("bracketed paste cannot place orders or select a target") {
@@ -224,7 +247,7 @@ class KeysSpec extends munit.FunSuite:
     assertEquals(partial._2, Vector.empty)
     assertEquals(Keys.expire(partial._1, false, forever), (partial._1, None))
     val continued = (sequence("0~345") ++ end).foldLeft(partial) { case ((pending, out), byte) =>
-      val (next, command) = Keys.step(pending, byte, false)
+      val (next, command) = Keys.step(pending, byte, false, bindings = Bindings.defaults)
       (next, out ++ command.toVector)
     }
     assertEquals(continued, (Vector.empty, Vector.empty))
@@ -238,7 +261,7 @@ class KeysSpec extends munit.FunSuite:
     assertEquals(cancelled._2, Some(Command.Cancel))
     assertEquals(Keys.expire(pending._1, true, escapeWait)._2, Some(Command.PromptCancel))
     assertEquals(
-      Keys.step(cancelled._1, 49, false)._2,
+      Keys.step(cancelled._1, 49, false, bindings = Bindings.defaults)._2,
       Some(Command.PlaceOrder(OrderIntent(Side.Buy, OrderKind.Hard)))
     )
     assertEquals(feed(Vector(27, 49))._2, Vector.empty)
@@ -265,7 +288,7 @@ class KeysSpec extends munit.FunSuite:
     val bytes = start.tail ++ sequence("1234567890") ++ end
     val result = bytes.foldLeft((expired._1, Vector.empty[Command])) {
       case ((pending, out), byte) =>
-        val (next, command) = Keys.step(pending, byte, false)
+        val (next, command) = Keys.step(pending, byte, false, bindings = Bindings.defaults)
         (next, out ++ command.toVector)
     }
     assertEquals(result, (Vector.empty, Vector.empty))
@@ -325,12 +348,15 @@ class KeysSpec extends munit.FunSuite:
     for opener <- Vector(80, 88, 93, 94, 95) do
       var pending = feed(Vector(27, opener))._1
       for byte <- Vector.fill(4096)(49) ++ Vector(27, 27, 49, 27) do
-        val (next, command) = Keys.step(pending, byte, false)
+        val (next, command) = Keys.step(pending, byte, false, bindings = Bindings.defaults)
         assert(command.isEmpty)
         assert(next.size <= 2)
         pending = next
       assertEquals(Keys.expire(pending, false, forever), (pending, None))
-      assertEquals(Keys.step(pending, 92, false), (Vector.empty, None))
+      assertEquals(
+        Keys.step(pending, 92, false, bindings = Bindings.defaults),
+        (Vector.empty, None)
+      )
   }
 
   test("a delayed string opener after escape expiry still discards every payload digit") {
@@ -339,7 +365,7 @@ class KeysSpec extends munit.FunSuite:
       val bytes = Vector(opener) ++ sequence("11;1234567890") ++ Vector(27, 92)
       val result = bytes.foldLeft((expired._1, Vector.empty[Command])) {
         case ((pending, out), byte) =>
-          val (next, command) = Keys.step(pending, byte, false)
+          val (next, command) = Keys.step(pending, byte, false, bindings = Bindings.defaults)
           (next, out ++ command.toVector)
       }
       assertEquals(result, (Vector.empty, Vector.empty))
@@ -360,7 +386,10 @@ class KeysSpec extends munit.FunSuite:
       )
     for pending <- states do
       for prompt <- Vector(false, true) do
-        assertEquals(Keys.step(pending, 3, prompt), (Vector.empty, Some(Command.Quit)))
+        assertEquals(
+          Keys.step(pending, 3, prompt, bindings = Bindings.defaults),
+          (Vector.empty, Some(Command.Quit))
+        )
   }
 
   // Bound keys: exact byte groups, UTF-8 characters and two-key sequences.
@@ -386,7 +415,10 @@ class KeysSpec extends munit.FunSuite:
         assert(partial._1.nonEmpty, character)
         assertEquals(partial._2, Vector.empty)
         assertEquals(Keys.expire(partial._1, false, forever), (partial._1, None))
-        assertEquals(Keys.step(partial._1, 3, false), (Vector.empty, Some(Command.Quit)))
+        assertEquals(
+          Keys.step(partial._1, 3, false, bindings = Bindings.defaults),
+          (Vector.empty, Some(Command.Quit))
+        )
       assertEquals(feed(bytes, bindings = bindings), (Vector.empty, Vector(Command.Close)))
       assertEquals(
         feed(bytes ++ bytes :+ 49, bindings = bindings)._2,
