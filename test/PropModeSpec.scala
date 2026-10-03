@@ -72,7 +72,7 @@ class PropModeSpec extends TempDirectorySuite:
     Workspace.draw(snapshot, view, panel, cols, rows, now, ZoneOffset.UTC, Style.mono)
 
   private def controller: DeskController =
-    new DeskController(PanelView(), () => now, _ => Left("unused"), _ => false, _ => Right(()))
+    new DeskController(PanelView(), () => now, (_, _) => Left("unused"), _ => false, _ => Right(()))
 
   test("key p opens the prop review and Enter confirms it under the PROP XMR heading") {
     val desk = controller
@@ -136,6 +136,7 @@ class PropModeSpec extends TempDirectorySuite:
   }
 
   private final class Route(initialMode: String, config: TradingConfig = TradingConfig()):
+    val terms = TradeTerms(config.sizes, config.slippage)
     val clock = new AtomicLong(now)
     val directory = tempDirectory("prop-route-")
     val liveCalls = new AtomicInteger()
@@ -211,9 +212,11 @@ class PropModeSpec extends TempDirectorySuite:
       Wait.until("prop did not become ready")(r.route.view.ready)
       assertEquals(r.route.mode, "PROP")
       val intent = Trading.action(0)
-      val plan = r.route.preview(intent).fold(reason => fail(reason), identity)
+      val plan = r.route.preview(intent, r.terms).fold(reason => fail(reason), identity)
       assert(
-        r.route.submitReviewed(OrderReview(intent, plan, r.clock.get(), r.clock.get() + 30000L))
+        r.route.submitReviewed(
+          OrderReview(intent, plan, r.terms, r.clock.get(), r.clock.get() + 30000L)
+        )
       )
       Wait.until("prop order did not finish")(r.route.view.outcome.nonEmpty)
       val receipt = r.route.view.outcome.get

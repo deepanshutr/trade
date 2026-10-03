@@ -10,6 +10,7 @@ class PropFreshTouchReviewSpec extends TempDirectorySuite:
     val buy = side == Side.Buy
     val clock = new AtomicLong(start)
     val config = TradingConfig()
+    val terms = TradeTerms(config.sizes, config.slippage)
     val directory = tempDirectory("touch-")
     val held = if buy then BigDecimal(0) else BigDecimal(10)
     if held > 0 then
@@ -51,10 +52,10 @@ class PropFreshTouchReviewSpec extends TempDirectorySuite:
       Wait.until("prop did not become ready")(worker.view.ready)
     def review(): OrderReview =
       val intent = OrderIntent(side, OrderKind.Hard)
-      val plan = worker.preview(intent).toOption.get
+      val plan = worker.preview(intent, terms).toOption.get
       assertEquals(plan.quantity, BigDecimal(5))
       assertEquals(plan.estimatedQuantity, BigDecimal(4))
-      OrderReview(intent, plan, clock.get(), clock.get() + 30000)
+      OrderReview(intent, plan, terms, clock.get(), clock.get() + 30000)
     def touch(price: String): Unit =
       val value = BigDecimal(price)
       val bid = if buy then value - BigDecimal("0.01") else value

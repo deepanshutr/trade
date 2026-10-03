@@ -28,7 +28,15 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
     leverage = Some(3),
     marginMode = Some("isolated")
   )
-  private val review = OrderReview(intent, plan, now, now + 30000, Some(3), Some("isolated"))
+  private val review = OrderReview(
+    intent,
+    plan,
+    TradeTerms(TradeSizes(), Trading.defaultSlippage),
+    now,
+    now + 30000,
+    Some(3),
+    Some("isolated")
+  )
   private val panels = Vector(
     PanelView(mode = "PROP"),
     PanelView(mode = "PROP", bigOrder = true),

@@ -125,10 +125,10 @@ final class ExecutionRouter(
       Right(())
     else Left("Unknown trading mode")
   }
-  def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized {
-    if selected == "PROP" then propWorker().preview(intent)
+  def preview(intent: OrderIntent, terms: TradeTerms): Either[String, OrderPlan] = synchronized {
+    if selected == "PROP" then propWorker().preview(intent, terms)
     else if selected == "LIVE" && !liveEnabled then Left(transitionReason)
-    else live.preview(intent)
+    else live.preview(intent, terms)
   }
   def submitReviewed(review: OrderReview): Boolean = synchronized {
     if selected == "PROP" then propWorker().submitReviewed(review)

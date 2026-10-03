@@ -28,7 +28,7 @@ class InteractionSpec extends munit.FunSuite:
     val controller = new DeskController(
       PanelView(mode = mode),
       () => now,
-      order => {
+      (order, terms) => {
         planned :+= order
         Trading.plan(
           "XMR",
@@ -37,9 +37,9 @@ class InteractionSpec extends munit.FunSuite:
           ready.reference(order.side).get,
           held,
           order,
-          TradeSizes(),
+          terms.sizes,
           start.leverage.getOrElse(1),
-          Trading.defaultSlippage
+          terms.slippage
         )
       },
       order => { sent :+= order; view = view.copy(ready = false, pending = true); true },

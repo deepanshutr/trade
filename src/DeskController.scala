@@ -3,7 +3,7 @@ package desk
 final class DeskController(
     initial: PanelView,
     wall: () => Long,
-    preview: OrderIntent => Either[String, OrderPlan],
+    preview: (OrderIntent, TradeTerms) => Either[String, OrderPlan],
     submit: OrderReview => Boolean,
     switchMode: String => Either[String, Unit],
     mute: Boolean => Unit = _ => (),
@@ -42,6 +42,12 @@ final class DeskController(
     )
     shown = None
     pressed = None
+  }
+  // New sizes and slippage apply from the next press. The frame drawn with the old sizes is
+  // dropped, so no press is sent at a size its button did not show.
+  def setTerms(terms: TradeTerms): Unit = synchronized {
+    current = current.copy(terms = terms)
+    shown = None
   }
   def outlook(value: OutlookView): Unit = synchronized {
     current = current.copy(outlook = value)
@@ -101,12 +107,14 @@ final class DeskController(
             view.marginMode.exists(m => m == "cross" || m == "isolated"))
           if !settings then refuse()
           else
-            preview(intent) match
+            val terms = current.terms
+            preview(intent, terms) match
               case Right(plan) if plan.coin == snapshot.coin =>
                 val at = wall()
                 val order = OrderReview(
                   intent,
                   plan,
+                  terms,
                   at,
                   Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
                   view.leverage,

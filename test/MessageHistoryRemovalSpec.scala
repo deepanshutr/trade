@@ -25,7 +25,7 @@ class MessageHistoryRemovalSpec extends TempDirectorySuite:
     val controller = new DeskController(
       PanelView(mode = "PROP"),
       () => now,
-      _ => Left("unused"),
+      (_, _) => Left("unused"),
       _ => false,
       _ => Left("unused")
     )

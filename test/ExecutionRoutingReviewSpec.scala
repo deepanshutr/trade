@@ -24,6 +24,7 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
     val agent = OrderSigning.address(key)
     val owner = "0x" + "2" * 40
     val config = TradingConfig(owner = Some(owner), agent = Some(agent))
+    val terms = TradeTerms(config.sizes, config.slippage)
     val clock = new AtomicLong(10000L)
     val loads = new AtomicInteger()
     val journalOpens = new AtomicInteger()
@@ -198,7 +199,8 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
       val current = worker.view
       OrderReview(
         intent,
-        worker.preview(intent).toOption.get,
+        worker.preview(intent, terms).toOption.get,
+        terms,
         clock.get(),
         clock.get() + lifetime,
         current.leverage,

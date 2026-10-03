@@ -60,7 +60,7 @@ class SimpleExecutionSpec extends munit.FunSuite:
     val controller = new DeskController(
       PanelView(mode = "PROP"),
       () => now,
-      intent =>
+      (intent, terms) =>
         Trading.plan(
           "XMR",
           view.rules.get,
@@ -68,9 +68,9 @@ class SimpleExecutionSpec extends munit.FunSuite:
           view.reference(intent.side).get,
           BigDecimal(0),
           intent,
-          TradeSizes(),
+          terms.sizes,
           1,
-          Trading.defaultSlippage
+          terms.slippage
         ),
       review => { sent :+= review; true },
       _ => Right(())

@@ -114,6 +114,7 @@ class RuntimeSafetySpec extends TempDirectorySuite:
       BigDecimal(0)
     )
     val config = TradingConfig(owner = Some("0x" + "1" * 40), agent = Some("0x" + "2" * 40))
+    val terms = TradeTerms(config.sizes, config.slippage)
     val worker = new PropWorker(config, "XMR", ledger, rest, () => clock.get(), () => clock.get())
     try
       worker.start()
@@ -128,7 +129,8 @@ class RuntimeSafetySpec extends TempDirectorySuite:
       )
       Wait.until("prop never became ready")(worker.view.ready)
       val intent = OrderIntent(Side.Buy, OrderKind.Hard)
-      val review = OrderReview(intent, worker.preview(intent).toOption.get, now, now + 30000)
+      val review =
+        OrderReview(intent, worker.preview(intent, terms).toOption.get, terms, now, now + 30000)
       worker.synchronized {
         assert(worker.submitReviewed(review))
         worker.observe(

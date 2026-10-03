@@ -215,7 +215,7 @@ class StatusPanelSpec extends munit.FunSuite:
     lazy val controller: DeskController = new DeskController(
       PanelView(mode = "PROP"),
       () => now,
-      _ => Left("unused"),
+      (_, _) => Left("unused"),
       _ => false,
       _ => Left("unused"),
       result = (number, text) =>
@@ -323,7 +323,7 @@ class StatusPanelSpec extends munit.FunSuite:
     lazy val controller: DeskController = new DeskController(
       PanelView(mode = "PROP"),
       () => now,
-      _ => Left("unused"),
+      (_, _) => Left("unused"),
       _ => false,
       _ => Left("unused"),
       result = (number, text) =>
@@ -385,7 +385,7 @@ class StatusPanelSpec extends munit.FunSuite:
     lazy val controller = new DeskController(
       PanelView(mode = "PROP"),
       () => now,
-      _ => Left("unused"),
+      (_, _) => Left("unused"),
       _ => false,
       _ => Left("unused"),
       result = (number, text) => writer.append(text)

@@ -171,7 +171,7 @@ class OrderResultLogSpec extends TempDirectorySuite:
     val first = new DeskController(
       PanelView(),
       () => 123L,
-      _ => Left("unused"),
+      (_, _) => Left("unused"),
       _ => false,
       _ => Left("unused"),
       result = (_, text) => resultWriters.head.append(text)
@@ -179,7 +179,7 @@ class OrderResultLogSpec extends TempDirectorySuite:
     val second = new DeskController(
       PanelView(),
       () => 123L,
-      _ => Left("unused"),
+      (_, _) => Left("unused"),
       _ => false,
       _ => Left("unused"),
       result = (_, text) => resultWriters(1).append(text)

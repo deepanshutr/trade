@@ -23,6 +23,7 @@ class PropUxIndependentSpec extends munit.FunSuite:
     val writes = new AtomicInteger(0)
     val ledger = openLedger(initial, fee, next => { save(next); writes.incrementAndGet(); () })
     val config = TradingConfig().copy(sizes = TradeSizes(size, size, size))
+    val terms = TradeTerms(config.sizes, config.slippage)
     val worker = new PropWorker(
       config,
       "XMR",
@@ -61,9 +62,9 @@ class PropUxIndependentSpec extends munit.FunSuite:
       Wait.until("synthetic metadata did not arrive")(worker.view.ready)
     def review(side: Side): OrderReview =
       val intent = OrderIntent(side, OrderKind.Hard)
-      val candidate = worker.preview(intent)
+      val candidate = worker.preview(intent, terms)
       assert(candidate.isRight, candidate.toString)
-      OrderReview(intent, candidate.toOption.get, clock.get(), clock.get() + 30000L)
+      OrderReview(intent, candidate.toOption.get, terms, clock.get(), clock.get() + 30000L)
     def send(review: OrderReview): Unit =
       assert(worker.submitReviewed(review))
       Wait.until("synthetic order did not finish")(
@@ -80,7 +81,7 @@ class PropUxIndependentSpec extends munit.FunSuite:
       val f = new Fixture(PropAccount(BigDecimal(500), deposit = BigDecimal(500)))
       try
         if side == Side.Buy then f.open() else f.open("100", "100.01")
-        val result = f.worker.preview(OrderIntent(side, OrderKind.Hard))
+        val result = f.worker.preview(OrderIntent(side, OrderKind.Hard), f.terms)
         assert(result.isLeft, result.toString)
         assert(result.swap.toOption.get.contains(if side == Side.Buy then "limit" else "No XMR"))
         assertEquals(f.ledger.account, PropAccount(BigDecimal(500), deposit = BigDecimal(500)))
@@ -186,7 +187,7 @@ class PropUxIndependentSpec extends munit.FunSuite:
     try
       f.open("80", "80.01")
       assert(f.worker.view.ready, "absent cash must not block selling held tokens")
-      assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard)).isLeft)
+      assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms).isLeft)
       assertEquals(f.writes.get(), 0)
       val review = f.review(Side.Sell)
       assertEquals(review.plan.quantity, BigDecimal(1))
@@ -200,7 +201,7 @@ class PropUxIndependentSpec extends munit.FunSuite:
       assertEquals(account.realized, BigDecimal(-20))
       assertEquals(account.fees, BigDecimal("0.08"))
       val increase =
-        f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard))
+        f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms)
       assert(increase.isRight, "sale proceeds can fund a later buy: " + increase.toString)
       assertEquals(f.ledger.account, account)
       assertEquals(f.writes.get(), 1)
@@ -272,13 +273,13 @@ class PropUxIndependentSpec extends munit.FunSuite:
       f.open()
       f.worker.select("BTC")
       f.depth("99.99", "100", coin = "BTC")
-      val result = f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard))
+      val result = f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms)
       assert(result.isLeft)
       assert(result.swap.toOption.get.contains("XMR"))
       assertEquals(f.ledger.account, initial)
       f.worker.select("XMR")
       f.depth("99.99", "100")
-      assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard)).isRight)
+      assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms).isRight)
       assertEquals(f.writes.get(), 0)
     finally f.close()
   }

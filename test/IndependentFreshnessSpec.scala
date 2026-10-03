@@ -218,6 +218,7 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
   private class PropFixture(held: BigDecimal = BigDecimal(0)):
     val now = new AtomicLong(at)
     val config = TradingConfig()
+    val terms = TradeTerms(config.sizes, config.slippage)
     val root = tempDirectory("review-prop-")
     if held > 0 then
       LocalFiles.write(
@@ -301,12 +302,12 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
         assert(delivered.await(3, TimeUnit.SECONDS))
         assert(f.worker.view.ready, f.worker.view.message)
         val intent = OrderIntent(side, OrderKind.Hard)
-        val plan = f.worker.preview(intent).toOption.get
+        val plan = f.worker.preview(intent, f.terms).toOption.get
         assertEquals(plan.quantity, BigDecimal(5))
         assertEquals(plan.estimatedQuantity, BigDecimal(1))
         val value = BigDecimal(if side == Side.Buy then "100.02" else "99.97")
         assertEquals(plan.estimatedValue, value)
-        val review = OrderReview(intent, plan, at, at + 30000L)
+        val review = OrderReview(intent, plan, f.terms, at, at + 30000L)
         assert(f.worker.submitReviewed(review))
         Wait.until("simulated order did not settle")(
           !f.worker.view.pending && f.worker.view.outcome.nonEmpty
@@ -322,7 +323,11 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
         )
         assert(f.worker.view.outcome.exists(_.contains("partial")))
         val unknown = BigDecimal(if side == Side.Buy then "100.05" else "99.94")
-        assert(f.worker.preview(OrderIntent(side, OrderKind.Target, target = Some(unknown))).isLeft)
+        assert(
+          f.worker
+            .preview(OrderIntent(side, OrderKind.Target, target = Some(unknown)), f.terms)
+            .isLeft
+        )
         assertEquals(f.ledger.account.count, 1L)
       finally
         close.get()()
@@ -350,12 +355,12 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
       ).foreach { frame =>
         f.receive(frame)
         assert(!f.worker.view.ready, frame)
-        assert(f.worker.preview(Trading.action(0)).isLeft)
+        assert(f.worker.preview(Trading.action(0), f.terms).isLeft)
       }
       assertEquals(f.ledger.account.count, 0L)
       f.receive(f.event(f.book.copy(time = f.now.get())))
       assert(f.worker.view.ready)
-      assert(f.worker.preview(Trading.action(0)).isRight)
+      assert(f.worker.preview(Trading.action(0), f.terms).isRight)
     finally f.close()
   }
 
@@ -374,9 +379,9 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
         f.worker.observe(Event.BookUpdate("XMR", Book(bids, asks, at), fromSocket = false))
         assert(f.worker.view.ready)
         val intent = OrderIntent(side, OrderKind.Hard)
-        val plan = f.worker.preview(intent).toOption.get
+        val plan = f.worker.preview(intent, f.terms).toOption.get
         assertEquals(plan.estimatedQuantity, BigDecimal(5))
-        val review = OrderReview(intent, plan, at, at + 30000L)
+        val review = OrderReview(intent, plan, f.terms, at, at + 30000L)
         f.now.incrementAndGet()
         f.receive(f.event(f.book.copy(time = f.now.get())))
         assert(f.worker.view.ready)

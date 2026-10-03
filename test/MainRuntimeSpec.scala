@@ -35,7 +35,7 @@ class MainRuntimeSpec extends TempDirectorySuite:
     val controller = new DeskController(
       PanelView(mode = "LIVE"),
       () => now,
-      _ => Right(plan),
+      (_, _) => Right(plan),
       order => { submitted = Some(order); true },
       _ => Left("unused")
     )

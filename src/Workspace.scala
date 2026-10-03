@@ -11,6 +11,7 @@ enum DeskAction:
 final case class OrderReview(
     intent: OrderIntent,
     plan: OrderPlan,
+    terms: TradeTerms,
     createdAt: Long,
     expiresAt: Long,
     leverage: Option[Int] = None,
@@ -18,7 +19,7 @@ final case class OrderReview(
 )
 final case class PanelView(
     mode: String = "VIEW",
-    sizes: TradeSizes = TradeSizes(),
+    terms: TradeTerms = TradeTerms(TradeSizes(), Trading.defaultSlippage),
     modeReview: Option[String] = None,
     outlook: OutlookView = Outlook.empty(""),
     muted: Boolean = false,
@@ -299,8 +300,9 @@ object Workspace:
       line(tradeTop + 4, orderStatus(view, panel))
       val choosing =
         !view.pending && s.prompt.isEmpty && s.marketPending.isEmpty && panel.modeReview.isEmpty
-      val small = "$" + Trading.format(panel.sizes.small) + (if !panel.bigOrder then " *" else "")
-      val big = "$" + Trading.format(panel.sizes.big) + (if panel.bigOrder then " *" else "")
+      val small =
+        "$" + Trading.format(panel.terms.sizes.small) + (if !panel.bigOrder then " *" else "")
+      val big = "$" + Trading.format(panel.terms.sizes.big) + (if panel.bigOrder then " *" else "")
       button(tradeTop + 5, 0, small, DeskAction.OrderSize(false), choosing)
       button(tradeTop + 5, small.length + 3, big, DeskAction.OrderSize(true), choosing)
       val canTrade = choosing && view.ready && panel.mode != "VIEW" &&
@@ -322,7 +324,7 @@ object Workspace:
       Vector(Side.Buy, Side.Sell).zipWithIndex.foreach { (side, i) =>
         val intent = OrderIntent(side, OrderKind.Hard, big = panel.bigOrder)
         val key = (if side == Side.Buy then 1 else 3) + (if panel.bigOrder then 1 else 0)
-        val size = if panel.bigOrder then panel.sizes.big else panel.sizes.small
+        val size = if panel.bigOrder then panel.terms.sizes.big else panel.terms.sizes.small
         val reduces = held.exists(p => p.signum == (if side == Side.Buy then -1 else 1))
         val label = if !live then side.toString.toUpperCase
         else if reduces then "REDUCE"

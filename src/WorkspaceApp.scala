@@ -316,7 +316,7 @@ object WorkspaceApp:
       lazy val controller: DeskController = new DeskController(
         PanelView(
           mode = mode,
-          sizes = config.sizes,
+          terms = TradeTerms(config.sizes, config.slippage),
           muted = args.audio == "mute"
         ),
         now,
