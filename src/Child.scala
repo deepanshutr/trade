@@ -1,7 +1,7 @@
 package desk
 
 import java.io.{InputStream, PrintStream}
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 import scala.util.{Failure, Success, Try}
 import sun.misc.{Signal, SignalHandler}
 
@@ -18,9 +18,6 @@ object Child:
       args.config.toSeq.flatMap(Seq("--config", _)) ++
       args.stateDirectory.toSeq.flatMap(Seq("--state", _))
 
-  private def absolute(env: Map[String, String], name: String): Option[String] =
-    env.get(name).filter(value => Try(Path.of(value).isAbsolute).getOrElse(false))
-
   // The four vault entry points Desk calls. Nothing else runs.
   private def ownerStep(words: Seq[String]): Boolean = words match
     case Seq("--json", "owner", "status", "--network", network)           => networks(network)
@@ -29,12 +26,15 @@ object Child:
       networks(network) && path.nonEmpty
     case _ => false
 
+  // The tooling is installed when DESK_PYTHON and DESK_VAULT are absolute and DESK_VAULT holds
+  // desk_vault.py as a regular file. Otherwise no child starts.
   def vault(env: Map[String, String], words: Seq[String]): Either[String, Seq[String]] =
-    (absolute(env, "DESK_PYTHON"), absolute(env, "DESK_VAULT")) match
-      case (Some(python), Some(folder)) if ownerStep(words) =>
-        Right(Seq(python, "-B", Path.of(folder).resolve("desk_vault.py").toString) ++ words)
-      case (Some(_), Some(_)) => Left("Not an owner step")
-      case _                  => Left(notInstalled)
+    val script = KeyStore.absolute(env, "DESK_VAULT").map(Path.of(_).resolve("desk_vault.py"))
+    (KeyStore.absolute(env, "DESK_PYTHON"), script.filter(Files.isRegularFile(_))) match
+      case (Some(python), Some(found)) =>
+        if ownerStep(words) then Right(Seq(python, "-B", found.toString) ++ words)
+        else Left("Not an owner step")
+      case _ => Left(notInstalled)
 
   // Starts the child inside the guard, waits for it without a time limit, and runs enter after it
   // exits, still inside the guard, so Control C at the Enter line cannot stop Desk either. A child

@@ -1,11 +1,16 @@
 package desk
 
 import java.nio.charset.StandardCharsets.UTF_8
+import java.nio.file.Files
 
-class OwnerStatusSpec extends munit.FunSuite:
+class OwnerStatusSpec extends TempDirectorySuite:
   private val python = "/opt/tools/bin/python3"
-  private val folder = "/home/test/vault"
-  private val env = Map("DESK_PYTHON" -> python, "DESK_VAULT" -> folder)
+  // A vault folder with an empty desk_vault.py. Nothing runs it.
+  private lazy val folder =
+    val directory = suiteDirectory("owner-vault")
+    Files.write(directory.resolve("desk_vault.py"), Array.emptyByteArray)
+    directory.toString
+  private lazy val env = Map("DESK_PYTHON" -> python, "DESK_VAULT" -> folder)
   private val unavailable = "Owner status unavailable"
   private val owner = "0x1234567890abcdef1234567890abcdef1234abcd"
   private val key = "0xABCDEF0123456789abcdef0123456789ABCD0123"
@@ -37,6 +42,12 @@ class OwnerStatusSpec extends munit.FunSuite:
     (OwnerStatus.read("mainnet", env, runner(_, _)), runner)
 
   private def readJson(value: ujson.Value): Either[String, OwnerStatus] = read(bytes(value))._1
+
+  // The full reply with one value written as raw JSON text.
+  private def withRaw(name: String, raw: String): Array[Byte] =
+    val marked = full
+    marked(name) = "@raw@"
+    ujson.write(marked).replace("\"@raw@\"", raw).getBytes(UTF_8)
 
   test("a reply with exactly the ten keys parses, from one status command with no input") {
     val (status, runner) = read(bytes(full))
@@ -132,6 +143,59 @@ class OwnerStatusSpec extends munit.FunSuite:
     )
   }
 
+  test("a reply that repeats a key is unavailable, whichever value comes last") {
+    val text = ujson.write(full)
+    assert(text.startsWith("{\"network\":\"mainnet\","))
+    Vector("\"network\":\"testnet\",", "\"network\":\"mainnet\",", "\"owner\":null,").foreach {
+      repeated =>
+        assertEquals(read(("{" + repeated + text.drop(1)).getBytes(UTF_8))._1, Left(unavailable))
+    }
+  }
+
+  test("counts and times must be JSON integers, with no point and no exponent") {
+    assert(read(withRaw("candidates", "1"))._1.isRight)
+    assert(read(withRaw("balanceAt", "1700000000"))._1.isRight)
+    val accepted = Vector(
+      "candidates" -> "1.0",
+      "candidates" -> "1e0",
+      "candidates" -> "1E0",
+      "candidates" -> "10e-1",
+      "balanceAt" -> "1700000000.0",
+      "balanceAt" -> "1.7e9",
+      "balanceAt" -> "17E8"
+    ).filter((name, raw) => read(withRaw(name, raw))._1 != Left(unavailable))
+    assertEquals(accepted, Vector.empty)
+  }
+
+  test("the balance takes the vault's own decimal form, minus sign included") {
+    val negative = full
+    negative("balance") = "-0.501"
+    val status = readJson(negative).toOption.get
+    assertEquals(status.balance, Some(BigDecimal("-0.501")))
+    // Rounded down, so a debt is never shown smaller than it is.
+    assertEquals(
+      OwnerStatus.fundingText(status, 1_700_000_012L),
+      "-$0.51 at the venue, read 12 s ago"
+    )
+    val widest = "-" + "9" * 24 + "." + "1" * 18
+    Vector("0", "0.5", "25.00", widest).foreach { raw =>
+      val changed = full
+      changed("balance") = raw
+      assertEquals(
+        readJson(changed).map(_.balance.map(_.bigDecimal.toPlainString)),
+        Right(Some(raw))
+      )
+    }
+    val zero = full
+    zero("balance") = "-0"
+    val parsed = readJson(zero).toOption.get
+    assertEquals(parsed.balance.map(_.signum), Some(0))
+    assertEquals(
+      OwnerStatus.fundingText(parsed, 1_700_000_000L),
+      "$0.00 at the venue, read 0 s ago"
+    )
+  }
+
   test("a reply with a key missing or an extra key is unavailable") {
     full.value.keys.foreach { name =>
       val missing = full
@@ -169,7 +233,7 @@ class OwnerStatusSpec extends munit.FunSuite:
   }
 
   test("a value of the wrong kind is unavailable") {
-    Vector[(String, ujson.Value)](
+    val accepted = Vector[(String, ujson.Value)](
       "network" -> ujson.Null,
       "owner" -> "not an address",
       "owner" -> "0x1234",
@@ -185,7 +249,18 @@ class OwnerStatusSpec extends munit.FunSuite:
       "balance" -> "12,5",
       "balance" -> "1e3",
       "balance" -> "",
-      "balance" -> "-1",
+      "balance" -> "0E-8",
+      "balance" -> "1E+3",
+      "balance" -> "01",
+      "balance" -> "-01",
+      "balance" -> "00.5",
+      "balance" -> ("1" + "0" * 24),
+      "balance" -> ("1." + "1" * 19),
+      "balance" -> "+1",
+      "balance" -> "-",
+      "balance" -> ".5",
+      "balance" -> "1.",
+      "balance" -> " 1",
       "balanceAt" -> "1700000000",
       "balanceAt" -> -1,
       "balanceAt" -> 1.5,
@@ -193,11 +268,13 @@ class OwnerStatusSpec extends munit.FunSuite:
       "due" -> ujson.Arr(1),
       "due" -> ujson.Null,
       "message" -> ujson.Null
-    ).foreach { (name, value) =>
+    ).filter { (name, value) =>
       val changed = full
       changed(name) = value
-      assertEquals(readJson(changed), Left(unavailable), s"$name $value")
+      readJson(changed) != Left(unavailable)
     }
+    // Every accepted value is named, not only the first.
+    assertEquals(accepted, Vector.empty)
   }
 
   test("a reply for another network is unavailable") {
@@ -214,16 +291,27 @@ class OwnerStatusSpec extends munit.FunSuite:
     assertEquals(OwnerStatus.read("mainnet", env, runner(_, _)), Left(unavailable))
   }
 
-  test("a deeply nested reply is unavailable and does not throw") {
-    val deep = ("[" * 4000 + "]" * 4000).getBytes(UTF_8)
+  test("a deeply nested reply under the size bound reaches the parser and is unavailable") {
+    // The nesting sits in due, as deep as fits in 4095 bytes, so the parser must read all of it.
+    val base = withRaw("due", "")
+    val depth = (4095 - base.length - 3) / 2
+    assert(depth > 1800, depth.toString)
+    val deep = withRaw("due", "[" * depth + "\"x\"" + "]" * depth)
+    assertEquals(deep.length, 4095 - (4095 - base.length - 3) % 2)
     assertEquals(read(deep)._1, Left(unavailable))
+    val bare = ("[" * 2047 + "]" * 2047).getBytes(UTF_8)
+    assertEquals(bare.length, 4094)
+    assertEquals(read(bare)._1, Left(unavailable))
   }
 
   test("without the owner tooling nothing runs and the rows say so") {
     val runner = new Runner(ProcessRun(0, bytes(full)))
-    assertEquals(
-      OwnerStatus.read("mainnet", Map("DESK_PYTHON" -> python), runner(_, _)),
-      Left("Owner tooling is not installed")
-    )
+    val empty = tempDirectory("owner-empty").toString
+    Vector(Map("DESK_PYTHON" -> python), env + ("DESK_VAULT" -> empty)).foreach { environment =>
+      assertEquals(
+        OwnerStatus.read("mainnet", environment, runner(_, _)),
+        Left("Owner tooling is not installed")
+      )
+    }
     assertEquals(runner.calls, Vector.empty)
   }

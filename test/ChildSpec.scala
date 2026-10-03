@@ -9,15 +9,20 @@ import java.io.{
   PrintStream
 }
 import java.nio.charset.StandardCharsets.UTF_8
+import java.nio.file.Files
 import sun.misc.{Signal, SignalHandler}
 
-class ChildSpec extends munit.FunSuite:
+class ChildSpec extends TempDirectorySuite:
   private val java = "/opt/jdk/bin/java"
   private val jar = "/home/test/.local/lib/desk.jar"
   private val python = "/opt/tools/bin/python3"
-  private val folder = "/home/test/vault"
-  private val script = folder + "/desk_vault.py"
-  private val env = Map("DESK_PYTHON" -> python, "DESK_VAULT" -> folder)
+  // A vault folder with an empty desk_vault.py. Nothing runs it.
+  private lazy val folder =
+    val directory = suiteDirectory("child-vault")
+    Files.write(directory.resolve("desk_vault.py"), Array.emptyByteArray)
+    directory.toString
+  private lazy val script = folder + "/desk_vault.py"
+  private lazy val env = Map("DESK_PYTHON" -> python, "DESK_VAULT" -> folder)
   private val notInstalled = "Owner tooling is not installed"
 
   private def args(config: Option[String] = None, state: Option[String] = None): Main.Args =
@@ -87,6 +92,17 @@ class ChildSpec extends munit.FunSuite:
     }
   }
 
+  test("nothing runs when DESK_VAULT holds no desk_vault.py as a regular file") {
+    val words = Seq("owner", "new", "--network", "mainnet")
+    val empty = tempDirectory("child-empty")
+    val folderNamed = tempDirectory("child-folder-named")
+    Files.createDirectory(folderNamed.resolve("desk_vault.py"))
+    Vector(empty.toString, folderNamed.toString, empty.resolve("missing").toString).foreach {
+      vault =>
+        assertEquals(Child.vault(env + ("DESK_VAULT" -> vault), words), Left(notInstalled), vault)
+    }
+  }
+
   test("the vault runs no command other than the four owner entry points") {
     Vector(
       Seq.empty[String],
@@ -128,7 +144,7 @@ class ChildSpec extends munit.FunSuite:
       process
     def enter(): Unit = events :+= "enter"
 
-  private val command = Seq(python, "-B", script, "owner", "new", "--network", "mainnet")
+  private lazy val command = Seq(python, "-B", script, "owner", "new", "--network", "mainnet")
 
   test("the child starts and is waited for inside the guard, then Enter, then the guard ends") {
     Vector(0, 3).foreach { exit =>
