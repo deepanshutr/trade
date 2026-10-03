@@ -68,6 +68,10 @@ object KeyStartup:
             val _ = session.load()
             Prepared(keyed, Some(session))
 
+object KeyReload:
+  // The key row when a usable key was not read: the read was denied or timed out.
+  val notRead = "The key was not read. Press r to ask again"
+
 // The trading key Desk holds, and the reload after every settings child and on r. The settings
 // file is the one source: its sizes and slippage apply at once, and its owner with the active key
 // decides the live worker. The reload uses the start-up hooks, so the offline runner stays
@@ -82,7 +86,7 @@ final class KeyReload(
     replace: (TradingConfig, String => TradingWorker) => Unit,
     setTerms: TradeTerms => Unit
 ):
-  private val notRead = "The key was not read. Press r to ask again"
+  import KeyReload.notRead
   private var config = started
   @volatile private var held = initial
   private var row = Option.empty[Either[String, String]]
@@ -133,15 +137,18 @@ final class KeyReload(
             Some(fresh)
         // Sizes and slippage travel with each order review, so they alone need no new worker.
         val same = next.copy(sizes = config.sizes, slippage = config.slippage) == config
-        if !same || session != held then
-          val factory: String => TradingWorker = session match
-            case Some(key) => coin => hooks.worker(next, true, coin, directory, () => key.copy())
-            case None      => coin => createWorker(next, true, coin, directory)
-          replace(next, factory)
-          val old = held
-          held = session
-          // The old worker held its own copy and wiped it when it retired.
-          old.filter(key => !session.exists(_ eq key)).foreach(_.close())
+        try
+          if !same || session != held then
+            val factory: String => TradingWorker = session match
+              case Some(key) => coin => hooks.worker(next, true, coin, directory, () => key.copy())
+              case None      => coin => createWorker(next, true, coin, directory)
+            replace(next, factory)
+            val old = held
+            held = session
+            // The old worker held its own copy and wiped it when it retired.
+            old.filter(key => !session.exists(_ eq key)).foreach(_.close())
+        // A session read here that the replace never took is closed, so its key goes with it.
+        finally session.filter(key => !held.exists(_ eq key)).foreach(_.close())
         config = next
         row = Some(describe(found))
         Right(())

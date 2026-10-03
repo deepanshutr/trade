@@ -510,7 +510,7 @@ class MainRuntimeSpec extends TempDirectorySuite:
     val events = ArrayBuffer.empty[String]
     val replaced = ArrayBuffer.empty[(TradingConfig, String => TradingWorker)]
     val terms = ArrayBuffer.empty[TradeTerms]
-    var onReplace: () => Unit = () => ()
+    var onReplace: (String => TradingWorker) => Unit = _ => ()
     val hooks: KeyStartup.Hooks = s.hooks.copy(
       say = text => { events += "say " + text; () },
       readKey = (config, wait) => {
@@ -537,7 +537,7 @@ class MainRuntimeSpec extends TempDirectorySuite:
         throw new Reached
       },
       (config, factory) => {
-        onReplace()
+        onReplace(factory)
         events += "replace"
         replaced += ((config, factory))
       },
@@ -566,7 +566,7 @@ class MainRuntimeSpec extends TempDirectorySuite:
     KeyNames.create(KeyNames.path(s.home), KeyEntry(other, "Spare", "testnet", 1759300000001L))
     ActiveKey.select(ActiveKey.path(s.home), "testnet", other)
     s.present += other
-    r.onReplace = () => assertEquals(old.copy().toSeq, keyBytes.toSeq)
+    r.onReplace = _ => assertEquals(old.copy().toSeq, keyBytes.toSeq)
     assertEquals(r.keys.reload(), Right(()))
     assertEquals(r.events.toVector, Vector("say " + waiting, "read", "replace"))
     intercept[IllegalStateException](old.copy())
@@ -579,6 +579,34 @@ class MainRuntimeSpec extends TempDirectorySuite:
     assertEquals(load().toSeq, keyBytes.toSeq)
     assertEquals(r.keys.keyRow(), Right("Spare   0xbbbb...bbbb   active, in Keychain"))
     assert(r.keys.session.exists(held => !(held eq old)))
+  }
+
+  test("a replace that fails closes the session the reload just read and keeps the old one") {
+    val s = new Startup(withOwner())
+    s.makeUsable()
+    val r = new Reload(s)
+    val old = r.start.session.get
+    val other = "0x" + "b" * 40
+    KeyNames.create(KeyNames.path(s.home), KeyEntry(other, "Spare", "testnet", 1759300000001L))
+    ActiveKey.select(ActiveKey.path(s.home), "testnet", other)
+    s.present += other
+    r.onReplace = factory =>
+      intercept[Reached](factory("XMR"))
+      throw new IllegalStateException("router")
+    intercept[IllegalStateException](r.keys.reload())
+    assertEquals(s.reads.size, 2)
+    // The worker loader of the new session finds its key wiped.
+    intercept[IllegalStateException](s.loaders.last._5())
+    assert(r.keys.session.exists(_ eq old))
+    assertEquals(old.copy().toSeq, keyBytes.toSeq)
+  }
+
+  test("a key read denied at start leaves the key row saying it was not read") {
+    val s = new Startup(withOwner())
+    s.makeUsable()
+    s.read = () => throw new IllegalStateException("denied")
+    val r = new Reload(s)
+    assertEquals(r.keys.keyRow(), Left("The key was not read. Press r to ask again"))
   }
 
   test("a denied read leaves live without a key, the row says so, and r asks again") {

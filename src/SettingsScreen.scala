@@ -375,6 +375,8 @@ object SettingsScreen:
       case (_, Some(Left(reason)))            => notice = reason
       case (Right(extra), Some(Right(reply))) =>
         if !reply.phase.contains("ready") then notice = "Make the owner first"
+        else if context.keyRow() == Left(KeyReload.notRead) then
+          notice = "Read the trading key first. Press r"
         else if context.keyRow().isLeft then notice = "Add a trading key first"
         else
           reply.approved match

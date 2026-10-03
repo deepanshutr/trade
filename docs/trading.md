@@ -92,7 +92,7 @@ that has one stops every start until the field is removed. The message says to r
 value out of the settings, the command line, files and chat.
 
 Live without a usable key or an owner shows "Live setup required. Press s for settings"
-and refuses orders. A usable key has an active choice for the selected network, a name
+and refuses orders. The sentence names the key bound to settings, `s` by default. A usable key has an active choice for the selected network, a name
 on that network, and a Keychain item for its address. The check reads the item's
 attributes only. It never reads the key.
 
@@ -104,7 +104,8 @@ The Keys section of settings has four rows:
   or continues the step the owner is waiting on, as the status says.
 - Approval shows "approved", "not approved" or "not checked". Enter asks the owner to
   approve the trading key at the venue. It runs only when the owner is ready, Desk has
-  a usable key and the key is not approved yet.
+  a usable key and the key is not approved yet. When the key's Keychain read was denied
+  or timed out, Enter says "Read the trading key first. Press r".
 - Funding shows the balance at the venue and how long ago it was read. Enter copies the
   owner's address. Fund it by a transfer to that address at the venue from an account
   you control. Desk never sends money.

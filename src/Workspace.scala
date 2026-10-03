@@ -175,6 +175,7 @@ object Workspace:
           case _ if lower.contains("result")          => "Confirming result"
           case _ if raw == s"${view.coin} submitting" => "Sending"
           case _                                      => mappedOrderStatus(raw, panel, unsaved)
+      else if raw == TradingWorker.setupMessage then raw
       else mappedOrderStatus(raw, panel, unsaved)
     if text.nonEmpty && panel.actionNumber > 0 && !view.pending && !unsaved
     then s"$text #${panel.actionNumber}"
@@ -300,7 +301,13 @@ object Workspace:
         ("Open P&L " + amount(view.portfolio.openProfit, half - 10)).padTo(half, ' ') +
           "Net P&L " + amount(view.portfolio.net, rightWidth - half - 8)
       )
-      line(tradeTop + 4, orderStatus(view, panel))
+      val status = orderStatus(view, panel)
+      line(tradeTop + 4, status)
+      // The setup sentence names the key bound to settings the way the buttons name theirs, so
+      // the text filter does not blank an Option character.
+      if status.startsWith(TradingWorker.setupMessage) then
+        right(tradeTop + 4) = TradingWorker.setupFor(key(Bind.Settings)) +
+          safeText(status.drop(TradingWorker.setupMessage.length))
       val choosing =
         !view.pending && s.prompt.isEmpty && s.marketPending.isEmpty && panel.modeReview.isEmpty
       val small =

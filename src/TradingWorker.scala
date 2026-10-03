@@ -33,7 +33,9 @@ final case class TradingView(
 object TradingWorker:
   val ownerMismatchMessage: String = "Signer does not match the configured owner"
   val savedOwnerMismatchMessage: String = "Saved order belongs to another owner"
-  val setupMessage: String = "Live setup required. Press s for settings"
+  // The workspace shows this sentence with the key bound to settings, s by default.
+  def setupFor(key: String): String = s"Live setup required. Press $key for settings"
+  val setupMessage: String = setupFor("s")
   val maximumReviewLifetimeMs: Long = 30000L
   val openingPauseMs: Long = 2000L
   val openingPausedMessage: String = "Opening paused for 2 s after closing"

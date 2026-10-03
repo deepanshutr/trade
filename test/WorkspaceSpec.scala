@@ -258,3 +258,38 @@ class WorkspaceSpec extends munit.FunSuite:
     val tile = frame.buttons.find(_.action == DeskAction.Prepare(Trading.action(0)))
     assertEquals(tile.map(_.label), Some("REDUCE $500 x5"))
   }
+
+  test("the live setup line names the key bound to settings, as the buttons do") {
+    def bound(text: String): Bindings =
+      Bindings.defaults
+        .updated(
+          Bind.Settings,
+          Binding(Vector(KeyGroup(text.getBytes("UTF-8").toVector.map(_ & 0xff))))
+        )
+        .toOption
+        .get
+    def status(view: TradingView, panel: PanelView): String =
+      Workspace
+        .draw(s, view, panel, 100, 30, now, java.time.ZoneOffset.UTC, Style.mono)
+        .lines(30 - 15 + 4)
+    val blocked = view.copy(
+      message = TradingWorker.setupMessage,
+      block = Some(TradingWorker.setupMessage),
+      blockCode = BlockCode.Blocked
+    )
+    val live = PanelView(mode = "LIVE")
+    assert(status(blocked, live).contains("Live setup required. Press s for settings"))
+    val control = status(blocked, live.copy(bindings = bound("\u000b")))
+    assert(control.contains("Live setup required. Press ^K for settings"), control)
+    val option = status(blocked, live.copy(bindings = bound("∫")))
+    assert(option.contains("Live setup required. Press ∫ for settings"), option)
+    // The refusal of l in prop mode is the same sentence, with its action number.
+    val refused = PanelView(
+      mode = "PROP",
+      actionNotice = Some(TradingWorker.setupMessage),
+      actionNumber = 1,
+      bindings = bound("\u000b")
+    )
+    val notice = status(view.copy(message = "", block = None), refused)
+    assert(notice.contains("Live setup required. Press ^K for settings #1"), notice)
+  }

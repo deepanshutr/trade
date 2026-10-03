@@ -363,7 +363,9 @@ class SettingsScreenSpec extends munit.FunSuite:
       approving(status(approved = Some(true))) -> "The trading key is already approved",
       approving(status(approved = None)) -> "Approval was not checked. Press r to read it again",
       approving(status(phase = Some("await-funding"))) -> "Make the owner first",
-      approving(status(), key = Left("No active key")) -> "Add a trading key first"
+      approving(status(), key = Left("No active key")) -> "Add a trading key first",
+      approving(status(), key = Left("The key was not read. Press r to ask again")) ->
+        "Read the trading key first. Press r"
     )
     for (f, text) <- refused do
       assertEquals(f.owners.size, 0, text)
@@ -372,6 +374,13 @@ class SettingsScreenSpec extends munit.FunSuite:
     assertEquals(outside.owners.size, 0)
     assertEquals(value(outside.row("Approval")), "Approval needs the settings in ~/.config/desk")
     assertEquals(outside.notice, "Approval needs the settings in ~/.config/desk")
+  }
+
+  test("a key that was not read keeps its own text on the trading key row") {
+    val f = new Fixture
+    f.key = Left("The key was not read. Press r to ask again")
+    assert(!f.run(esc))
+    assertEquals(value(f.row("Trading key")), "The key was not read. Press r to ask again")
   }
 
   test("Enter on the funding row copies the owner's address and says Desk never sends money") {
