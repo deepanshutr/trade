@@ -89,7 +89,8 @@ class TradeProgressSpec extends TempDirectorySuite:
       f.open()
       val reason = f.worker.preview(Trading.action(0), terms).swap.toOption.get
       assert(reason.contains("settings"), reason)
-      assert(reason.contains("restart"), reason)
+      assert(reason.contains("applies to the next order"), reason)
+      assert(!reason.contains("restart"), reason)
       assert(!reason.contains("reduce the position"), "flat account has no position to reduce")
     finally f.close()
   }

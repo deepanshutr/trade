@@ -287,6 +287,129 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
       f.close()
   }
 
+  // A router whose live factory counts the workers it makes.
+  private def making(
+      f: Fixture,
+      mode: String,
+      made: AtomicInteger,
+      config: TradingConfig = null
+  ): ExecutionRouter =
+    new ExecutionRouter(
+      Option(config).getOrElse(f.config),
+      mode,
+      "XMR",
+      f.worker,
+      _ =>
+        made.incrementAndGet()
+        f.create()
+      ,
+      new Rest { def post(body: String): Option[String] = fail("unexpected prop market request") },
+      f.directory,
+      () => f.clock.get(),
+      () => f.clock.get()
+    )
+
+  private def journalFree(f: Fixture): Boolean =
+    scala.util.Try(OrderJournal.open(f.directory, f.config.identity)).map(_.close()).isSuccess
+
+  test("suspending live retires the worker and frees its journal, and nothing restarts it") {
+    val f = new Fixture()
+    val made = new AtomicInteger()
+    val route = making(f, "LIVE", made)
+    try
+      Wait.until("the live worker never opened its journal")(f.journalOpens.get() == 1)
+      assert(!journalFree(f), "the running worker should hold the journal lock")
+      assertEquals(route.suspendLive(), Right(()))
+      assert(f.worker.isRetired)
+      assert(journalFree(f), "a suspended live worker still holds the journal lock")
+      assertEquals(route.switchMode("LIVE"), Left("Settings are open"))
+      Thread.sleep(200L)
+      assertEquals(made.get(), 0)
+      route.resumeLive()
+      assertEquals(made.get(), 1)
+      assertEquals(route.switchMode("LIVE"), Right(()))
+    finally
+      route.close()
+      f.close()
+  }
+
+  test("a retirement that does not finish refuses the child and resume makes no second worker") {
+    val released = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val f = new Fixture(warmSigning =
+      () =>
+        while !released.get() do
+          try Thread.sleep(5L)
+          catch case _: InterruptedException => ()
+    )
+    val made = new AtomicInteger()
+    val route = making(f, "LIVE", made)
+    try
+      Wait.until("the live worker never started")(f.warmCalls.get() == 1)
+      assertEquals(route.suspendLive(100L), Left("Trading did not stop. Restart Desk"))
+      route.resumeLive()
+      Thread.sleep(200L)
+      assertEquals(made.get(), 0)
+      assert(!f.worker.isRetired)
+    finally
+      released.set(true)
+      route.close()
+      f.close()
+  }
+
+  test("a router without an owner enters live after replaceLive with an approved config") {
+    val f = new Fixture()
+    val made = new AtomicInteger()
+    val route = new ExecutionRouter(
+      TradingConfig(),
+      "VIEW",
+      "XMR",
+      f.worker,
+      _ => fail("the first factory made a worker"),
+      new Rest { def post(body: String): Option[String] = fail("unexpected prop market request") },
+      f.directory,
+      () => f.clock.get(),
+      () => f.clock.get()
+    )
+    try
+      route.start()
+      assertEquals(route.switchMode("LIVE"), Left(TradingWorker.setupMessage))
+      route.replaceLive(
+        f.config,
+        _ =>
+          made.incrementAndGet()
+          f.create()
+      )
+      assert(f.worker.isRetired)
+      assertEquals(made.get(), 0)
+      assertEquals(route.switchMode("LIVE"), Right(()))
+      assertEquals(made.get(), 1)
+    finally
+      route.close()
+      f.close()
+  }
+
+  test("replaceLive in live mode retires the old worker before the new factory starts one") {
+    val f = new Fixture()
+    val first = new AtomicInteger()
+    val second = new AtomicInteger()
+    val route = making(f, "LIVE", first)
+    try
+      Wait.until("the live worker never opened its journal")(f.journalOpens.get() == 1)
+      route.replaceLive(
+        f.config.copy(quoteAgeMs = 1500L),
+        _ =>
+          assert(f.worker.isRetired, "a new worker started before the old one retired")
+          second.incrementAndGet()
+          f.create()
+      )
+      assert(f.worker.isRetired)
+      Wait.until("the new live worker never opened its journal")(f.journalOpens.get() == 2)
+      assertEquals((first.get(), second.get()), (0, 1))
+    finally
+      route.close()
+      f.close()
+  }
+
   test("recorder startup reaches public storage without constructing an account worker") {
     val directory = tempDirectory("desk-record-routing")
     val config = directory.resolve("settings.json")

@@ -34,7 +34,7 @@ class PropModeSpec extends TempDirectorySuite:
         Main.parseArgs(Seq("--prop", other)),
         Left("choose one of prop, live, public recording or keys")
       )
-    assert(Main.usage.contains("[--prop | --trade | --record | --keys]"), Main.usage)
+    assert(Main.usage.contains("[--prop | --trade | --record]"), Main.usage)
     assert(!Main.usage.toLowerCase.contains("paper"), Main.usage)
   }
 

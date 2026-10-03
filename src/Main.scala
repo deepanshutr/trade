@@ -18,7 +18,7 @@ object Main:
   ):
     def mode: String = if trade then "LIVE" else if prop then "PROP" else "VIEW"
   val usage =
-    "usage: desk [COIN] [--mono] [--prop | --trade | --record | --keys] [--config PATH] [--state PATH] [--chime | --mute]"
+    "usage: desk [COIN] [--mono] [--prop | --trade | --record] [--config PATH] [--state PATH] [--chime | --mute]"
   val escapeWaitNanos = 40_000_000L
   // A person takes longer than the escape wait between the two keys of a sequence.
   val sequenceWaitNanos = 1_000_000_000L

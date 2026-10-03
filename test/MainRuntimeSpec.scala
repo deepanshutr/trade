@@ -166,12 +166,12 @@ class MainRuntimeSpec extends TempDirectorySuite:
   private def withOwner(network: String = "testnet"): String =
     s"""{"network":"$network","owner":"$ownerAddress","keyService":"desk-test"}"""
 
-  test("the keys mode is its own choice and the usage line names it") {
+  test("the keys mode stays the settings child entry and the usage line no longer names it") {
     assertEquals(Main.parseArgs(Seq("--keys")), Right(Main.Args("XMR", false, keys = true)))
     assert(Main.parseArgs(Seq("--keys", "--trade")).isLeft)
     assert(Main.parseArgs(Seq("--prop", "--keys")).isLeft)
     assert(Main.parseArgs(Seq("--keys", "--record")).isLeft)
-    assert(Main.usage.contains("--keys"))
+    assert(!Main.usage.contains("--keys"), Main.usage)
   }
 
   test("--keys opens the key screen with the settings and exits before any feed or state") {
@@ -192,29 +192,17 @@ class MainRuntimeSpec extends TempDirectorySuite:
     assert(!Files.exists(s.state), "the key screen made workspace state")
   }
 
-  test("--trade with no usable key opens the screen and leaves with No trading key") {
+  test("--trade without a usable key starts the workspace with live setup and no key screen") {
     val s = new Startup(withOwner())
-    val stop = intercept[Stopped](s.run(s.args(trade = true)))
-    assertEquals((stop.code, stop.message), (1, Some("No trading key")))
-    assertEquals(s.screens.size, 1)
-    assertEquals(s.created.size, 0)
-    assertEquals(s.sourcesCalled, 0)
-    assertEquals(s.reads.size, 0)
-  }
-
-  test("--trade continues into the workspace with a key chosen on the screen") {
-    val s = new Startup("""{"network":"testnet"}""")
-    s.onScreen = _ =>
-      s.makeUsable()
-      Some(keyAddress)
     intercept[Reached](s.run(s.args(trade = true)))
-    assertEquals(s.screens.size, 1)
-    assertEquals(s.created.size, 1)
-    val (config, enabled, coin, _) = s.created.head
-    assertEquals(config.agent, Some(keyAddress))
-    assertEquals((enabled, coin), (true, "XMR"))
+    assertEquals(s.screens.size, 0)
     assertEquals(s.reads.size, 0)
     assertEquals(s.said.toVector, Vector.empty[String])
+    assertEquals(s.created.size, 1)
+    val (config, enabled, coin, _) = s.created.head
+    assertEquals((config.agent, enabled, coin), (None, true, "XMR"))
+    assert(!config.configured)
+    assertEquals(TradingWorker.setupMessage, "Live setup required. Press s for settings")
   }
 
   test("--trade with a usable key does not open the screen") {
@@ -228,7 +216,7 @@ class MainRuntimeSpec extends TempDirectorySuite:
   test("a screen that stops with an error ends the start with its class name only") {
     val s = new Startup()
     s.onScreen = _ => throw new IllegalStateException("secret-looking text")
-    val stop = intercept[Stopped](s.run(s.args(trade = true)))
+    val stop = intercept[Stopped](s.run(s.args(keys = true)))
     assertEquals((stop.code, stop.message), (1, Some("Key screen stopped: IllegalStateException")))
   }
 
@@ -369,12 +357,10 @@ class MainRuntimeSpec extends TempDirectorySuite:
         keyService = "desk-test"
       )
       val label = s"trade=$trade owner=$owner usable=$usable"
-      scala.util.Try(KeyStartup.prepare(s.args(trade = trade), settings, s.state, s.hooks)) match
-        case scala.util.Success(prepared) =>
-          assertEquals(prepared.session.nonEmpty, owner && usable, label)
-          assert(prepared.session.nonEmpty || !prepared.config.configured, label)
-        case scala.util.Failure(_: Stopped) => assert(trade && !usable, label)
-        case scala.util.Failure(other)      => throw other
+      val prepared = KeyStartup.prepare(s.args(trade = trade), settings, s.state, s.hooks)
+      assertEquals(prepared.session.nonEmpty, owner && usable, label)
+      assert(prepared.session.nonEmpty || !prepared.config.configured, label)
+      assertEquals(s.screens.size, 0, label)
   }
 
   test("the loader of a worker made without a session refuses and never returns a key") {
@@ -496,9 +482,166 @@ class MainRuntimeSpec extends TempDirectorySuite:
     try
       assertEquals(
         router.switchMode("LIVE"),
-        Left(
-          "Live setup required: owner in settings and an active key (desk --keys). See docs/trading.md"
-        )
+        Left("Live setup required. Press s for settings")
       )
     finally router.close()
+  }
+
+  test("a refused key bindings file stops the start before the Keychain is read") {
+    val s = new Startup(withOwner())
+    s.makeUsable()
+    val folder = s.home.resolve(".config/desk")
+    Files.createDirectories(folder)
+    Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwx------"))
+    val file = Bindings.path(s.home)
+    Files.writeString(file, """{"version":1,"bindings":{"close":["\u0003"]}}""")
+    Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"))
+    val stop = intercept[Stopped](s.run(s.args(trade = true)))
+    assertEquals(
+      (stop.code, stop.message),
+      (64, Some("invalid key bindings: close: Control C quits Desk (bindings.json)"))
+    )
+    assertEquals((s.reads.size, s.created.size, s.loaders.size, s.sourcesCalled), (0, 0, 0, 0))
+  }
+
+  // Reload after a child or r
+
+  private final class Reload(s: Startup, trade: Boolean = true):
+    val events = ArrayBuffer.empty[String]
+    val replaced = ArrayBuffer.empty[(TradingConfig, String => TradingWorker)]
+    val terms = ArrayBuffer.empty[TradeTerms]
+    var onReplace: () => Unit = () => ()
+    val hooks: KeyStartup.Hooks = s.hooks.copy(
+      say = text => { events += "say " + text; () },
+      readKey = (config, wait) => {
+        events += "read"
+        s.reads += ((config, wait))
+        s.read()
+      }
+    )
+    val start: KeyStartup.Prepared = KeyStartup.prepare(
+      s.args(trade = trade),
+      TradingConfig.load(Some(s.config)).toOption.get,
+      s.state,
+      hooks
+    )
+    events.clear()
+    val keys = new KeyReload(
+      s.args(trade = trade),
+      start.config,
+      start.session,
+      s.state,
+      hooks,
+      (config, enabled, coin, directory) => {
+        s.created += ((config, enabled, coin, directory))
+        throw new Reached
+      },
+      (config, factory) => {
+        onReplace()
+        events += "replace"
+        replaced += ((config, factory))
+      },
+      chosen => { terms += chosen; () }
+    )
+    def write(settings: String): Unit = { Files.writeString(s.config, settings); () }
+
+  test("a reload with the same usable key reads nothing and replaces nothing") {
+    val s = new Startup(withOwner())
+    s.makeUsable()
+    val r = new Reload(s)
+    assertEquals(s.reads.size, 1)
+    assertEquals(r.keys.reload(), Right(()))
+    assertEquals(s.reads.size, 1)
+    assertEquals(r.events.toVector, Vector.empty[String])
+    assertEquals(r.keys.keyRow(), Right("Main   0xaaaa...aaaa   active, in Keychain"))
+    assert(r.keys.session.exists(_ eq r.start.session.get))
+  }
+
+  test("a new active key reads once after the prompt line and the old session closes after") {
+    val s = new Startup(withOwner())
+    s.makeUsable()
+    val r = new Reload(s)
+    val old = r.start.session.get
+    val other = "0x" + "b" * 40
+    KeyNames.create(KeyNames.path(s.home), KeyEntry(other, "Spare", "testnet", 1759300000001L))
+    ActiveKey.select(ActiveKey.path(s.home), "testnet", other)
+    s.present += other
+    r.onReplace = () => assertEquals(old.copy().toSeq, keyBytes.toSeq)
+    assertEquals(r.keys.reload(), Right(()))
+    assertEquals(r.events.toVector, Vector("say " + waiting, "read", "replace"))
+    intercept[IllegalStateException](old.copy())
+    val (config, factory) = r.replaced.head
+    assertEquals((config.agent, config.owner), (Some(other), Some(ownerAddress)))
+    assertEquals(s.reads.last, (config, 120))
+    intercept[Reached](factory("XMR"))
+    val (made, enabled, coin, directory, load) = s.loaders.last
+    assertEquals((made, enabled, coin, directory), (config, true, "XMR", s.state))
+    assertEquals(load().toSeq, keyBytes.toSeq)
+    assertEquals(r.keys.keyRow(), Right("Spare   0xbbbb...bbbb   active, in Keychain"))
+    assert(r.keys.session.exists(held => !(held eq old)))
+  }
+
+  test("a denied read leaves live without a key, the row says so, and r asks again") {
+    val s = new Startup(withOwner())
+    val r = new Reload(s)
+    assertEquals((s.reads.size, r.start.session), (0, None))
+    assertEquals(r.keys.keyRow(), Left("No active key for testnet. Choose one in settings"))
+    s.makeUsable()
+    s.read = () => throw new IllegalStateException("denied")
+    assertEquals(r.keys.reload(), Right(()))
+    assertEquals(s.reads.size, 1)
+    assertEquals(r.keys.keyRow(), Left("The key was not read. Press r to ask again"))
+    val (config, factory) = r.replaced.last
+    assert(config.configured)
+    intercept[Reached](factory("XMR"))
+    intercept[IllegalStateException](s.loaders.last._5())
+    assertEquals(r.keys.reload(), Right(()))
+    assertEquals(s.reads.size, 2)
+    s.read = () => keyBytes.clone()
+    assertEquals(r.keys.reload(), Right(()))
+    assertEquals(s.reads.size, 3)
+    assertEquals(r.keys.keyRow(), Right("Main   0xaaaa...aaaa   active, in Keychain"))
+  }
+
+  test("a reload refuses a changed network and keeps everything") {
+    val s = new Startup(withOwner())
+    s.makeUsable()
+    val r = new Reload(s)
+    r.write(withOwner("mainnet"))
+    assertEquals(r.keys.reload(), Left("Restart Desk to change the network"))
+    assertEquals((r.replaced.size, r.terms.size, s.reads.size), (0, 0, 1))
+  }
+
+  test("a refused settings file keeps the old settings") {
+    val s = new Startup(withOwner())
+    s.makeUsable()
+    val r = new Reload(s)
+    r.write("{")
+    assertEquals(r.keys.reload(), Left("invalid or unreadable trading settings"))
+    assertEquals((r.replaced.size, r.terms.size), (0, 0))
+  }
+
+  test("a reload applies the file's sizes and slippage at once") {
+    val s = new Startup("""{"network":"testnet"}""")
+    val r = new Reload(s, trade = false)
+    r.write("""{"network":"testnet","small":"25","big":"50","slippage":"0.002"}""")
+    assertEquals(r.keys.reload(), Right(()))
+    assertEquals(
+      r.terms.toVector,
+      Vector(TradeTerms(TradeSizes(BigDecimal(25), BigDecimal(50)), BigDecimal("0.002")))
+    )
+    assertEquals(r.replaced.size, 0)
+  }
+
+  test("an owner written by the approval step gives live a key without a restart") {
+    val s = new Startup("""{"network":"testnet","keyService":"desk-test"}""")
+    s.makeUsable()
+    val r = new Reload(s, trade = false)
+    assertEquals(s.reads.size, 0)
+    r.write(withOwner())
+    assertEquals(r.keys.reload(), Right(()))
+    assertEquals(s.reads.size, 1)
+    val (config, _) = r.replaced.last
+    assert(config.configured)
+    assertEquals(config.agent, Some(keyAddress))
   }

@@ -241,6 +241,11 @@ object WorkspaceApp:
       .getOrElse(home.resolve(".local/state/desk"))
       .toAbsolutePath
       .normalize()
+    // A refused bindings file stops the start like a refused settings file, before any Keychain
+    // read. The key screen child and the recorder read no keys from the workspace.
+    val bindings =
+      if args.keys || args.record then Bindings.defaults
+      else Bindings.load(Bindings.path(home)).fold(m => keyHooks.stop(64, Some(m)), identity)
     // The key step comes first. The key screen never touches the feed, the event queue or
     // diagnostics, and the single Keychain read happens before the workspace starts.
     val prepared = KeyStartup.prepare(args, loaded, directory, keyHooks)
@@ -437,7 +442,8 @@ object WorkspaceApp:
                 pending,
                 byte,
                 marketPrompt,
-                mouseEnabled = true
+                mouseEnabled = true,
+                bindings = bindings
               )
               pending = next
               if pending == Vector(27) then escapeAt = System.nanoTime()

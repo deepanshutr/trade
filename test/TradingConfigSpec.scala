@@ -170,7 +170,7 @@ class TradingConfigSpec extends munit.FunSuite:
   test("settings with an agent field are refused before any value is read") {
     val message =
       "invalid trading settings: remove agent from the settings. " +
-        "The trading key is now chosen with desk --keys"
+        "The trading key is now chosen in Desk settings"
     val values = Vector(
       ujson.Str("0x" + "2" * 40),
       ujson.Str("private-address-canary"),

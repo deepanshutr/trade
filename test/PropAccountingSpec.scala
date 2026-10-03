@@ -121,7 +121,13 @@ class PropAccountingSpec extends TempDirectorySuite:
         val empty = ledger.account
         assert(ledger.fill(plan(Side.Sell, 1, 100), now).isLeft)
         assertEquals(ledger.account, empty)
-        assert(ledger.fill(plan(Side.Buy, 10, 100), now).isLeft)
+        assertEquals(
+          ledger.fill(plan(Side.Buy, 10, 100), now).left.toOption,
+          Some(
+            "Prop limit: not enough stables including fees. Lower order sizes in settings. " +
+              "The change applies to the next order."
+          )
+        )
         assertEquals(ledger.account, empty)
         assert(ledger.fill(plan(Side.Buy, 2, 100), now).isRight)
         val held = ledger.account

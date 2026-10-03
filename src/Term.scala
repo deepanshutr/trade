@@ -58,6 +58,8 @@ object Term:
 
   final class Writer(output: java.io.PrintStream = System.out):
     private var previous: Option[((Int, Int), Vector[String])] = None
+    // Forgets the last frame, so the next write repaints everything.
+    def reset(): Unit = previous = None
 
     def write(lines: Vector[String], size: (Int, Int)): Unit =
       val full = previous.forall { case (oldSize, oldLines) =>

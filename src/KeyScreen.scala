@@ -393,7 +393,7 @@ object KeyScreen:
       val head = Vector("Desk keys on " + context.network, "")
       view match
         case Left(message) =>
-          head ++ Vector(message, "Fix or move the file, then run desk --keys again. q leaves.")
+          head ++ Vector(message, "Fix or move the file, then open settings again. q leaves.")
         case Right((rows, active)) =>
           val body =
             if rows.isEmpty then Vector("No keys yet.")

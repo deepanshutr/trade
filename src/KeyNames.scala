@@ -214,7 +214,7 @@ object KeySetup:
       present: String => Either[String, Boolean]
   ): Either[String, String] =
     for
-      address <- active.get(network).toRight(s"No active key for $network. Run desk --keys")
+      address <- active.get(network).toRight(s"No active key for $network. Choose one in settings")
       entry <- names.find(_.address == address).toRight("The active key is not in key names")
       _ <- Either.cond(
         entry.network == network,
