@@ -259,6 +259,24 @@ class SettingsFileSpec extends TempDirectorySuite:
     assertEquals(leftovers(target), Vector.empty)
   }
 
+  test("a settings file over the 16 KiB limit is refused without reading it") {
+    val path = settingsFile(full)
+    val read = snapshot(path)
+    try
+      // Sparse: only the length is set and no data is written, so it takes no disk space.
+      val file = new java.io.RandomAccessFile(path.toFile, "rw")
+      try file.setLength(3L << 30)
+      finally file.close()
+      assertEquals(
+        SettingsFile.read(Some(path), path.getParent),
+        Left("invalid trading settings: settings are too large")
+      )
+      assertEquals(SettingsFile.write(read, terms), Left(changed))
+      assertEquals(Files.size(path), 3L << 30)
+      assertEquals(leftovers(path), Vector.empty)
+    finally Files.deleteIfExists(path)
+  }
+
   test("read loads the given or default file and refuses one Desk cannot load") {
     val path = settingsFile(full)
     val read = snapshot(path)
