@@ -2455,6 +2455,30 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
+  test("a reviewed order held before sending keeps its size when the next preview has new terms") {
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val f = new Fixture(orderPermission = run => { entered.countDown(); release.await(); run() })
+    try
+      f.ready()
+      val review = f.review()
+      assertEquals((review.plan.quantity, review.plan.limit), (BigDecimal(25), BigDecimal("100.1")))
+      assert(f.worker.submitReviewed(review))
+      assert(entered.await(3, TimeUnit.SECONDS))
+      val chosen = TradeTerms(TradeSizes(BigDecimal(20), BigDecimal(100)), BigDecimal("0.005"))
+      assert(f.worker.preview(buy, chosen).isRight)
+      release.countDown()
+      Wait.until("held order was neither posted nor canceled") {
+        f.orderPosts.get() != 0 || f.worker.view.message.contains("canceled before sending")
+      }
+      assertEquals(f.orderPosts.get(), 1, f.worker.view.message)
+      val order = f.lastPost.get()("action")("orders")(0)
+      assertEquals((order("s").str, order("p").str), ("25", "100.1"))
+    finally
+      release.countDown()
+      f.close()
+  }
+
   test("every plan is refused while the account position is unknown") {
     val gate = new CountDownLatch(1)
     val f = new Fixture(beforeAccountRead = _ => gate.await())

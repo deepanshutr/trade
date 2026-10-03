@@ -259,6 +259,21 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
       f.close()
   }
 
+  test("live routing previews with the terms it is given") {
+    val f = new Fixture()
+    val route = router(f)
+    try
+      f.ready()
+      val chosen = TradeTerms(TradeSizes(BigDecimal(20), BigDecimal(100)), BigDecimal("0.005"))
+      val plan = route.preview(buy, chosen)
+      assert(plan.isRight, plan)
+      assertEquals(plan, f.worker.preview(buy, chosen))
+      assertNotEquals(plan, f.worker.preview(buy, f.terms))
+    finally
+      route.close()
+      f.close()
+  }
+
   test("view routing rejects review submission even when the injected worker is ready") {
     val f = new Fixture()
     val route = router(f, "VIEW")

@@ -114,8 +114,6 @@ final class TradingWorker private[desk] (
       bookAt: Long,
       accountAt: Long,
       activeAt: Long,
-      leverage: Int,
-      marginMode: String,
       review: OrderReview
   )
   private val busy = new AtomicBoolean(false)
@@ -383,8 +381,6 @@ final class TradingWorker private[desk] (
               exact.get.at,
               accountAt,
               activeAt,
-              activeLeverage,
-              activeMode,
               review
             )
             lastPlan = Some(plan)
@@ -476,7 +472,6 @@ final class TradingWorker private[desk] (
         config.positionAgeMs
       ) &&
       fresh(press.activeAt, config.positionAgeMs) &&
-      press.leverage == activeLeverage && press.marginMode == activeMode &&
       reviewCurrent(press.review) &&
       estimate(press.review.intent, press.review.terms).contains(press.review.plan) &&
       press.plan.quantity <= maximums(if press.plan.side == Side.Buy then 0
