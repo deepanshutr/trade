@@ -9,7 +9,8 @@ class PropExecutionDepthSpec extends munit.FunSuite:
 
   private final class Fixture(
       initial: PropAccount = PropAccount(BigDecimal(10000), deposit = BigDecimal(10000)),
-      persist: PropAccount => Unit = _ => ()
+      persist: PropAccount => Unit = _ => (),
+      config: TradingConfig = TradingConfig()
   ):
     val clock = new AtomicLong(epoch)
     val writes = new AtomicInteger()
@@ -27,7 +28,7 @@ class PropExecutionDepthSpec extends munit.FunSuite:
           """{"universe":[{"name":"XMR","szDecimals":2,"maxLeverage":5},{"name":"BTC","szDecimals":2,"maxLeverage":5}]}"""
         )
     val worker =
-      new PropWorker(TradingConfig(), "XMR", ledger, rest, () => clock.get(), () => clock.get())
+      new PropWorker(config, "XMR", ledger, rest, () => clock.get(), () => clock.get())
     def book(at: Long = clock.get(), coin: String = "XMR"): Book =
       Book(Vector(Level("99.99", "50", 1)), Vector(Level("100", "50", 1)), at)
     def publish(at: Long = clock.get(), coin: String = "XMR"): Unit =
@@ -79,6 +80,15 @@ class PropExecutionDepthSpec extends munit.FunSuite:
     def settled(): Unit =
       Wait.until("order did not settle")(!worker.view.pending && worker.view.outcome.nonEmpty)
     def close(): Unit = worker.close()
+
+  test("prop prices its limit with the configured slippage") {
+    val f = new Fixture(config = TradingConfig(slippage = BigDecimal("0.005")))
+    try
+      f.open()
+      val plan = f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard))
+      assertEquals(plan.map(_.limit), Right(BigDecimal("100.5")))
+    finally f.close()
+  }
 
   for offset <- Vector(-60000L, 60000L) do
     test(s"stream clock offset $offset retains receipt-age expiry") {

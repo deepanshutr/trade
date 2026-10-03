@@ -36,6 +36,8 @@ object TradingWorker:
   val setupMessage: String =
     "Live setup required: owner in settings and an active key (desk --keys). See docs/trading.md"
   val maximumReviewLifetimeMs: Long = 30000L
+  val openingPauseMs: Long = 2000L
+  val openingPausedMessage: String = "Opening paused for 2 s after closing"
 
   // The loader hands this worker its own copy of the key. The worker wipes it on close.
   def create(
@@ -164,6 +166,8 @@ final class TradingWorker private[desk] (
   // Monotonic time at which this process first saw the saved order.
   private var savedSeenAt = 0L
   private var errOrder = Option.empty[String]
+  // Monotonic time at which the last reduce-only order completed.
+  private var reducedAt = Option.empty[Long]
   private var journal = Option.empty[OrderJournal]
   private var secret = Option.empty[Array[Byte]]
 
@@ -178,7 +182,8 @@ final class TradingWorker private[desk] (
         touch.exists(t => (BigInt(t.time) - BigInt(e.book.time)).abs <= config.quoteAgeMs)
       )
 
-  private def requiredLeverage: Boolean = coin != "XMR" || activeLeverage == 5
+  // Amounts are sized at five times, so live needs the venue to hold every market at 5x.
+  private def requiredLeverage: Boolean = activeLeverage == 5
 
   private def wakeAccount(): Unit =
     val _ = refreshWake.offer(true)
@@ -207,7 +212,7 @@ final class TradingWorker private[desk] (
       else if !marketReady then Some(ExecutionBlock(BlockCode.Prices, "selected depth stale"))
       else if secret.isEmpty then Some(ExecutionBlock(BlockCode.Blocked, message))
       else if leverageReady && !requiredLeverage then
-        Some(ExecutionBlock(BlockCode.Leverage, "Set XMR leverage to 5x"))
+        Some(ExecutionBlock(BlockCode.Leverage, s"Set $coin leverage to 5x"))
       else if !accountReady || waitingRefresh then
         Some(ExecutionBlock(BlockCode.Account, "account data stale"))
       else None
@@ -301,18 +306,34 @@ final class TradingWorker private[desk] (
       case _ => ()
   }
 
+  // An unknown position refuses every plan. Planning it as flat could turn a reduce or a
+  // Close into an opening order.
+  // For a short time after a reduce-only order completes, only reduce-only plans pass. So a
+  // press repeated on the reducing side cannot run through flat into the other side.
   private def estimate(intent: OrderIntent): Either[String, OrderPlan] =
     if !marketReady then Left("Waiting for fresh selected-market depth")
     else
-      Trading.plan(
-        coin,
-        rules.get,
-        exact.get.book,
-        if intent.side == Side.Buy then touch.get.ask else touch.get.bid,
-        position.getOrElse(BigDecimal(0)),
-        intent,
-        config.sizes
-      )
+      position
+        .toRight("Position unknown")
+        .flatMap(held =>
+          Trading.plan(
+            coin,
+            rules.get,
+            exact.get.book,
+            if intent.side == Side.Buy then touch.get.ask else touch.get.bid,
+            held,
+            intent,
+            config.sizes,
+            activeLeverage,
+            config.slippage
+          )
+        )
+        .filterOrElse(
+          plan =>
+            plan.reduceOnly ||
+              reducedAt.forall(at => monotonic() - at >= TradingWorker.openingPauseMs),
+          TradingWorker.openingPausedMessage
+        )
 
   def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized(
     estimate(intent)
@@ -416,6 +437,7 @@ final class TradingWorker private[desk] (
         outcome = Some(text)
         outcomeId = OrderUpdates.nextId()
         waitingRefresh = true
+        if p.reduceOnly then reducedAt = Some(monotonic())
         accountVersion += 1
         accountAt = Long.MinValue
         activeAt = Long.MinValue

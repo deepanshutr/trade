@@ -405,7 +405,7 @@ object Exchange:
         "b" -> (p.side == Side.Buy),
         "p" -> p.limit,
         "s" -> p.quantity,
-        "r" -> false,
+        "r" -> p.reduceOnly,
         "t" -> ujson.Obj("limit" -> ujson.Obj("tif" -> "Ioc")),
         "c" -> p.id
       )

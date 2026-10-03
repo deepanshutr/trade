@@ -6,7 +6,7 @@ class PropSpec extends TempDirectorySuite:
   private def plan(side: Side, quantity: String, price: String): OrderPlan =
     val q = BigDecimal(quantity)
     val p = BigDecimal(price)
-    OrderPlan("XMR", 0, side, OrderKind.Hard, q, p, p, q, q * p, Some(p), BigDecimal(0))
+    OrderPlan("XMR", 0, side, OrderKind.Hard, q, p, p, q, q * p, Some(p), BigDecimal(0), false)
 
   test("prop fills charge fees and persist cash, average entry and realized outcome") {
     val directory = tempDirectory("desk-prop-test")

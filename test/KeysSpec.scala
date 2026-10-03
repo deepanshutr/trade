@@ -155,7 +155,16 @@ class KeysSpec extends munit.FunSuite:
       feed(Vector(13, 10, 3))._2,
       Vector(Command.Confirm, Command.Confirm, Command.Quit)
     )
-    assertEquals(feed(sequence("xi"))._2, Vector.empty)
+    assertEquals(feed(sequence("i"))._2, Vector.empty)
+  }
+
+  test("x presses CLOSE but stays text in the market prompt, a paste or after escape") {
+    assertEquals(feed(sequence("x"))._2, Vector(Command.Close))
+    assertEquals(feed(sequence("x"), prompt = true)._2, Vector(Command.PromptChar('x')))
+    assertEquals(feed(start ++ sequence("x") ++ end), (Vector.empty, Vector.empty))
+    assertEquals(feed(Vector(27, 120))._2, Vector.empty)
+    val snapshot = Snapshot.initial("XMR", 1L)
+    assertEquals(State.reduce(snapshot, Event.Key(Command.Close), 2L), snapshot)
   }
 
   test("both arrow forms zoom in upward and out downward") {

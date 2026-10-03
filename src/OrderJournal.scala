@@ -17,7 +17,8 @@ final case class SavedOrder(
     reference: String,
     expiresAfter: Long,
     createdAt: Long,
-    owner: Option[String] = None
+    owner: Option[String] = None,
+    reduceOnly: Boolean = false
 )
 
 final class OrderJournal private (
@@ -51,7 +52,8 @@ final class OrderJournal private (
           p("reference").str,
           p("expiresAfter").str.toLong,
           p("createdAt").str.toLong,
-          p.obj.get("owner").flatMap(_.strOpt)
+          p.obj.get("owner").flatMap(_.strOpt),
+          p.obj.get("reduceOnly").exists(_.bool)
         )
       )
       require(saved.get.id.matches("0x[0-9a-f]{32}") && saved.get.nonce <= lastNonce)
@@ -60,7 +62,7 @@ final class OrderJournal private (
 
   private def persist(nonce: Long, next: Option[SavedOrder]): Unit =
     val value = next.fold[ujson.Value](ujson.Null) { p =>
-      ujson.Obj(
+      val order = ujson.Obj(
         "id" -> p.id,
         "nonce" -> p.nonce.toString,
         "coin" -> p.coin,
@@ -73,6 +75,9 @@ final class OrderJournal private (
         "createdAt" -> p.createdAt.toString,
         "owner" -> p.owner.fold[ujson.Value](ujson.Null)(ujson.Str(_))
       )
+      // Desk writes the field only for a reduce-only order, so an opening order keeps its shape.
+      if p.reduceOnly then order("reduceOnly") = true
+      order
     }
     val bytes = ujson
       .write(ujson.Obj("version" -> 1, "lastNonce" -> nonce.toString, "pending" -> value))
@@ -129,7 +134,8 @@ final class OrderJournal private (
       Trading.format(plan.reference),
       Math.addExact(now, 5000L),
       now,
-      Some(owner)
+      Some(owner),
+      plan.reduceOnly
     )
     persist(nonce, Some(p))
     p

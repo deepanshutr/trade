@@ -68,7 +68,9 @@ class SimpleExecutionSpec extends munit.FunSuite:
           view.reference(intent.side).get,
           BigDecimal(0),
           intent,
-          TradeSizes()
+          TradeSizes(),
+          1,
+          Trading.defaultSlippage
         ),
       review => { sent :+= review; true },
       _ => Right(())

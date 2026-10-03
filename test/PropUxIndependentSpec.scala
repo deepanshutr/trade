@@ -248,7 +248,8 @@ class PropUxIndependentSpec extends munit.FunSuite:
       BigDecimal(10),
       price * 10,
       Some(price),
-      BigDecimal(0)
+      BigDecimal(0),
+      false
     )
     try
       assert(ledger.check(plan, initial).isRight)

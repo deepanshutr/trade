@@ -114,7 +114,8 @@ class TradeProgressSpec extends TempDirectorySuite:
         BigDecimal(1),
         price,
         Some(price),
-        BigDecimal(0)
+        BigDecimal(0),
+        false
       )
     try
       f.open()
@@ -225,7 +226,9 @@ class TradeProgressSpec extends TempDirectorySuite:
       ready.reference(intent.side).get,
       BigDecimal(0),
       intent,
-      TradeSizes()
+      TradeSizes(),
+      1,
+      Trading.defaultSlippage
     )
   private def draw(
       c: DeskController,

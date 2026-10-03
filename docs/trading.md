@@ -1,7 +1,7 @@
 # Configure live trading
 
 The [workspace guide](workspace.md) describes the layout, prop account and
-trade buttons. Clicking Buy or Sell submits the selected amount immediately.
+trade buttons. Clicking a trade button submits the selected amount immediately.
 Switching into real trading requires a visible mode confirmation. Starting the
 program preserves observed leverage and margin mode.
 
@@ -46,13 +46,25 @@ the reading that saw them. A node that refuses log queries still serves prices. 
 no candle history before Desk starts. Prop and live orders are not available on an
 on-chain market. The bitcoin and gold references keep coming from the venue.
 
-Amounts and age limits are quoted numeric strings. Small and big are total order
-value before fees. Target has its own value ceiling.
+Amounts and age limits are quoted numeric strings. In real trading, small and big
+are the money put up. The position value is the amount times the observed leverage,
+which must be five times. So the default small of $500 opens a $2,500 position and
+the default big of $1,000 opens a $5,000 position. Set `small` and `big` low, for
+example `"20"` and `"100"`, before a first live test. In prop trading, small and big
+are still the total order value before fees. Target has its own value ceiling.
 `propBalance` applies when creating a prop wallet. Existing saved wallet
 balances remain in place. Old margin simulation files remain separate and unchanged.
-`propFee` is the fraction charged on each simulated fill. A settings file that still
+`propFee` is the fraction charged on each simulated fill. It must be from 0 to
+`"0.01"` with at most eight decimal places. A settings file that still
 has `paperBalance` or `paperFee` stops Desk at start until the two keys are renamed
 `propBalance` and `propFee`.
+
+`slippage` is the furthest an order may fill from the captured best quote, as a
+quoted fraction. It is optional. The default `"0.001"` is 0.1 percent. It must be
+above 0 and at most `"0.01"`, which is 1 percent, with at most eight decimal places.
+Trailing zeros count, so `"0.0010000000"` is refused. Any other value stops the start
+with "invalid trading settings: invalid slippage". Real orders, prop orders and CLOSE
+all use it.
 
 Live setup needs the public `owner` address in the settings and an active key. The
 `owner` is the address of the wallet that owns the account. It uses the `0x` prefix
@@ -152,30 +164,51 @@ Test network access uses `"network": "testnet"`. Public feeds and the live worke
 use the same network. An account, delegation, funding and any real order remain
 separate user actions.
 
-XMR orders require observed leverage of five times. Select that setting at the venue.
-Desk preserves the observed margin mode and never signs a leverage change.
-Other markets require positive integer leverage within their market's limit. The
-margin mode and leverage are captured with each order and rechecked before sending.
-Changing them at the venue invalidates a captured order. Missing or stale position
-data remains unavailable and is never interpreted as a flat account.
+Real orders on every market require observed leverage of five times. Otherwise the
+controls name the market, for example "Set BTC leverage to 5x", and refuse every
+order. Select 5x for that market at the venue. A market whose maximum leverage is
+below 5x cannot trade live. Desk preserves the observed margin mode and never signs
+a leverage change. The margin mode and leverage are captured with each order and
+rechecked before sending. Changing them at the venue invalidates a captured order.
+Missing or stale position data remains unavailable and is never interpreted as a
+flat account.
+
+A new account may already read five times on XMR. An anonymous read on 2026-10-02
+for an address that had never traded showed XMR at 5x and BTC at 20x. That is an
+observation, not a venue rule. If your account shows another leverage on XMR, live
+trading stays blocked until you set XMR to 5x at the venue.
 
 The worker dates account freshness from the start of each account read and requests
 another read immediately after an order completes. Quiet active-account data is
 refreshed through one outstanding read on the existing account connection. Late,
 wrong-market or replaced-connection replies cannot renew the selected account.
 
-The workspace uses immediate orders with the selected value and a price limit
-no more than 0.1 percent from the captured best quote. Available depth can produce
-a partial fill or no fill. In real trading, an opposite fill reduces the existing
-position before its remainder opens the other direction. In prop trading,
-Buy spends stables and Sell is capped at held tokens. The selected value excludes fees.
-Calculations retain full precision. Compact dollar figures are rounded for display.
-Best and Target orders are no longer exposed in the normal workspace.
+The workspace uses immediate orders. The price limit is the captured best quote
+moved by the `slippage` fraction, up for a buy and down for a sell. Available depth
+can produce a partial fill or no fill. An order must be worth at least ten dollars
+at its quote and its limit. Only a close may be smaller.
+
+In real trading, the button on the side opposite an open position only reduces it.
+Desk sends that order reduce-only, so the venue refuses any part that would grow the
+position or open the other side. A reduce at least as large as the position, or one
+that would leave less than ten dollars at the quote, closes the whole position
+instead. CLOSE, on key `x`, sends the whole position reduce-only. To turn a long
+into a short, press CLOSE, then SHORT. A close that fills in part leaves the rest
+open. Press CLOSE again. A close under ten dollars is still sent, and the venue may
+refuse it under its own minimum.
+
+In prop trading, Buy spends stables and Sell is capped at held tokens. A prop sell
+that would leave less than ten dollars of tokens at the quote sells the whole
+holding. The selected value excludes fees. Calculations retain full precision.
+Compact dollar figures are rounded for display. Best and Target orders are no longer
+exposed in the normal workspace.
 
 Live orders keep durable recovery state under the chosen state directory,
 separated by network and delegated signer. One process holds each account lock.
 The captured quantity, limit and account settings are compared with the current
-full plan before queuing and immediately before signing. An uncertain response
+full plan before queuing and immediately before signing. The plan includes the
+reduce-only flag and depends on the position. So a position change between the
+press and the send refuses a reduce or a close. It is not resized. An uncertain response
 blocks further orders while status is checked. The pending order is not resent.
 A parsed top-level `err` reply keeps the saved order pending for a status lookup.
 A matching final status settles it as usual. A parsed `unknownOid` lookup releases
@@ -227,4 +260,7 @@ does not establish account readiness. The blocking reason and final order outcom
 remain visible in the controls and latest action notice.
 
 Restart an already running Desk after installing a new build. It continues using
-its previous loaded program until restarted.
+its previous loaded program until restarted. No build resends a saved order. A
+restart only looks up its status. An older build would still describe a saved
+reduce-only order as an ordinary one, so resolve any saved order before installing an
+older build.

@@ -124,7 +124,8 @@ object CompactDisplayFixtures:
         quantity,
         quantity * limit,
         Some(limit),
-        quantity
+        quantity,
+        false
       ),
       now,
       now + 30000L

@@ -95,30 +95,41 @@ final class DeskController(
           addMessage("order", "Not sent: controls changed")
         else refuse()
       else if visible || fromKey then
+        def send(intent: OrderIntent): Unit =
+          val settings = current.mode != "LIVE" || (view.leverage
+            .exists(n => n > 0 && view.rules.exists(r => n <= r.maxLeverage)) &&
+            view.marginMode.exists(m => m == "cross" || m == "isolated"))
+          if !settings then refuse()
+          else
+            preview(intent) match
+              case Right(plan) if plan.coin == snapshot.coin =>
+                val at = wall()
+                val order = OrderReview(
+                  intent,
+                  plan,
+                  at,
+                  Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
+                  view.leverage,
+                  view.marginMode
+                )
+                if submit(order) then current = current.copy(actionNotice = Some("Sending"))
+                else refuse()
+              case Left(reason) => addMessage("order", reason)
+              case _            => refuse()
         action match
           case DeskAction.Prepare(intent)
               if view.ready && !view.pending && current.mode != "VIEW" &&
                 current.modeReview.isEmpty && intent.kind == OrderKind.Hard && intent.big == current.bigOrder =>
-            val settings = current.mode != "LIVE" || (view.leverage
-              .exists(n => n > 0 && view.rules.exists(r => n <= r.maxLeverage)) &&
-              view.marginMode.exists(m => m == "cross" || m == "isolated"))
-            if !settings then refuse()
-            else
-              preview(intent) match
-                case Right(plan) if plan.coin == snapshot.coin =>
-                  val at = wall()
-                  val order = OrderReview(
-                    intent,
-                    plan,
-                    at,
-                    Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
-                    view.leverage,
-                    view.marginMode
-                  )
-                  if submit(order) then current = current.copy(actionNotice = Some("Sending"))
-                  else refuse()
-                case Left(reason) => addMessage("order", reason)
-                case _            => refuse()
+            send(intent)
+          // A Close carries no amount. It sells a long and buys a short. On a flat or unknown
+          // position it asks for a buy, which the plan or the worker refuses.
+          case DeskAction.Close if view.ready && !view.pending && current.modeReview.isEmpty =>
+            send(
+              OrderIntent(
+                if view.position.exists(_ > 0) then Side.Sell else Side.Buy,
+                OrderKind.Close
+              )
+            )
           case DeskAction.OrderSize(big) if !view.pending && current.modeReview.isEmpty =>
             current = current.copy(bigOrder = big, actionNotice = None)
             shown = None
@@ -137,9 +148,9 @@ final class DeskController(
                 current = current.copy(modeReview = None)
                 addMessage("mode", reason)
             shown = None
-          case DeskAction.Cancel     => cancel()
-          case DeskAction.Prepare(_) => refuse()
-          case _                     => ()
+          case DeskAction.Cancel                        => cancel()
+          case DeskAction.Prepare(_) | DeskAction.Close => refuse()
+          case _                                        => ()
     command match
       case Command.Cancel
           if snapshot.marketPending.nonEmpty || promptOpen || snapshot.prompt.nonEmpty =>
@@ -155,9 +166,10 @@ final class DeskController(
         val click = pressed
         pressed = None
         click.filter((_, button, _) => button.contains(x, y)).foreach { (before, button, valid) =>
+          val order =
+            button.action == DeskAction.Close || button.action.isInstanceOf[DeskAction.Prepare]
           if valid && available.exists(sameControl(before, button, _)) then act(button.action)
-          else if button.action.isInstanceOf[DeskAction.Prepare] then
-            addMessage("order", "Not sent: controls changed")
+          else if order then addMessage("order", "Not sent: controls changed")
         }
         true
       case other =>
@@ -165,6 +177,10 @@ final class DeskController(
         other match
           case Command.PlaceOrder(intent) =>
             act(DeskAction.Prepare(intent), shortcut = true)
+            true
+          // CLOSE is live only until prop margin exists. In prop or view mode x does nothing.
+          case Command.Close =>
+            if current.mode == "LIVE" then act(DeskAction.Close, shortcut = true)
             true
           case Command.Confirm =>
             current.modeReview.foreach(name => act(DeskAction.ConfirmMode(name)))

@@ -46,14 +46,18 @@ class TradingWorkerSpec extends TempDirectorySuite:
       balanceMode: String = "disabled",
       beforeAccountRead: Int => Unit = _ => (),
       missing: String = "",
-      failJournalOpen: Boolean = false
+      failJournalOpen: Boolean = false,
+      slippage: BigDecimal = Trading.defaultSlippage,
+      sizes: TradeSizes = TradeSizes()
   ):
     private val key = Array.fill[Byte](32)(1)
     val agent = OrderSigning.address(key)
     val owner = "0x" + "2" * 40
     val config = TradingConfig(
+      sizes = sizes,
       owner = Option.when(missing != "owner")(owner),
-      agent = Option.when(missing != "agent")(agent)
+      agent = Option.when(missing != "agent")(agent),
+      slippage = slippage
     )
     val clock = new AtomicLong(10000L)
     // Wall time runs ahead of the monotonic clock by this step.
@@ -83,6 +87,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     @volatile var hold = false
     @volatile var lose = false
     @volatile var reject = false
+    @volatile var fillSize = "1"
     @volatile var lookupFailure = false
     var openedJournal: OrderJournal = null
     @volatile var position = "0"
@@ -276,7 +281,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
                     ujson.Obj(
                       "filled" ->
                         ujson.Obj(
-                          "totalSz" -> "1",
+                          "totalSz" -> fillSize,
                           "avgPx" -> "100",
                           "oid" -> 9
                         )
@@ -633,7 +638,9 @@ class TradingWorkerSpec extends TempDirectorySuite:
         BigDecimal(100),
         BigDecimal(0),
         buy,
-        f.config.sizes
+        f.config.sizes,
+        1,
+        f.config.slippage
       )
       .toOption
       .get
@@ -1139,7 +1146,10 @@ class TradingWorkerSpec extends TempDirectorySuite:
   test("view mode has previews without protected key access or submissions") {
     val f = new Fixture(enabled = false)
     try
-      Wait.until("metadata missing")(f.worker.view.rules.nonEmpty)
+      Wait.until("metadata, leverage or position missing")(
+        f.worker.view.rules.nonEmpty && f.worker.view.leverage.nonEmpty &&
+          f.worker.view.position.nonEmpty
+      )
       assert(f.worker.preview(buy).isRight)
       assert(!f.worker.submit(buy, "XMR"))
       assertEquals(f.loads.get(), 0)
@@ -1192,7 +1202,10 @@ class TradingWorkerSpec extends TempDirectorySuite:
   test("an equal-time fuller book replaces a short exact book") {
     val f = new Fixture(enabled = false)
     try
-      Wait.until("metadata missing")(f.worker.view.rules.nonEmpty)
+      Wait.until("metadata, leverage or position missing")(
+        f.worker.view.rules.nonEmpty && f.worker.view.leverage.nonEmpty &&
+          f.worker.view.position.nonEmpty
+      )
       f.worker.observe(
         Event.BookUpdate(
           "XMR",
@@ -1215,9 +1228,10 @@ class TradingWorkerSpec extends TempDirectorySuite:
           false
         )
       )
+      // Five times $500 at $100 asks for 25. Only the fuller book shows 21 of it.
       assertEquals(
         f.worker.preview(buy).toOption.get.estimatedQuantity,
-        BigDecimal("5")
+        BigDecimal("21")
       )
     finally f.close()
   }
@@ -2330,18 +2344,85 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
-  test("XMR below five stays disabled without an account mutation") {
-    val f = new Fixture(initialLeverage = 1, marketMaximum = 2)
+  test("live needs five times leverage on every market and names the selected market") {
+    val f = new Fixture()
     try
-      Wait.until("account was not observed")(f.worker.view.position.nonEmpty)
-      assert(!f.worker.view.ready)
-      assertEquals(f.worker.view.block, Some("Set XMR leverage to 5x"))
-      assertEquals(f.worker.view.blockCode, BlockCode.Leverage)
-      assertEquals(f.worker.view.leverage, Some(1))
-      assertEquals(f.posts.get(), 0)
-      assert(f.worker.preview(buy).isRight)
+      f.ready()
+      assertEquals(f.worker.view.leverage, Some(5))
+      assertEquals(f.worker.view.block, None)
+      // The account holds BTC at 40, inside the BTC market limit.
+      f.leverage = 40
+      f.worker.select("BTC")
+      f.fresh(f.worker, coin = "BTC", time = 2000)
+      Wait.until("BTC account was not observed")(
+        f.worker.view.leverage.contains(40) && f.worker.view.position.nonEmpty
+      )
+      val view = f.worker.view
+      assertEquals(view.coin, "BTC")
+      assert(!view.ready)
+      assertEquals(view.block, Some("Set BTC leverage to 5x"))
+      assertEquals(view.blockCode, BlockCode.Leverage)
+      assert(!f.worker.submit(buy, "BTC"))
+      assertEquals(f.orderPosts.get(), 0)
     finally f.close()
   }
+
+  test("live plans with the observed leverage and the configured slippage") {
+    val f = new Fixture(slippage = BigDecimal("0.005"))
+    try
+      f.ready()
+      val long = f.worker.preview(buy).fold(reason => fail(reason), identity)
+      assertEquals(long.quantity, BigDecimal(25))
+      assertEquals(long.limit, BigDecimal("100.5"))
+      assertEquals(long.reduceOnly, false)
+      val short =
+        f.worker.preview(buy.copy(side = Side.Sell)).fold(reason => fail(reason), identity)
+      assertEquals(short.quantity, BigDecimal("25.002"))
+      assertEquals(short.limit, BigDecimal("99.491"))
+      val review = f.review()
+      assertEquals(review.plan, long)
+      assert(f.worker.submitReviewed(review))
+      assert(f.entered.await(3, TimeUnit.SECONDS))
+      val order = f.lastPost.get()("action")("orders")(0)
+      assertEquals(order("s").str, "25")
+      assertEquals(order("p").str, "100.5")
+    finally f.close()
+  }
+
+  test("every plan is refused while the account position is unknown") {
+    val gate = new CountDownLatch(1)
+    val f = new Fixture(beforeAccountRead = _ => gate.await())
+    try
+      Wait.until("leverage was not observed")(f.worker.view.leverage.contains(5))
+      assertEquals(f.worker.view.position, None)
+      for intent <- Vector(
+          OrderIntent(Side.Sell, OrderKind.Hard),
+          OrderIntent(Side.Buy, OrderKind.Hard),
+          OrderIntent(Side.Sell, OrderKind.Close),
+          OrderIntent(Side.Buy, OrderKind.Close)
+        )
+      do assertEquals(f.worker.preview(intent), Left("Position unknown"), intent)
+      assert(!f.worker.submit(OrderIntent(Side.Sell, OrderKind.Hard), "XMR"))
+      assertEquals(f.posts.get(), 0)
+    finally
+      gate.countDown()
+      f.close()
+  }
+
+  for (leverage, maximum) <- Vector(1 -> 2, 4 -> 10, 6 -> 10) do
+    test(s"XMR at $leverage within a $maximum limit stays disabled without an account mutation") {
+      val f = new Fixture(initialLeverage = leverage, marketMaximum = maximum)
+      try
+        Wait.until("account was not observed")(f.worker.view.position.nonEmpty)
+        assert(!f.worker.view.ready)
+        assertEquals(f.worker.view.block, Some("Set XMR leverage to 5x"))
+        assertEquals(f.worker.view.blockCode, BlockCode.Leverage)
+        assertEquals(f.worker.view.leverage, Some(leverage))
+        assert(!f.worker.submit(buy, "XMR"))
+        assertEquals(f.posts.get(), 0)
+        assert(f.worker.preview(buy).isRight)
+      finally f.close()
+    }
 
   test(
     "invalid leverage never becomes ready and never triggers a corrective post"
@@ -2379,6 +2460,32 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
+  test("a reduce or a close is sent reduce-only and an opening order is not") {
+    for (held, intent, reduceOnly) <- Vector(
+        ("40", OrderIntent(Side.Sell, OrderKind.Hard), true),
+        ("-40", OrderIntent(Side.Buy, OrderKind.Hard), true),
+        ("40", OrderIntent(Side.Sell, OrderKind.Close), true),
+        ("-40", OrderIntent(Side.Buy, OrderKind.Close), true),
+        ("40", OrderIntent(Side.Buy, OrderKind.Hard), false),
+        ("-40", OrderIntent(Side.Sell, OrderKind.Hard), false),
+        ("0", OrderIntent(Side.Sell, OrderKind.Hard), false)
+      )
+    do
+      val f = new Fixture()
+      try
+        f.ready()
+        holding(f, held)
+        val review = f.review(intent)
+        assertEquals(review.plan.reduceOnly, reduceOnly, (held, intent))
+        assert(f.worker.submitReviewed(review))
+        assert(f.entered.await(3, TimeUnit.SECONDS))
+        val order = f.lastPost.get()("action")("orders")(0)
+        assertEquals(order("r"), ujson.Bool(reduceOnly), (held, intent))
+        assertEquals(order("s").str, Trading.format(review.plan.quantity))
+        assertEquals(f.orderPosts.get(), 1)
+      finally f.close()
+  }
+
   test("review equality covers every plan field and the intent") {
     val f = new Fixture()
     try
@@ -2396,7 +2503,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
         p.copy(estimatedQuantity = p.estimatedQuantity + 1),
         p.copy(estimatedValue = p.estimatedValue + 1),
         p.copy(average = None),
-        p.copy(positionAfter = p.positionAfter + 1)
+        p.copy(positionAfter = p.positionAfter + 1),
+        p.copy(reduceOnly = !p.reduceOnly)
       )
       changes.foreach { changed =>
         assert(
@@ -2564,7 +2672,18 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
-  private def heldReview(change: Fixture => Unit, cancel: Boolean): Unit =
+  private def holding(f: Fixture, held: String): Unit =
+    f.position = held
+    Wait.until("position was not observed")(
+      f.worker.view.position.contains(BigDecimal(held)) && f.worker.view.ready
+    )
+
+  private def heldReview(
+      change: Fixture => Unit,
+      cancel: Boolean,
+      intent: OrderIntent = buy,
+      held: String = "0"
+  ): Unit =
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)
     val f = new Fixture(beforeOrderSign = () => {
@@ -2572,7 +2691,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
     })
     try
       f.ready()
-      val review = f.review(lifetime = 30000L)
+      holding(f, held)
+      val review = f.review(intent, lifetime = 30000L)
       assert(f.worker.submitReviewed(review))
       assert(entered.await(3, TimeUnit.SECONDS))
       assertEquals(f.posts.get(), 0)
@@ -2584,7 +2704,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
           .contains("canceled before sending")
       }
       assertEquals(f.orderPosts.get(), if cancel then 0 else 1)
-      if !cancel then
+      if cancel then assertEquals(f.worker.view.outcome, Some("XMR canceled before sending"))
+      else
         val order = f.lastPost.get()("action")("orders")(0)
         assertEquals(order("s").str, Trading.format(review.plan.quantity))
         assertEquals(order("p").str, Trading.format(review.plan.limit))
@@ -2608,6 +2729,28 @@ class TradingWorkerSpec extends TempDirectorySuite:
         assert(after.positionAfter != before.positionAfter)
       },
       cancel = true
+    )
+  }
+
+  test("a reduce whose position shrinks before the send is canceled before sending") {
+    val sell = OrderIntent(Side.Sell, OrderKind.Hard)
+    heldReview(
+      f => {
+        val before = f.worker.preview(sell).toOption.get
+        f.position = "30"
+        Wait.until("smaller position was not observed during signing") {
+          f.worker.view.position.contains(BigDecimal(30))
+        }
+        val after = f.worker.preview(sell).toOption.get
+        assert(before.reduceOnly && after.reduceOnly)
+        assertEquals(after.kind, before.kind)
+        assertEquals(after.quantity, before.quantity)
+        assertEquals(after.limit, before.limit)
+        assert(after.positionAfter != before.positionAfter)
+      },
+      cancel = true,
+      intent = sell,
+      held = "40"
     )
   }
 
@@ -2652,4 +2795,119 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally
       release.countDown()
       f.close()
+  }
+
+  private val sell = OrderIntent(Side.Sell, OrderKind.Hard)
+  // At 5x and a quote near 100, $20 is a $100 position, about 1 XMR.
+  private val twenty = TradeSizes(BigDecimal(20), BigDecimal(100))
+
+  // Sends one reviewed press and waits until the account shows the next position.
+  private def press(f: Fixture, intent: OrderIntent, posts: Int, after: String): OrderPlan =
+    val review = f.review(intent)
+    assert(f.worker.submitReviewed(review), intent)
+    Wait.until("order was not posted")(f.orderPosts.get() == posts)
+    holding(f, after)
+    review.plan
+
+  // Long 1.5: a REDUCE of 1, then a press that would cross flat and closes the last 0.5.
+  private def reduceToFlat(f: Fixture): Unit =
+    f.ready()
+    holding(f, "1.5")
+    val reduce = press(f, sell, 1, "0.5")
+    assert(reduce.reduceOnly && reduce.kind == OrderKind.Hard, reduce)
+    f.fillSize = "0.5"
+    val close = press(f, sell, 2, "0")
+    assert(close.reduceOnly && close.kind == OrderKind.Close, close)
+    f.fillSize = "1"
+
+  // Moves the fake monotonic clock and renews the quotes at the new time.
+  private def advance(f: Fixture, ms: Long, bookTime: Long): Unit =
+    f.clock.addAndGet(ms)
+    f.fresh(f.worker, time = bookTime)
+    f.ready()
+
+  test("the same key pressed after a reduce and a close cannot open a short within 2 s") {
+    val f = new Fixture(sizes = twenty)
+    try
+      reduceToFlat(f)
+      val view = f.worker.view
+      assert(view.ready)
+      assertEquals(f.worker.preview(sell), Left(TradingWorker.openingPausedMessage))
+      assert(!f.worker.submit(sell, "XMR"))
+      val controller = new DeskController(
+        PanelView(mode = "LIVE", sizes = twenty),
+        () => f.clock.get(),
+        f.worker.preview,
+        f.worker.submitReviewed,
+        _ => Right(())
+      )
+      val snapshot = Snapshot.initial("XMR", 1000L)
+      val frame = Workspace.draw(
+        snapshot,
+        view,
+        controller.panel,
+        120,
+        40,
+        1000L,
+        java.time.ZoneOffset.UTC,
+        Style.mono
+      )
+      assert(frame.buttons.exists(_.label == "3 SHORT $20 x5"), frame.buttons.map(_.label))
+      controller.publish(frame)
+      controller.handle(Command.PlaceOrder(sell), snapshot, view, (120, 40), false)
+      assertEquals(controller.panel.actionNotice, Some(TradingWorker.openingPausedMessage))
+      val shown = Workspace.draw(
+        snapshot,
+        view,
+        controller.panel,
+        120,
+        40,
+        1000L,
+        java.time.ZoneOffset.UTC,
+        Style.mono
+      )
+      val status = shown.lines(40 - 15 + 4)
+      assert(status.contains(TradingWorker.openingPausedMessage), status)
+      assertEquals(f.orderPosts.get(), 2)
+    finally f.close()
+  }
+
+  test("an opening press is allowed again 2 s after a reduce-only order completes") {
+    val f = new Fixture(sizes = twenty)
+    try
+      reduceToFlat(f)
+      advance(f, 1999L, 2000L)
+      assertEquals(f.worker.preview(sell), Left(TradingWorker.openingPausedMessage))
+      advance(f, 1L, 3000L)
+      val short = press(f, sell, 3, "-1")
+      assert(!short.reduceOnly, short)
+      assertEquals(f.lastPost.get()("action")("orders")(0)("r"), ujson.Bool(false))
+    finally f.close()
+  }
+
+  test("a reduce and a CLOSE are still sent inside the pause") {
+    val f = new Fixture(sizes = twenty)
+    try
+      f.ready()
+      holding(f, "3")
+      press(f, sell, 1, "2")
+      assertEquals(f.worker.preview(buy), Left(TradingWorker.openingPausedMessage))
+      val reduce = press(f, sell, 2, "1")
+      assert(reduce.reduceOnly && reduce.kind == OrderKind.Hard, reduce)
+      val close = press(f, OrderIntent(Side.Sell, OrderKind.Close), 3, "0")
+      assert(close.reduceOnly && close.kind == OrderKind.Close, close)
+      assertEquals(f.lastPost.get()("action")("orders")(0)("r"), ujson.Bool(true))
+    finally f.close()
+  }
+
+  test("an opening order does not start the pause") {
+    val f = new Fixture(sizes = twenty)
+    try
+      reduceToFlat(f)
+      assertEquals(f.worker.preview(buy), Left(TradingWorker.openingPausedMessage))
+      advance(f, 2000L, 2000L)
+      press(f, buy, 3, "1")
+      val again = press(f, buy, 4, "2")
+      assert(!again.reduceOnly, again)
+    finally f.close()
   }

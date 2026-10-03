@@ -225,6 +225,39 @@ class OrderSigningSpec extends munit.FunSuite:
     }
   }
 
+  test("the signer signs either reduce-only value of a saved order and nothing else as the flag") {
+    val order = SavedOrder(
+      "0x0123456789abcdef0123456789abcdef",
+      1788684358292L,
+      "XMR",
+      32767,
+      Side.Sell,
+      "1.83",
+      "546.05",
+      "546.05",
+      1788684359292L,
+      1788684358292L
+    )
+    // The recorded reference packs "r" as a172 and false as c2. True is c3, as "b" shows in
+    // the first vector.
+    val reference = fixtures("vectors")(1)("packed").str
+    val flag = reference.indexOf("a172c2")
+    assert(flag > 0 && flag == reference.lastIndexOf("a172c2"))
+    assert(fixtures("vectors")(0)("packed").str.contains("a162c3"))
+    assertEquals(hex(OrderSigning.packed(Exchange.action(order))), reference)
+    val reducing = Exchange.action(order.copy(reduceOnly = true))
+    assertEquals(hex(OrderSigning.packed(reducing)), reference.patch(flag, "a172c3", 6))
+    assertNotEquals(sign(reducing), sign(sample))
+    Vector[ujson.Value](ujson.Str("true"), ujson.Num(1), ujson.Null).foreach { value =>
+      val changed = copy(reducing)
+      changed("orders")(0)("r") = value
+      intercept[IllegalArgumentException](sign(changed))
+    }
+    val missing = copy(reducing)
+    missing("orders")(0).obj.remove("r")
+    intercept[IllegalArgumentException](sign(missing))
+  }
+
   test("leverage and account changes are outside local order signing") {
     val action = copy(fixtures("vectors")(3)("action"))
     val cross = copy(action)

@@ -88,6 +88,73 @@ class TradingConfigSpec extends munit.FunSuite:
     finally Files.deleteIfExists(p)
   }
 
+  test("missing slippage keeps one tenth of a percent") {
+    val p = setting("{}")
+    try
+      assertEquals(TradingConfig.load(Some(p)).map(_.slippage), Right(BigDecimal("0.001")))
+      assertEquals(TradingConfig.load(None).map(_.slippage), Right(BigDecimal("0.001")))
+    finally Files.deleteIfExists(p)
+  }
+
+  test("a quoted slippage above zero and at most one percent is read exactly") {
+    for value <- Vector("0.0001", "0.005", "0.01") do
+      val p = setting(ujson.Obj("slippage" -> value).render())
+      try assertEquals(TradingConfig.load(Some(p)).map(_.slippage), Right(BigDecimal(value)))
+      finally Files.deleteIfExists(p)
+  }
+
+  test("slippage that is not a quoted fraction above zero and at most one percent is refused") {
+    val values = Vector(
+      ujson.Str("0"),
+      ujson.Str("-0.001"),
+      ujson.Str("0.0100001"),
+      ujson.Str("0.02"),
+      ujson.Num(0.001),
+      ujson.Str("abc"),
+      ujson.Str(""),
+      ujson.Str("NaN"),
+      ujson.Bool(true),
+      ujson.Null
+    )
+    for value <- values do
+      val p = setting(ujson.Obj("slippage" -> value).render())
+      try
+        assertEquals(
+          TradingConfig.load(Some(p)),
+          Left("invalid trading settings: invalid slippage"),
+          value.render()
+        )
+      finally Files.deleteIfExists(p)
+  }
+
+  test("slippage and propFee with more than eight decimal places are refused") {
+    for (field, message) <- Vector(
+        "slippage" -> "invalid trading settings: invalid slippage",
+        "propFee" -> "invalid trading settings: invalid prop fee"
+      )
+    do
+      for value <- Vector("1e-100000000", "0.000000001", "0.0010000000") do
+        val p = setting(ujson.Obj(field -> value).render())
+        try assertEquals(TradingConfig.load(Some(p)), Left(message), s"$field $value")
+        finally Files.deleteIfExists(p)
+    for (field, value) <- Vector(
+        "slippage" -> "0.001",
+        "slippage" -> "0.01",
+        "slippage" -> "0.00000001",
+        "propFee" -> "0.0005",
+        "propFee" -> "0.01",
+        "propFee" -> "0.00000001"
+      )
+    do
+      val p = setting(ujson.Obj(field -> value).render())
+      try
+        val c =
+          TradingConfig.load(Some(p)).fold(reason => fail(s"$field $value: $reason"), identity)
+        assertEquals(if field == "slippage" then c.slippage else c.propFee, BigDecimal(value))
+      finally Files.deleteIfExists(p)
+    assertEquals(TradingConfig().propFee, BigDecimal("0.0005"))
+  }
+
   test("parse errors retain the generic settings error") {
     Vector("broken", """{"small":"secret"}""").foreach { text =>
       val p = setting(text)
@@ -226,6 +293,7 @@ class TradingConfigSpec extends munit.FunSuite:
       "keyService",
       "propBalance",
       "propFee",
+      "slippage",
       "onchain"
     )
   do

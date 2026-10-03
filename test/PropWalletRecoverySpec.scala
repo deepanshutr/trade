@@ -5,7 +5,8 @@ import java.nio.file.{Files, Path}
 class PropWalletRecoverySpec extends TempDirectorySuite:
   private def savedWallet(directory: Path): Path =
     val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
-    val plan = OrderPlan("XMR", 0, Side.Buy, OrderKind.Hard, 1, 100, 100, 1, 100, Some(100), 1)
+    val plan =
+      OrderPlan("XMR", 0, Side.Buy, OrderKind.Hard, 1, 100, 100, 1, 100, Some(100), 1, false)
     try assert(ledger.fill(plan, 1800000000000L).isRight)
     finally ledger.close()
     directory.resolve("wallet-mainnet.json")

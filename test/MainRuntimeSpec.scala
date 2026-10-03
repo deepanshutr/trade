@@ -20,7 +20,8 @@ class MainRuntimeSpec extends TempDirectorySuite:
       BigDecimal(5),
       BigDecimal(500),
       Some(BigDecimal(100)),
-      BigDecimal(5)
+      BigDecimal(5),
+      false
     )
     val view = TradingView(
       "XMR",

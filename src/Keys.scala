@@ -116,6 +116,7 @@ object Keys:
     case 113 | 3                 => Some(Command.Quit)
     case 109                     => Some(Command.StartMarketPrompt)
     case 99                      => Some(Command.ToggleCandles)
+    case 120                     => Some(Command.Close)
     case 13 | 10                 => Some(Command.Confirm)
     case 57                      => Some(Command.SelectTarget(Side.Buy))
     case 48                      => Some(Command.SelectTarget(Side.Sell))

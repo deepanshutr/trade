@@ -41,6 +41,16 @@ class ExchangeSpec extends munit.FunSuite:
     assertEquals(order("r").bool, false)
   }
 
+  test("the action carries the saved reduce-only flag and nothing else changes") {
+    assertEquals(saved.reduceOnly, false)
+    val opening = Exchange.action(saved)
+    val reducing = Exchange.action(saved.copy(reduceOnly = true))
+    assertEquals(opening("orders")(0)("r"), ujson.Bool(false))
+    assertEquals(reducing("orders")(0)("r"), ujson.Bool(true))
+    reducing("orders")(0)("r") = false
+    assertEquals(ujson.write(reducing), ujson.write(opening))
+  }
+
   test("a top-level err leaves the saved order unresolved") {
     assertEquals(
       Exchange.outcome(Some(ujson.Obj("status" -> "err", "response" -> "x")), saved),
