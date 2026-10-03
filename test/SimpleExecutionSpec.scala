@@ -104,8 +104,8 @@ class SimpleExecutionSpec extends munit.FunSuite:
       if big then f.click(f.draw(), DeskAction.OrderSize(true))
       f.draw()
       val intent = Trading.action(index)
-      val command = Keys.step(Vector.empty, '1'.toInt + index, false)._2.get
-      f.key(command)
+      // Keys 5 to 8 no longer send a command, so the controller gets every intent directly.
+      f.key(Command.PlaceOrder(intent))
       val expected =
         if intent.kind == OrderKind.Hard && intent.big == big then Vector(intent) else Vector.empty
       assertEquals(f.sent.map(_.intent), expected)

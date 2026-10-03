@@ -20,6 +20,8 @@ object Main:
   val usage =
     "usage: desk [COIN] [--mono] [--prop | --trade | --record | --keys] [--config PATH] [--state PATH] [--chime | --mute]"
   val escapeWaitNanos = 40_000_000L
+  // A person takes longer than the escape wait between the two keys of a sequence.
+  val sequenceWaitNanos = 1_000_000_000L
 
   private[desk] def announcements(args: Args, output: AnnouncementOutput): Announcements =
     new Announcements(output, voice = args.audio != "chime", mutedInitially = args.audio == "mute")

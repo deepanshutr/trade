@@ -26,7 +26,7 @@ class ScreenMutationFollowupSpec extends munit.FunSuite:
         val held = decode(start ++ end.take(cut), prompt)
         assert(held._1.nonEmpty)
         assertEquals(held._2, Vector.empty)
-        assertEquals(Keys.expire(held._1, prompt), (held._1, None))
+        assertEquals(Keys.expire(held._1, prompt, Long.MaxValue), (held._1, None))
   }
 
   test("a backslash without escape cannot end a terminal string") {
@@ -76,7 +76,7 @@ class ScreenMutationFollowupSpec extends munit.FunSuite:
                 val partial = decode(bytes.take(cut), prompt)
                 assert(partial._1.nonEmpty)
                 assertEquals(partial._2, Vector.empty)
-                assertEquals(Keys.expire(partial._1, prompt), (partial._1, None))
+                assertEquals(Keys.expire(partial._1, prompt, Long.MaxValue), (partial._1, None))
                 val continued = bytes.drop(cut).foldLeft(partial) { case ((pending, out), byte) =>
                   val (next, command) = Keys.step(pending, byte, prompt)
                   (next, out ++ command.toVector)
