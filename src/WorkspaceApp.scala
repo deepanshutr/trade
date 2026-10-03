@@ -443,7 +443,7 @@ object WorkspaceApp:
               if pending == Vector(27) then escapeAt = System.nanoTime()
               command.foreach(emit)
           else
-            if pending == Vector(27) && System.nanoTime() - escapeAt >= Main.escapeWaitNanos then
+            if pending.nonEmpty then
               val (next, command) =
                 Keys.expire(pending, marketPrompt, System.nanoTime() - escapeAt)
               pending = next

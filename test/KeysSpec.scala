@@ -245,6 +245,21 @@ class KeysSpec extends munit.FunSuite:
     assertEquals(feed(Vector(27, 113))._2, Vector(Command.Quit))
   }
 
+  test("the after-escape state resets after a second escape wait") {
+    val afterEscape = Keys.expire(Vector(27), false, escapeWait)._1
+    for prompt <- Vector(false, true) do
+      assertEquals(Keys.expire(afterEscape, prompt, 2 * escapeWait - 1), (afterEscape, None))
+      assertEquals(Keys.expire(afterEscape, prompt, 2 * escapeWait), (Vector.empty, None))
+    val reset = Keys.expire(afterEscape, false, 2 * escapeWait)._1
+    assertEquals(feed(sequence("Px"), initial = reset), (Vector.empty, Vector(Command.Close)))
+    assertEquals(feed(sequence("Px"), initial = afterEscape)._2, Vector.empty)
+    val bang = bound(Bind.Close -> Vector("!"))
+    assertEquals(
+      feed(sequence("!1"), initial = reset, bindings = bang)._2,
+      Vector(Command.Close, longSmall)
+    )
+  }
+
   test("a paste prefix delayed beyond lone escape expiry still cannot release order digits") {
     val expired = Keys.expire(Vector(27), false, escapeWait)
     val bytes = start.tail ++ sequence("1234567890") ++ end
@@ -397,6 +412,11 @@ class KeysSpec extends munit.FunSuite:
     assertEquals(feed(Vector(226, 136, 171, 171) :+ 49)._2, Vector(longSmall))
     for lead <- Vector(192, 193, 245, 255, 128, 191) do
       assertEquals(feed(Vector(lead, 49)), (Vector.empty, Vector(longSmall)))
+  }
+
+  test("a torn character drops a held first key") {
+    val bindings = bound(Bind.Market -> Vector("g", "m"))
+    assertEquals(feed(Vector(103, 226, 109), bindings = bindings), (Vector.empty, Vector.empty))
   }
 
   test("a continuation byte that looks like an 8-bit opener stays inside its character") {

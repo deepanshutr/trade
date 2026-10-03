@@ -155,8 +155,10 @@ object Keys:
           else if next.size >= limit then (Vector(discard), Read.Waiting)
           else (next, Read.Waiting)
 
-  // A lone escape cancels after the escape wait. A held first key is dropped after the sequence
-  // wait. Every other state waits for its bytes.
+  // A lone escape cancels after the escape wait. The state after it, which still reads a late
+  // sequence tail, ends after a second wait so a later key reads on its own. A held first key is
+  // dropped after the sequence wait. Every other state waits for its bytes. The elapsed time
+  // counts from the last byte read.
   def expire(
       pending: Vector[Int],
       promptOpen: Boolean,
@@ -165,6 +167,8 @@ object Keys:
     val (first, inner) = split(pending)
     if inner == Vector(27) && elapsedNanos >= Main.escapeWaitNanos then
       (Vector(afterEscape), Some(if promptOpen then Command.PromptCancel else Command.Cancel))
+    else if pending == Vector(afterEscape) && elapsedNanos >= 2 * Main.escapeWaitNanos then
+      (Vector.empty, None)
     else if first.nonEmpty && inner.isEmpty && elapsedNanos >= Main.sequenceWaitNanos then
       (Vector.empty, None)
     else (pending, None)

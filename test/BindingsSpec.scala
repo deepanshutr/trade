@@ -193,7 +193,9 @@ class BindingsSpec extends TempDirectorySuite:
       "\u202e" -> notKey,
       "\u200e" -> notKey,
       "\u2028" -> notKey,
-      "\ufeff" -> notKey
+      "\ufeff" -> notKey,
+      "\u0301" -> notKey,
+      "\u20dd" -> notKey
     )
     for (text, reason) <- cases do assertEquals(KeyGroup.refused(key(text)), reason, text)
     val raw = Vector(
@@ -290,6 +292,11 @@ class BindingsSpec extends TempDirectorySuite:
     assert(!bindings.prefix(key("m")))
     assert(!bindings.prefix(key("q")))
     assert(!Bindings.defaults.prefix(key("q")))
+    assertEquals(Bindings.defaults.command(KeyGroup(Vector(113, 113))), None)
+    assertEquals(bindings.command(KeyGroup(key("∫").bytes :+ 120)), None)
+    val sequence = Bindings.defaults.updated(Bind.Chart, two("∫", "c")).toOption.get
+    assert(sequence.prefix(key("∫")))
+    assert(!sequence.prefix(KeyGroup(Vector(226, 136))))
   }
 
   test("updated refuses equal bindings and prefix clashes and accepts shared first keys") {

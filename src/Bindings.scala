@@ -62,11 +62,14 @@ object KeyGroup:
       .toMap
   private val bareAccents = Set("\u00b4", "\u02c6", "\u02dc", "\u00a8")
   private val accentMarks = Set('\u0300', '\u0301', '\u0302', '\u0303', '\u0308')
+  // Shown alone, these act on the terminal or draw onto the cell before them.
   private val unprintable = Set[Int](
     Character.CONTROL,
     Character.FORMAT,
     Character.LINE_SEPARATOR,
-    Character.PARAGRAPH_SEPARATOR
+    Character.PARAGRAPH_SEPARATOR,
+    Character.NON_SPACING_MARK,
+    Character.ENCLOSING_MARK
   )
 
   def utf8Length(lead: Int): Int =
