@@ -677,6 +677,8 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
       route.start()
       f.ready()
       assertEquals(route.view.resting.map(_.id), Vector(id))
+      // The live worker holds no such id, and the router passes its refusal on.
+      assert(!route.cancel(Vector(propId)))
       assert(route.cancel(Vector(id, propId)))
       Wait.until("the live worker never sent the cancel")(cancelSent(f) == Vector(id))
     finally
@@ -696,6 +698,8 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
       f.ready()
       route.start()
       assertEquals(route.view.resting.map(_.id), Vector(propId))
+      // The prop worker holds no such id, and the router passes its refusal on.
+      assert(!route.cancel(Vector(id)))
       assert(route.cancel(Vector(id, propId)))
       assertEquals(route.view.resting, Vector.empty)
       Thread.sleep(200L)
@@ -799,4 +803,12 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
       route.close()
       f.close()
     assertEquals(propResting(f), Vector.empty)
+  }
+
+  // run needs a terminal, so no test reaches the controller it builds. This guard pins that it
+  // builds the one controller through deskController, the helper the test above drives.
+  test("the workspace builds its controller only through deskController") {
+    val source = Files.readString(java.nio.file.Path.of("src/WorkspaceApp.scala"))
+    assertEquals("\\bDeskController\\(".r.findAllMatchIn(source).size, 1)
+    assert(source.contains("lazy val controller: DeskController = deskController("))
   }
