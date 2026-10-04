@@ -52,9 +52,10 @@ class LimitPanelSpec extends munit.FunSuite:
   }
 
   test("a cancel before sending still reads Not sent") {
-    val shown = notice("XMR canceled before sending", 14L)
-    assert(shown.contains("Not sent #14"), shown)
-    assert(!shown.contains("Canceled"), shown)
+    for raw <- Vector("XMR canceled before sending", "XMR canceled $16.38 before sending") do
+      val shown = notice(raw, 14L)
+      assert(shown.contains("Not sent #14"), shown)
+      assert(!shown.contains("Canceled"), shown)
   }
 
   test("a part fill reads Part filled, never Filled") {
@@ -288,6 +289,11 @@ class LimitPanelSpec extends munit.FunSuite:
     assertEquals(mono.shortcuts, Set.empty[DeskAction])
     assertEquals(mono.ticket, None)
     val colour = frame(panel = view, style = Style.colour)
+    // The whole mode row is faint in view, the sound with the buttons.
+    assertEquals(
+      colour.lines(30 - 12 + 5).takeWhile(_ != '|'),
+      Screen.dim + "[t Limit] [o Orders] v Sound" + Screen.reset + " " * 10
+    )
     for i <- 4 to 6 do
       val line = colour.lines(30 - 12 + i)
       assert(line.startsWith(Screen.dim), line)
@@ -352,6 +358,12 @@ class LimitPanelSpec extends munit.FunSuite:
     val renamed = frame(panel = limit.copy(bindings = bound(Bind.Orders, "u")))
     assert(row(renamed, 6).startsWith("[t Limit] [u Orders]"), row(renamed, 6))
     assert(renamed.buttons.exists(b => b.action == DeskAction.Orders && b.label == "u Orders"))
+    // With the sound key long as well, the row drops the count and then the whole sound label.
+    val both = longKey
+      .updated(Bind.Sound, Binding(Vector(KeyGroup("\u001b[17;2~".toVector.map(_.toInt)))))
+      .toOption
+      .get
+    assertEquals(row(frame(panel = limit.copy(bindings = both)), 6), s"[$typeLabel] [o Orders]")
   }
 
   test("the order type and orders buttons are shortcuts in live and prop when they apply") {
@@ -590,11 +602,14 @@ class LimitPanelSpec extends munit.FunSuite:
     // While scrubbing ten seconds back, the right edge is ten seconds back.
     val scrubbed = frame(s = pinned.copy(offsetSec = 10)).lines
     assertEquals(Chart.plain(scrubbed(7)).charAt(38 + 22), '▲')
-    // Candles take 250 ms a cell for each second of the zoom.
+    // Candles take 250 ms a cell for each second of the zoom, 15 s at one minute candles, so a
+    // buy 31 s back is two cells back.
     val candles = pinned.copy(chartMode = ChartMode.Candles, zoom = State.candleMinZoom)
-    val perCell = 250L * State.zooms(State.candleMinZoom)
-    val back = (11_000L / perCell).toInt
-    assertEquals(Chart.plain(frame(s = candles).lines(7)).charAt(38 + 22 - back), '▲')
+    assertEquals(State.zooms(State.candleMinZoom), 60)
+    val older = live.copy(fills =
+      Vector(Fill("XMR", Side.Buy, now - 31_000, BigDecimal("546.00"), BigDecimal("0.2")))
+    )
+    assertEquals(Chart.plain(frame(older, s = candles).lines(7)).charAt(38 + 20), '▲')
   }
 
   test("the drawn frame lets the controller cancel the row it drew and place the ticket") {
