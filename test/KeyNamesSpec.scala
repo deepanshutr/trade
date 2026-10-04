@@ -760,3 +760,22 @@ class KeyNamesSpec extends TempDirectorySuite:
     assertEquals(error.getMessage, "write broke")
     assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Right(()))
   }
+
+  test("a switch is refused while the current key has a resting order") {
+    val dir = home().resolve("state")
+    val identity = "testnet-" + first.drop(2)
+    val journal = OrderJournal.open(dir, identity)
+    val order = journal.reserve(plan, second, 1000L)
+    journal.rest(order.id, 77738308L)
+    journal.close()
+    val message = "Cancel the resting orders for the current key first"
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Left(message))
+    val reopened = OrderJournal.open(dir, identity)
+    try reopened.settle(order.id)
+    finally reopened.close()
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Right(()))
+    val pending = OrderJournal.open(dir, identity)
+    try pending.reserve(plan, second, 2000L)
+    finally pending.close()
+    assertEquals(KeySetup.switchAllowed(dir, "testnet", Some(first))(()), Left(saved))
+  }
