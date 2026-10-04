@@ -167,7 +167,6 @@ final class DeskController(
       ticket = Some(Ticket(coin, intent.copy(price = Some(price)), price, step, None, None))
     )
     point(Vector.empty, None)
-    shown = None
 
   def handle(
       command: Command,
@@ -205,7 +204,6 @@ final class DeskController(
       current = current.copy(orderMode =
         if current.orderMode == OrderMode.Market then OrderMode.Limit else OrderMode.Market
       )
-      shown = None
     // o focuses the order row nearest the current price, or drops focus. A ticket keeps it out.
     def focus(): Unit =
       if current.ticket.isEmpty then
@@ -234,12 +232,19 @@ final class DeskController(
             notice = None
           )
           current = current.copy(ticket = Some(next))
-          shown = None
         case None => addMessage("order", "no further step")
     def act(action: DeskAction, shortcut: Boolean = false): Unit =
-      val visible = available.exists(_.buttons.exists(_.action == action))
-      val fromKey = shortcut && available.exists(_.shortcuts.contains(action))
-      if available.exists(_.disabledButtons.exists(_.action == action)) then
+      // A press acts only through a frame drawn with the order type as it is now, and Place only
+      // through a frame drawn with the ticket as it is now. Otherwise they wait for that frame.
+      val seen = available.filter(f =>
+        action match
+          case DeskAction.Prepare(_) => f.orderMode == current.orderMode
+          case DeskAction.Place      => f.ticket == current.ticket
+          case _                     => true
+      )
+      val visible = seen.exists(_.buttons.exists(_.action == action))
+      val fromKey = shortcut && seen.exists(_.shortcuts.contains(action))
+      if seen.exists(_.disabledButtons.exists(_.action == action)) then
         if view.ready && !view.pending && view.block.isEmpty then
           addMessage("order", "Not sent: controls changed")
         else refuse()

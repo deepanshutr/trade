@@ -70,8 +70,8 @@ class LimitControllerSpec extends munit.FunSuite:
   private def mark(price: String, kind: AxisKind, row: Int, ids: String*): AxisMark =
     AxisMark(d(price), None, kind, ids.toVector, row, row, ' ', false)
 
-  private class Fixture(mode: String = "LIVE", start: TradingView = ready):
-    val snapshot = Snapshot.initial("XMR", now)
+  private class Fixture(mode: String = "LIVE", start: TradingView = ready, big: Boolean = false):
+    var snapshot = Snapshot.initial("XMR", now)
     var view = start
     var planned = Vector.empty[OrderIntent]
     var sent = Vector.empty[OrderReview]
@@ -80,7 +80,7 @@ class LimitControllerSpec extends munit.FunSuite:
     var refusal = Option.empty[String]
     var reshape: OrderPlan => OrderPlan = identity
     val controller = new DeskController(
-      PanelView(mode = mode),
+      PanelView(mode = mode, bigOrder = big),
       () => now,
       (intent, terms) => {
         planned :+= intent
@@ -89,10 +89,11 @@ class LimitControllerSpec extends munit.FunSuite:
           .flatMap(_ =>
             Trading
               .plan(
-                "XMR",
+                snapshot.coin,
                 xmr,
                 Book(Vector(Level("546.09", "20", 1)), Vector(Level("546.10", "20", 1)), now),
-                view.reference(intent.side).get,
+                // The book's touch when the view has none.
+                view.reference(intent.side).getOrElse(d("546.10")),
                 view.position.getOrElse(d("0")),
                 intent,
                 terms.sizes,
@@ -108,6 +109,27 @@ class LimitControllerSpec extends munit.FunSuite:
     )
     private def buttons(actions: Vector[DeskAction], row: Int): Vector[DeskButton] =
       actions.zipWithIndex.map((a, i) => DeskButton(a.toString, a, i * 12, row, 11))
+    // A frame drawn from the panel and the view as they are now, as L9 draws one.
+    def build(
+        shortcuts: Set[DeskAction] = trade,
+        disabled: Vector[DeskAction] = Vector.empty,
+        axis: Option[Placed] = Some(drawn(view)),
+        focus: Option[Int] = controller.panel.focus
+    ): WorkspaceFrame =
+      WorkspaceFrame(
+        Vector.empty,
+        buttons(modes, 0),
+        snapshot.coin,
+        120,
+        40,
+        controller.panel.mode,
+        disabledButtons = buttons(disabled, 1),
+        shortcuts = shortcuts,
+        axis = axis,
+        focus = focus,
+        orderMode = controller.panel.orderMode,
+        ticket = controller.panel.ticket
+      )
     // As the render pass does: the controller sees the view, then the frame drawn from it.
     def frame(
         shortcuts: Set[DeskAction] = trade,
@@ -116,20 +138,7 @@ class LimitControllerSpec extends munit.FunSuite:
         focus: Option[Int] = controller.panel.focus
     ): Unit =
       controller.orders(view)
-      controller.publish(
-        WorkspaceFrame(
-          Vector.empty,
-          buttons(modes, 0),
-          "XMR",
-          120,
-          40,
-          controller.panel.mode,
-          disabledButtons = buttons(disabled, 1),
-          shortcuts = shortcuts,
-          axis = axis,
-          focus = focus
-        )
-      )
+      controller.publish(build(shortcuts, disabled, axis, focus))
     def key(command: Command): Boolean =
       controller.handle(command, snapshot, view, (120, 40), false)
     def panel: PanelView = controller.panel
@@ -210,6 +219,86 @@ class LimitControllerSpec extends munit.FunSuite:
     f.frame()
     f.key(Command.Confirm)
     assertEquals(f.sent.size, 1)
+  }
+
+  test("Enter waits for a frame drawn with the ticket as it is now") {
+    val f = new Fixture
+    f.limit()
+    f.key(Command.PlaceOrder(buy))
+    f.key(Command.Confirm)
+    assertEquals(f.ticket.map(_.price), Some(d("546.09")))
+    f.nothingSent()
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent.flatMap(_.intent.price), Vector(d("546.09")))
+    // A frame drawn at 546.09 and published after Down moved the price.
+    val g = new Fixture
+    g.open(buy)
+    val before = g.build()
+    g.key(Command.ZoomOut)
+    g.controller.publish(before)
+    g.key(Command.Confirm)
+    assertEquals(g.ticket.map(_.price), Some(d("546.08")))
+    g.nothingSent()
+    g.frame()
+    g.key(Command.Confirm)
+    assertEquals(g.sent.flatMap(_.intent.price), Vector(d("546.08")))
+  }
+
+  test("a press waits for a frame drawn with the order type as it is now") {
+    val f = new Fixture
+    f.limit()
+    f.key(Command.OrderType)
+    f.key(Command.PlaceOrder(buy))
+    f.nothingSent()
+    assertEquals(f.ticket, None)
+    // A frame drawn in limit mode and published after t.
+    val g = new Fixture
+    g.limit()
+    val before = g.build()
+    g.key(Command.OrderType)
+    g.controller.publish(before)
+    g.key(Command.PlaceOrder(buy))
+    g.nothingSent()
+    g.frame()
+    g.key(Command.PlaceOrder(buy))
+    assertEquals(g.sent.map(_.intent), Vector(buy))
+    assertEquals(g.ticket, None)
+  }
+
+  test("only a sized press opens a ticket or sends") {
+    val best = OrderIntent(Side.Buy, OrderKind.Best)
+    val f = new Fixture
+    f.limit()
+    f.frame(trade + DeskAction.Prepare(best))
+    f.key(Command.PlaceOrder(best))
+    assertEquals(f.ticket, None)
+    f.nothingSent()
+    val g = new Fixture
+    g.frame(trade + DeskAction.Prepare(best))
+    g.key(Command.PlaceOrder(best))
+    g.nothingSent()
+  }
+
+  test("Enter on a drawn ticket sends nothing once the touch, the account or the market changed") {
+    val changes: Vector[(String, Fixture => Unit)] = Vector(
+      "no touch" -> (f => f.view = f.view.copy(bid = None, ask = None)),
+      "pending" -> (f => f.view = f.view.copy(pending = true)),
+      "not ready" -> (f => f.view = f.view.copy(ready = false)),
+      "another market" -> (f => {
+        f.snapshot = Snapshot.initial("BTC", now)
+        f.view = f.view.copy(coin = "BTC")
+      })
+    )
+    changes.foreach { (name, change) =>
+      val f = new Fixture
+      f.open(buy)
+      change(f)
+      f.frame()
+      f.key(Command.Confirm)
+      assertEquals((f.planned, f.sent), (Vector.empty, Vector.empty), name)
+      assert(f.ticket.nonEmpty, name)
+    }
   }
 
   test("a refused order keeps the ticket open with the reason") {
@@ -326,6 +415,18 @@ class LimitControllerSpec extends munit.FunSuite:
     f.frame()
     f.key(Command.Confirm)
     assertEquals(f.panel.mode, "PROP", "Enter still answers a mode review in view")
+  }
+
+  test("in view a ready account still keeps every order key from the workers") {
+    // Only the view rule keeps a press or x from preview here.
+    val f = new Fixture("VIEW", rested)
+    f.frame()
+    Vector(Command.PlaceOrder(buy), Command.Close, Command.Orders, Command.Confirm).foreach {
+      command =>
+        f.key(command)
+        f.nothingSent()
+        assertEquals(f.notice, Some(viewOnly), command.toString)
+    }
   }
 
   test("o focuses the order row nearest the current price, never the entry row") {
@@ -608,6 +709,36 @@ class LimitControllerSpec extends munit.FunSuite:
     g.key(Command.Place)
     assertEquals(g.ticket, None)
     f.nothingSent()
+  }
+
+  test("the ticket a opens carries the big size when it is selected") {
+    val f = new Fixture(start = rested, big = true)
+    f.frame()
+    f.key(Command.Orders)
+    f.key(Command.ZoomIn)
+    f.key(Command.ZoomIn)
+    f.frame()
+    f.key(Command.Place)
+    assertEquals(
+      f.ticket.map(_.intent),
+      Some(OrderIntent(Side.Sell, OrderKind.Hard, big = true, price = Some(d("548.00"))))
+    )
+  }
+
+  test("a waits for a frame drawn after the orders changed") {
+    val f = new Fixture(start = rested)
+    f.frame()
+    f.key(Command.Orders)
+    f.key(Command.ZoomIn)
+    f.key(Command.ZoomIn)
+    f.frame()
+    f.view = rested.copy(resting = rested.resting :+ order("s3", Side.Sell, "550.00"))
+    f.key(Command.Place)
+    assertEquals(f.ticket, None, "the frame was drawn before the order came")
+    f.frame()
+    f.frame()
+    f.key(Command.Place)
+    assertEquals(f.ticket.map(t => (t.intent.side, t.price)), Some((Side.Sell, d("548.00"))))
   }
 
   test("a ticket, a mode review and the market prompt drop focus, and a mode review the ticket") {

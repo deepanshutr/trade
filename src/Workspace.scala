@@ -69,7 +69,10 @@ final case class WorkspaceFrame(
     // The orders axis exactly as this frame drew it. Keys on the axis act on these rows.
     axis: Option[Placed] = None,
     // The axis cursor this frame drew, from the panel it drew.
-    focus: Option[Int] = None
+    focus: Option[Int] = None,
+    // The order type and the ticket this frame drew, from the panel it drew.
+    orderMode: OrderMode = OrderMode.Market,
+    ticket: Option[Ticket] = None
 ):
   def controls: Vector[DeskButton] = buttons ++ disabledButtons
 
