@@ -194,6 +194,15 @@ class OrdersAxisSpec extends munit.FunSuite:
     assertEquals(placed.marks.count(_.kind == AxisKind.Current), 1)
   }
 
+  test("a partly filled order shows the money of its remaining size") {
+    val part = RestingOrder("b4", "XMR", 7, Side.Buy, d("545.00"), d("0.1"), d("0.3"), false, 1L)
+    val placed = place(resting = Vector(part), ticket = None)
+    assertEquals(
+      placed.marks.filter(_.kind == AxisKind.Buy).map(_.amount),
+      Vector(Some(d("10.90")))
+    )
+  }
+
   test("the entry and the ticket each make one mark with their money put up") {
     val placed = place(entry = Some((d("548.00"), d("-0.2"))))
     val entry = placed.marks.filter(_.kind == AxisKind.Entry)
@@ -365,6 +374,34 @@ class OrdersAxisSpec extends munit.FunSuite:
     assertEquals(
       OrdersAxis.start(placed).map(OrdersAxis.selectable(placed)(_).price),
       Some(d("546.18"))
+    )
+  }
+
+  test("without a current price start is the topmost order mark") {
+    val placed = place(current = None)
+    assertEquals(
+      OrdersAxis.selectable(placed).map(_.price),
+      Vector(d("552.00"), d("546.00"), d("544.00"))
+    )
+    assertEquals(OrdersAxis.start(placed), Some(0))
+  }
+
+  test("a price at either end of the range keeps a row on the axis") {
+    def edge(current: String, resting: Vector[RestingOrder]): Placed =
+      OrdersAxis.marks(Some(d(current)), None, resting, None, Some(5), 543.60, 552.40, 9)
+    val low = edge("546.09", Vector(order("b1", Side.Buy, "543.60", "0.1")))
+    assertEquals(seen(low).last, (d("543.60"), AxisKind.Buy, 8, ' '))
+    assertEquals(low.marks.last.trueRow, 8)
+    val high = edge("546.09", Vector(order("s1", Side.Sell, "552.50", "0.1")))
+    assertEquals(seen(high).head, (d("552.50"), AxisKind.Sell, 0, ' '))
+    assertEquals(high.marks.head.trueRow, 0)
+    assertEquals(
+      seen(edge("543.60", Vector.empty)),
+      Vector((d("543.60"), AxisKind.Current, 8, '>'))
+    )
+    assertEquals(
+      seen(edge("552.50", Vector.empty)),
+      Vector((d("552.50"), AxisKind.Current, 0, '>'))
     )
   }
 
