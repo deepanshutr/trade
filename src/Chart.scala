@@ -196,14 +196,27 @@ object Chart:
       rows: Int,
       held: Vector[Double] = Vector.empty
   ): Option[Axis] =
+    val marked = held.filter(_.isFinite)
     val prices = columns.flatten.flatMap(c => Vector(c.low, c.high)) ++
-      book.toVector.flatMap(b => (b.bids ++ b.asks).map(_.px.toDouble)) ++
-      held.filter(_.isFinite)
+      book.toVector.flatMap(b => (b.bids ++ b.asks).map(_.px.toDouble)) ++ marked
     if prices.isEmpty then None
     else
       val (lo, hi) = (prices.min, prices.max)
       val pad = if hi > lo then (hi - lo) * 0.05 else hi * 0.001
-      Some(Axis(lo - pad, hi + pad, rows))
+      val padded = Axis(lo - pad, hi + pad, rows)
+      Some(book.flatMap(_.mid).map(_.toDouble).fold(padded)(room(padded, _, marked)))
+
+  // A held price beyond a current price on an edge row would get no row, so that side grows.
+  private def room(a: Axis, current: Double, held: Vector[Double]): Axis =
+    val above = held.filter(_ > current).distinct.size
+    val below = held.filter(_ < current).distinct.size
+    val (up, down) = (a.hi - current, current - a.lo)
+    val row = a.trueRow(current)
+    if above + below + 1 > a.rows || up < 0 || down < 0 || a.hi <= a.lo then a
+    else if row < above then a.copy(hi = current + (above + 0.5) * down / (a.rows - above - 0.5))
+    else if row > a.rows - 1 - below then
+      a.copy(lo = current - (below + 0.5) * up / (a.rows - below - 0.5))
+    else a
 
   def decimals(hi: Double): Int =
     val digits = if hi < 1 then 0 else hi.toLong.toString.length

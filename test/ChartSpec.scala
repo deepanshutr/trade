@@ -393,6 +393,86 @@ class ChartSpec extends munit.FunSuite:
     assertEqualsDouble(above.hi, 560.80, 1e-9)
   }
 
+  // The orders axis places the current price on its true row, the prices above it upward nearest
+  // first, each on its true row or the row above its lower neighbour, and the prices below it
+  // downward the same way. A row under 0 or past the last is a mark left off the axis.
+  private def placed(a: Axis, current: Double, held: Vector[Double]): Vector[Int] =
+    val row = a.trueRow(current)
+    val up = held
+      .filter(_ > current)
+      .distinct
+      .sorted
+      .scanLeft(row)((last, p) => a.trueRow(p).min(last - 1))
+      .tail
+    val down = held
+      .filter(_ < current)
+      .distinct
+      .sorted
+      .reverse
+      .scanLeft(row)((last, p) => a.trueRow(p).max(last + 1))
+      .tail
+    up ++ down
+
+  // The touch is 546.08 and 546.10, so the current price is 546.09.
+  private val touch = Book(Vector(lvl("546.08")), Vector(lvl("546.10")), 1L)
+
+  test("a current price on the top row leaves a row for each held price above it") {
+    // The plotted range ends at the current price, with a sell resting one tick above it.
+    val series = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
+    val held = Vector(546.09, 546.10)
+    for rows <- Vector(9, 20) do
+      val a = Chart.axis(series, Some(touch), rows, held).get
+      assertEquals(a.trueRow(546.09), 1, a)
+      assert(placed(a, 546.09, held).forall(r => r >= 0 && r < rows), (a, placed(a, 546.09, held)))
+      assertEqualsDouble(a.lo, 539.695, 1e-9)
+      assert(a.hi > 546.405, a)
+  }
+
+  test("three sells just above a current price on the top rows each keep a row at 50 rows") {
+    // At 50 rows the five percent pad leaves the current price on row 2, two rows for three.
+    val series = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
+    val three = Vector(546.09, 546.10, 546.11, 546.12)
+    val wide = Chart.axis(series, Some(touch), 50, three).get
+    assertEquals(wide.trueRow(546.09), 3, wide)
+    assertEquals(placed(wide, 546.09, three).sorted, Vector(0, 1, 2))
+    assertEqualsDouble(wide.lo, 539.694, 1e-9)
+  }
+
+  test("a current price on the bottom row leaves a row for each held price below it") {
+    // The plotted range starts at the current price, with a buy ticket one tick under it.
+    val series = Vector(Some(Column(546.09, 546.09, 552.0, 552.0, 0)))
+    val held = Vector(546.09, 546.08)
+    for rows <- Vector(9, 20) do
+      val a = Chart.axis(series, Some(touch), rows, held).get
+      assertEquals(a.trueRow(546.09), rows - 2, a)
+      assert(placed(a, 546.09, held).forall(r => r >= 0 && r < rows), (a, placed(a, 546.09, held)))
+      assertEqualsDouble(a.hi, 552.296, 1e-9)
+      assert(a.lo < 545.784, a)
+  }
+
+  test("held prices that cannot all fit keep the five percent pad and are left off as before") {
+    // Three prices above and the current price need four rows of three.
+    val series = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
+    val held = Vector(546.09, 546.10, 546.11, 546.12)
+    val a = Chart.axis(series, Some(touch), 3, held).get
+    assertEqualsDouble(a.lo, 539.694, 1e-9)
+    assertEqualsDouble(a.hi, 546.426, 1e-9)
+    assert(placed(a, 546.09, held).exists(_ < 0), placed(a, 546.09, held))
+  }
+
+  test("held prices with room either side of the current price keep the five percent pad") {
+    // The plan's pinned case: the current price 546.095 keeps row 6 of nine and row 13 of 19.
+    val series = Vector(Some(Column(548.0, 544.0, 552.0, 546.0, 0)))
+    val book = Book(Vector(lvl("546.09")), Vector(lvl("546.10")), 1L)
+    val held = Vector(552.0, 546.10, 546.095, 546.0, 544.0)
+    for (rows, row) <- Vector((9, 6), (19, 13)) do
+      val a = Chart.axis(series, Some(book), rows, held).get
+      assertEqualsDouble(a.lo, 543.60, 1e-9)
+      assertEqualsDouble(a.hi, 552.40, 1e-9)
+      assertEquals(a.trueRow(546.095), row)
+      assert(placed(a, 546.095, held).forall(r => r >= 0 && r < rows))
+  }
+
   test(
     "plain labels put a faint row middle price on every third row from the second and the last"
   ) {
