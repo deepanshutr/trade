@@ -245,6 +245,14 @@ object Bindings:
   // and already uses its default key keeps that key for its owner. The action stays unbound.
   private val added = Vector(Bind.OrderType, Bind.Orders)
 
+  // Keys reserved after version 1 files were written. A stored binding that uses one is dropped.
+  private val newlyReserved = Set(97)
+
+  private def withoutNewlyReserved(all: Map[Bind, Binding]): Map[Bind, Binding] =
+    all.filterNot((_, binding) =>
+      binding.keys.exists(key => key.bytes.size == 1 && newlyReserved(key.bytes.head))
+    )
+
   private def withoutTaken(all: Map[Bind, Binding], stored: Set[Bind]): Map[Bind, Binding] =
     added.filterNot(stored).foldLeft(all) { (found, action) =>
       val others = Bind.values.toVector.filter(_ != action).flatMap(a => found.get(a).map(a -> _))
@@ -273,6 +281,7 @@ object Bindings:
                 }
               }
           }
+          .map(withoutNewlyReserved)
           .map(found =>
             withoutTaken(found, Bind.values.filter(a => entries.contains(a.field)).toSet)
           )

@@ -429,6 +429,20 @@ class BindingsSpec extends TempDirectorySuite:
     assertEquals(Bindings.load(saved).map(_.map), Right(bindings.map))
   }
 
+  test("a stored binding on a is dropped and the file loads") {
+    for text <- Vector("\"close\":[\"a\"]", "\"close\":[\"a\",\"c\"]", "\"close\":[\"c\",\"a\"]")
+    do
+      val loaded = Bindings.load(put(path(), file(text))).toOption.get
+      assertEquals(loaded.map.get(Bind.Close), None, text)
+      assertEquals(loaded.map(Bind.Quit), one("q"))
+      assertEquals(loaded.command(key("a")), None)
+  }
+
+  test("a stored binding on a key reserved before this lane still refuses the file") {
+    val loaded = Bindings.load(put(path(), file("\"close\":[\"\\u0003\"]")))
+    assertEquals(loaded, refusal("close: Control C quits Desk"))
+  }
+
   test("a clash between two explicit entries still refuses the file") {
     val loaded = Bindings.load(put(path(), file("\"quit\":[\"t\"],\"orderType\":[\"t\"]")))
     assert(loaded.isLeft, loaded)

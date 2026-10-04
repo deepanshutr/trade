@@ -49,6 +49,18 @@ class KeysSpec extends munit.FunSuite:
     assertEquals(panel.focus, None)
   }
 
+  test("with Close stored on a, a places and Close is unbound") {
+    val dir = java.nio.file.Files.createTempDirectory("desk-keys")
+    val file = dir.resolve("b.json")
+    java.nio.file.Files.writeString(file, """{"version":1,"bindings":{"close":["a"]}}""")
+    java.nio.file.Files.setPosixFilePermissions(
+      file,
+      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
+    )
+    val loaded = Bindings.load(file).toOption.get
+    assertEquals(feed(Vector(97), bindings = loaded)._2, Vector(Command.Place))
+  }
+
   private def feed(
       bytes: Seq[Int],
       prompt: Boolean = false,
