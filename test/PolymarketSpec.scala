@@ -285,6 +285,7 @@ class PolymarketSpec extends munit.FunSuite:
     val posts = ArrayBuffer.empty[Long]
     val postTokens = ArrayBuffer.empty[Int]
     @volatile var clock = T0
+    @volatile var coinsNow = coinSet
     private val done = CountDownLatch(1)
     val reader = new PolymarketReader(
       url =>
@@ -297,7 +298,7 @@ class PolymarketSpec extends munit.FunSuite:
         postTokens += ujson.read(body).arr.size
         postReply(posts.size, clock, body)
       ,
-      () => coinSet,
+      () => coinsNow,
       () => clock,
       wait =>
         if clock + wait > T0 + runMs then
@@ -463,7 +464,7 @@ class PolymarketSpec extends munit.FunSuite:
     val rig = new Rig(
       6 * 3600000L + 1800000L,
       both,
-      (_, at, _) => Right(syntheticMarkets(both, at, "a")),
+      (n, at, _) => Right(syntheticMarkets(both, at, n.toString)),
       (_, _, body) => halves(body)
     ).run()
     rig.stop()
@@ -477,19 +478,43 @@ class PolymarketSpec extends munit.FunSuite:
       case other => fail("expected Ready, got " + other)
   }
 
-  test("a new token for a window resets its ring") {
+  test("points from successive markets of a window land in one ring in time order") {
     val rig = new Rig(
       600000L,
       both,
-      (n, at, _) => Right(syntheticMarkets(both, at, if n == 1 then "a" else "b")),
+      (n, at, _) => Right(syntheticMarkets(both, at, n.toString)),
       (_, _, body) => halves(body)
     ).run()
     rig.stop()
     rig.reader.state("BTC", H1) match
       case Polymarket.State.Ready(points, _) =>
-        assertEquals(points.size, 18)
-        assertEquals(points.head.at, T0 + 90000L)
+        assertEquals(points.size, 21)
+        assertEquals(points.map(_.at), (0 to 20).map(k => T0 + k * 30000L).toVector)
       case other => fail("expected Ready, got " + other)
+  }
+
+  test("a coin that leaves coins() loses its rings and one that returns starts afresh") {
+    var rigRef = Option.empty[Rig]
+    val rig = new Rig(
+      600000L,
+      both,
+      (n, at, _) =>
+        rigRef.foreach(_.coinsNow = if n == 1 then Set("BTC") else both)
+        Right(syntheticMarkets(both, at, "a"))
+      ,
+      (_, _, body) => halves(body)
+    )
+    rigRef = Some(rig)
+    rig.run()
+    rig.stop()
+    rig.reader.state("PAXG", D1) match
+      case Polymarket.State.Ready(points, _) =>
+        assertEquals(points.size, 8)
+        assertEquals(points.head.at, T0 + 390000L)
+      case other => fail("expected Ready, got " + other)
+    rig.reader.state("BTC", H1) match
+      case Polymarket.State.Ready(points, _) => assertEquals(points.size, 21)
+      case other                             => fail("expected Ready, got " + other)
   }
 
   test("close ends the thread") {

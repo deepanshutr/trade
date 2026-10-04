@@ -206,10 +206,15 @@ final class PolymarketReader(
     catch case NonFatal(_) => Left(0)
 
   private def discover(): Unit =
-    val wanted = slugs(now(), coins())
+    val followed = coins()
+    val wanted = slugs(now(), followed)
     if wanted.isEmpty then
-      snapshot =
-        snapshot.copy(markets = Map.empty, rings = Map.empty, discovered = true, discoveryOk = true)
+      snapshot = snapshot.copy(
+        markets = Map.empty,
+        rings = snapshot.rings.filter((key, _) => followed.contains(key._1)),
+        discovered = true,
+        discoveryOk = true
+      )
       nextDiscovery = boundary(now())
     else
       val result = call(get(marketsRequest(wanted.map(_._3).distinct))).flatMap { body =>
@@ -225,11 +230,7 @@ final class PolymarketReader(
           discoveryFailures = 0
           nextDiscovery = boundary(now())
           val old = snapshot
-          val kept = found.collect {
-            case (key, Some(market))
-                if old.markets.get(key).flatten.exists(_.upToken == market.upToken) =>
-              key -> old.rings.getOrElse(key, Vector.empty)
-          }
+          val kept = old.rings.filter((key, _) => followed.contains(key._1))
           snapshot = old.copy(markets = found, rings = kept, discovered = true, discoveryOk = true)
 
   private def midpoints(): Unit =
