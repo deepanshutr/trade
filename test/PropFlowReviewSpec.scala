@@ -226,12 +226,12 @@ class PropFlowReviewSpec extends TempDirectorySuite:
             BigDecimal(f.saved("fees").str),
             review.plan.estimatedValue * f.config.propFee
           )
+          // The panel's third row names the prop balance.
           assert(
             f.draw(cols, rows)
               .lines
               .map(Chart.plain)
-              .mkString("\n")
-              .contains("Stables")
+              .exists(_.matches("Prop +\\$[0-9].*Usable.*"))
           )
         finally f.close()
       }

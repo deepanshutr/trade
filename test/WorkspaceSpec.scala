@@ -4,6 +4,10 @@ class WorkspaceSpec extends munit.FunSuite:
   private val now = 1_800_000_000_000L
   private val s = Snapshot.initial("XMR", now)
   private val view = TradingView("XMR", message = "View only")
+  // The status row, the panel's fourth, with the words it wraps onto the free rows 8 to 11.
+  private def status(frame: WorkspaceFrame): String =
+    val band = frame.lines.drop(frame.rows - 12).map(_.take(38).trim)
+    (band(3) +: band.slice(7, 11)).filter(_.nonEmpty).mkString(" ")
 
   test("pending owner mismatch is visible at the smallest workspace size") {
     val message = TradingWorker.ownerMismatchMessage
@@ -18,7 +22,7 @@ class WorkspaceSpec extends munit.FunSuite:
       Style.mono
     )
     val text = frame.lines.mkString("\n")
-    assert(text.contains(message), text)
+    assertEquals(status(frame), message, text)
     assert(!text.contains("Sending"), text)
   }
 
@@ -35,7 +39,7 @@ class WorkspaceSpec extends munit.FunSuite:
       Style.mono
     )
     val text = frame.lines.mkString("\n")
-    assert(text.contains(message), text)
+    assertEquals(status(frame), message, text)
     assert(!text.contains("Sending"), text)
   }
 
@@ -62,7 +66,7 @@ class WorkspaceSpec extends munit.FunSuite:
         Style.mono
       )
       val text = frame.lines.mkString("\n")
-      assert(text.contains(expected), text)
+      assertEquals(status(frame), expected, text)
       if message != submitting && expected != message then assert(!text.contains(message), text)
       assertEquals(frame.lines.size, 30)
       assert(frame.lines.forall(_.length == 100), text)
@@ -78,7 +82,7 @@ class WorkspaceSpec extends munit.FunSuite:
           java.time.ZoneOffset.UTC,
           Style.mono
         )
-        assert(finished.lines.mkString("\n").contains(expected), finished.lines.mkString("\n"))
+        assert(status(finished).startsWith(expected), finished.lines.mkString("\n"))
     }
   }
 
@@ -94,12 +98,12 @@ class WorkspaceSpec extends munit.FunSuite:
       java.time.ZoneId.of("UTC"),
       Style.mono
     )
-    val status = frame.lines(45 - 15 + 4).drop(Layout.workspaceMarketWidth(160) + 1).trim
-    assert(!status.contains("Insufficient funds"), status)
-    assertEquals(status, s"$notice #1")
+    val shown = status(frame)
+    assert(!shown.contains("Insufficient funds"), shown)
+    assertEquals(shown, s"$notice #1")
   }
 
-  test("book is above tape, references beside them, simple trading controls at right") {
+  test("book is above tape, references beside them, the trading panel at left") {
     for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
       val frame = Workspace.draw(
         s,
@@ -113,8 +117,10 @@ class WorkspaceSpec extends munit.FunSuite:
       )
       assertEquals(frame.lines.size, rows)
       assert(frame.lines.forall(_.length == cols))
-      val book = frame.lines.indexWhere(_.startsWith("BOOK"))
-      val tape = frame.lines.indexWhere(_.startsWith("TAPE"))
+      // The gauges fill the band's right region, after the panel and its bar.
+      val book = frame.lines.indexWhere(_.drop(39).startsWith("BOOK"))
+      val tape = frame.lines.indexWhere(_.drop(39).startsWith("TAPE"))
+      assertEquals(book, rows - 12)
       assert(book >= 0 && tape == book + 6)
       assert(frame.lines(book).contains("BTC"))
       assert(frame.lines(tape).contains("GOLD"))
@@ -166,7 +172,11 @@ class WorkspaceSpec extends munit.FunSuite:
   }
 
   test("CLOSE is coloured like a sell tile when enabled and dimmed when disabled") {
-    val live = view.copy(ready = true, leverage = Some(5))
+    val live = view.copy(
+      ready = true,
+      leverage = Some(5),
+      portfolio = PortfolioView(entry = Some(BigDecimal(100)))
+    )
     def sizeRow(position: BigDecimal): String =
       Workspace
         .draw(
@@ -179,9 +189,9 @@ class WorkspaceSpec extends munit.FunSuite:
           java.time.ZoneOffset.UTC,
           Style.colour
         )
-        .lines(30 - 15 + 5)
+        .lines(30 - 12 + 4)
     val sell = Style.colour.ask + Screen.bold
-    assert(sizeRow(BigDecimal("0.2")).contains(sell + "[x Close 0.2 XMR]" + Screen.reset))
+    assert(sizeRow(BigDecimal("0.2")).contains(sell + "[x Close $4.00]" + Screen.reset))
     assert(sizeRow(BigDecimal(0)).contains(Screen.dim + "[x Close]" + Screen.reset))
   }
 
@@ -222,13 +232,13 @@ class WorkspaceSpec extends munit.FunSuite:
       Style.mono
     )
     val labels = frame.buttons.map(_.label)
-    assert(labels.exists(_.startsWith("∫ Close 0.2")), labels)
+    assert(labels.contains("∫ Close --"), labels)
     assert(labels.exists(_.startsWith("^K REDUCE $500")), labels)
     assert(labels.contains("g p Prop"), labels)
     assert(labels.contains("l Live"), labels)
     val text = frame.lines.mkString("\n")
-    assert(text.contains("M Market c Chart v Sound"), text)
-    assert(text.contains("[g p Prop]  [l Live]"), text)
+    assert(text.contains("[g p Prop] [l Live] M Market c Chart"), text)
+    assert(text.contains("[t Market] [o Orders] v Sound"), text)
     def press(bytes: Vector[Int]): Option[Command] =
       bytes
         .foldLeft((Vector.empty[Int], Option.empty[Command])) { case ((pending, _), byte) =>
@@ -240,7 +250,7 @@ class WorkspaceSpec extends munit.FunSuite:
     assertEquals(press(Vector('g'.toInt, 'p'.toInt)), Some(Command.Mode("PROP")))
   }
 
-  test("a key name too long for a tile gives way before the tile does") {
+  test("a key name too long for the trade row drops the leverage before the key") {
     val long = Bindings.defaults
       .updated(Bind.LongSmall, Binding(Vector(KeyGroup("\u001b[15;2~".toVector.map(_.toInt)))))
       .toOption
@@ -256,7 +266,7 @@ class WorkspaceSpec extends munit.FunSuite:
       Style.mono
     )
     val tile = frame.buttons.find(_.action == DeskAction.Prepare(Trading.action(0)))
-    assertEquals(tile.map(_.label), Some("REDUCE $500 x5"))
+    assertEquals(tile.map(_.label), Some(long.map(Bind.LongSmall).short + " REDUCE $500"))
   }
 
   test("the live setup line names the key bound to settings, as the buttons do") {
@@ -268,21 +278,19 @@ class WorkspaceSpec extends munit.FunSuite:
         )
         .toOption
         .get
-    def status(view: TradingView, panel: PanelView): String =
-      Workspace
-        .draw(s, view, panel, 100, 30, now, java.time.ZoneOffset.UTC, Style.mono)
-        .lines(30 - 15 + 4)
+    def shown(view: TradingView, panel: PanelView): String =
+      status(Workspace.draw(s, view, panel, 100, 30, now, java.time.ZoneOffset.UTC, Style.mono))
     val blocked = view.copy(
       message = TradingWorker.setupMessage,
       block = Some(TradingWorker.setupMessage),
       blockCode = BlockCode.Blocked
     )
     val live = PanelView(mode = "LIVE")
-    assert(status(blocked, live).contains("Live setup required. Press s for settings"))
-    val control = status(blocked, live.copy(bindings = bound("\u000b")))
-    assert(control.contains("Live setup required. Press ^K for settings"), control)
-    val option = status(blocked, live.copy(bindings = bound("∫")))
-    assert(option.contains("Live setup required. Press ∫ for settings"), option)
+    assertEquals(shown(blocked, live), "Live setup required. Press s for settings")
+    val control = shown(blocked, live.copy(bindings = bound("\u000b")))
+    assertEquals(control, "Live setup required. Press ^K for settings")
+    val option = shown(blocked, live.copy(bindings = bound("∫")))
+    assertEquals(option, "Live setup required. Press ∫ for settings")
     // The refusal of l in prop mode is the same sentence, with its action number.
     val refused = PanelView(
       mode = "PROP",
@@ -290,6 +298,6 @@ class WorkspaceSpec extends munit.FunSuite:
       actionNumber = 1,
       bindings = bound("\u000b")
     )
-    val notice = status(view.copy(message = "", block = None), refused)
-    assert(notice.contains("Live setup required. Press ^K for settings #1"), notice)
+    val notice = shown(view.copy(message = "", block = None), refused)
+    assertEquals(notice, "Live setup required. Press ^K for settings #1")
   }

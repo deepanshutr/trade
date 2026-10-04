@@ -39,11 +39,13 @@ class IndependentCompactTapeSpec extends munit.FunSuite:
       val plain = frame.lines.map(Chart.plain)
       assertEquals(plain.size, 30)
       assert(plain.forall(_.length == 100))
-      val tape = plain.filter(_.startsWith("TAPE"))
+      // The gauges fill the band's right region of 61 columns, two panes of 30.
+      val gauges = plain.map(_.drop(39))
+      val tape = gauges.filter(_.startsWith("TAPE"))
       assertEquals(tape.size, 6)
-      assert(tape.forall(_.take(26).endsWith("n200000")), tape.mkString("\n"))
-      assert(tape.forall(_.take(26).contains("F+1.00")))
-      val book = plain.filter(_.startsWith("BOOK"))
+      assert(tape.forall(_.take(30).trim.endsWith("n200000")), tape.mkString("\n"))
+      assert(tape.forall(_.take(30).contains("F+1.00")))
+      val book = gauges.filter(_.startsWith("BOOK"))
       assertEquals(book.size, 6)
-      assert(book.forall(_.take(26).contains("D-0.50 Q-0.50")), book.mkString("\n"))
+      assert(book.forall(_.take(30).contains("D-0.50 Q-0.50")), book.mkString("\n"))
   }

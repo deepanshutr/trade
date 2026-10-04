@@ -422,12 +422,12 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assertEquals(frame.lines.size, rows)
       assert(frame.lines.forall(_.length <= cols), s"frame exceeds $cols columns")
       val text = frame.lines.mkString("\n")
+      // The Usable field keeps its place and reads -- while the margin is unknown.
       expected match
         case Some(value) =>
-          assert(text.contains("Usable"), s"${cols}x$rows: missing Usable label")
-          assert(text.contains(value), s"${cols}x$rows: missing usable $value")
+          assert(text.contains("Usable " + value), s"${cols}x$rows: missing usable $value")
         case None =>
-          assert(!text.contains("Usable"))
+          assert(text.contains("Usable       --"), text)
           assert(!text.contains("123.45"))
       if cash then
         assert(text.contains("Stables"))
@@ -438,7 +438,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       Wait.until("cash missing")(f.worker.view.portfolio.stables.contains(BigDecimal(1000)))
-      assertUsable(f, Some("123.45"), cash = true)
+      assertUsable(f, Some(" $123.45"), cash = true)
     finally f.close()
   }
 
@@ -446,7 +446,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     val f = new Fixture()
     try
       f.ready()
-      assertUsable(f, Some("123.45"))
+      assertUsable(f, Some(" $123.45"))
       val receive = f.timedActiveReceive
       val at = f.clock.get()
       f.clock.incrementAndGet()
@@ -455,7 +455,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       receive(f.activePayload, at)
       assertUsable(f, None)
       f.sendActive()
-      assertUsable(f, Some("123.45"))
+      assertUsable(f, Some(" $123.45"))
     finally f.close()
   }
 
@@ -464,7 +464,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.pauseActive()
-      assertUsable(f, Some("123.45"))
+      assertUsable(f, Some(" $123.45"))
       f.clock.addAndGet(f.config.positionAgeMs + 1)
       assertUsable(f, None)
     finally f.close()
@@ -478,7 +478,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       for sides <- Vector(Vector("123.45", "987.65"), Vector("987.65", "123.45")) do
         f.available = sides
         f.sendActive()
-        assertUsable(f, Some("123.45"))
+        assertUsable(f, Some(" $123.45"))
     finally f.close()
   }
 
@@ -487,11 +487,11 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.pauseActive()
-      assertUsable(f, Some("123.45"))
+      assertUsable(f, Some(" $123.45"))
       f.activeReceive(None)
       assertUsable(f, None)
       f.sendActive()
-      assertUsable(f, Some("123.45"))
+      assertUsable(f, Some(" $123.45"))
       val oldReceive = f.activeReceive
       f.worker.observe(Event.SocketDown)
       oldReceive(f.activePayload)
@@ -518,12 +518,14 @@ class TradingWorkerSpec extends TempDirectorySuite:
     finally f.close()
   }
 
-  test("prop and view panels ignore live usable margin") {
+  // Prop shows the usable figure of its own worker's view, which the router hands it. View has
+  // no account, so a live view drawn in view shows none.
+  test("the view panel ignores live usable margin") {
     val f = new Fixture()
     try
       f.ready()
       val view = f.worker.view
-      for mode <- Vector("PROP", "VIEW") do
+      for mode <- Vector("VIEW") do
         val frame = Workspace.draw(
           Snapshot.initial("XMR", f.clock.get()),
           view,
@@ -535,7 +537,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
           Style.mono
         )
         val text = frame.lines.mkString("\n")
-        assert(!text.contains("Usable"))
+        assert(text.contains("Usable       --"), text)
         assert(!text.contains("123.45"))
     finally f.close()
   }
@@ -2932,7 +2934,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         java.time.ZoneOffset.UTC,
         Style.mono
       )
-      val status = shown.lines(40 - 15 + 4)
+      val status = shown.lines(40 - 12 + 3).take(38)
       assert(status.contains(TradingWorker.openingPausedMessage), status)
       assertEquals(f.orderPosts.get(), 2)
     finally f.close()

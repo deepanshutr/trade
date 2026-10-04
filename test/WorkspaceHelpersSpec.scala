@@ -54,13 +54,10 @@ class WorkspaceHelpersSpec extends munit.FunSuite:
         )
         .lines
     )
+    // Taken after lane L9 moved the panel to the left of a twelve row band. The hand written
+    // fixtures in LimitPanelSpec pin what these frames draw. This digest only flags a change.
     assertEquals(
       digest(frames.flatMap(_._2)),
-      "4b9c2b1cddb4c1f854fdcfc4520ffd1121e2e6030163642ac5a05c40f663b41c"
-    )
-    // The band rows from tradeTop down hash as they did before the chart block changed.
-    assertEquals(
-      digest(frames.flatMap((rows, lines) => lines.drop(rows - 15))),
-      "edf4e1a9bad4efb82d521023a1ea8fd742a4c249b3f018ec21c657b1412fbd9a"
+      "46584cdfeb60dcd378488ec99b11d9df6e59b26d4863095656f8710fce48d7a8"
     )
   }

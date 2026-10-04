@@ -368,12 +368,12 @@ class ScreenSpec extends munit.FunSuite:
     assertEquals(counted.trueRow(546.09), 1, counted)
   }
 
-  test("the workspace draws the chart block above the fifteen row band in every mode") {
+  test("the workspace draws the chart block above the twelve row band in every mode") {
     for
       (cols, rows) <- Vector((100, 30), (120, 40))
       mode <- Vector("LIVE", "PROP", "VIEW")
     do
-      val tradeTop = rows - 15
+      val tradeTop = rows - 12
       val r = Layout.regions(cols, rows)
       val width = r.left + r.plot
       val text = Workspace
@@ -394,17 +394,17 @@ class ScreenSpec extends munit.FunSuite:
           pinNow,
           zone,
           Style.mono,
-          r.copy(priceRows = tradeTop - 10),
+          r,
           AxisDecor.plain,
           Some(width)
         )
         .lines
         .map(plain)
-      assertEquals(block.size, tradeTop - 1)
-      assertEquals(text.take(tradeTop - 1).map(_.take(width)), block, mode)
-      assertEquals(text(tradeTop - 1).take(width), " " * width)
+      // The view has no market rules, so every mode draws the plain axis. No row is left blank.
+      assertEquals(block.size, tradeTop)
+      assertEquals(text.take(tradeTop).map(_.take(width)), block, mode)
       assert(text.take(tradeTop).forall(_.charAt(width) == '|'))
-      assertEquals(text(tradeTop - 2).take(38), " " * 24 + "c line 2s/col ")
+      assertEquals(text(tradeTop - 1).take(38), " " * 24 + "c line 2s/col ")
   }
 
   test("a reference row's plot shares the main plot's columns and time scale") {

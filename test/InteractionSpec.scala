@@ -295,18 +295,20 @@ class InteractionSpec extends munit.FunSuite:
     assertEquals(f.notice, Some("No position to close"))
   }
 
-  test("key x does nothing in prop or view mode") {
-    for (mode, view) <- Vector(
-        "PROP" -> long.copy(leverage = None, marginMode = None),
-        "VIEW" -> long.copy(ready = false, block = Some("View only"))
-      )
-    do
-      val f = new Fixture(mode, view)
-      f.draw()
-      f.x()
-      assertEquals((f.planned, f.sent), (Vector.empty, Vector.empty), mode)
-      assertEquals(f.notice, None, mode)
-      assertEquals(f.controller.panel.actionNumber, 0L, mode)
+  test("key x closes the long in prop and answers the view text in view") {
+    val prop = new Fixture("PROP", long.copy(leverage = Some(1), marginMode = None))
+    prop.draw()
+    prop.x()
+    val close = OrderIntent(Side.Sell, OrderKind.Close)
+    assertEquals(prop.planned, Vector(close))
+    assertEquals(prop.sent.map(_.intent), Vector(close))
+    assertEquals(prop.sent.map(_.plan.quantity), Vector(BigDecimal("0.2")))
+    val view = new Fixture("VIEW", long.copy(ready = false, block = Some("View only")))
+    view.draw()
+    view.x()
+    assertEquals((view.planned, view.sent), (Vector.empty, Vector.empty))
+    assertEquals(view.notice, Some(DeskController.viewOnly))
+    assertEquals(view.controller.panel.actionNumber, 1L)
   }
 
   test("key x sends nothing during a market prompt, a mode review or a pending order") {
@@ -352,10 +354,13 @@ class InteractionSpec extends munit.FunSuite:
   }
 
   test("a position change during a CLOSE press reports changed controls and sends nothing") {
-    val f = new Fixture("LIVE", long)
+    // With the entry known, CLOSE names the money the position puts up, so a new size changes it.
+    val entered = long.copy(portfolio = PortfolioView(entry = Some(BigDecimal(100))))
+    val f = new Fixture("LIVE", entered)
     val close = f.draw().buttons.find(_.action == DeskAction.Close).get
+    assertEquals(close.label, "x Close $4.00")
     f.press(close)
-    f.view = long.copy(position = Some(BigDecimal("0.3")))
+    f.view = entered.copy(position = Some(BigDecimal("0.3")))
     f.draw()
     f.release(close)
     assertEquals(f.sent, Vector.empty)

@@ -128,7 +128,7 @@ class UiBoundarySpec extends munit.FunSuite:
     f.key(Command.PlaceOrder(intent))
     assertEquals(f.sent.size, 1, "a press on a frame drawn with the old sizes was sent")
     val labels = f.draw().buttons.map(_.label)
-    assert(labels.contains("$20 *") && labels.contains("1 BUY $20"), labels)
+    assert(labels.contains("$20 *") && labels.contains("1 LONG $20 x3"), labels)
     f.key(Command.PlaceOrder(intent))
     assertEquals(f.previewed, Vector(start, chosen))
     assertEquals(f.sent.map(_.terms), Vector(start, chosen))
@@ -194,8 +194,9 @@ class UiBoundarySpec extends munit.FunSuite:
     )
     val frame = Workspace.draw(data, view, PanelView(), 100, 30, now, zone, Style.mono)
     assert(frame.lines.exists(_.startsWith("PAXG (token tied to gold)")))
-    val pane = (Layout.workspaceMarketWidth(100) - 1) / 2
-    val row = frame.lines.find(_.startsWith("TAPE")).get
+    // The gauges fill the band's right region, after the panel and its bar.
+    val pane = (Layout.regions(100, 30).bandRight - 1) / 2
+    val row = frame.lines.map(_.drop(39)).find(_.startsWith("TAPE")).get
     val correlation = row.slice(pane + 1, 2 * pane + 1).trim
     assert(correlation.startsWith("GOLD 15m"))
     assert(correlation.endsWith("+1.00 15/15"))
