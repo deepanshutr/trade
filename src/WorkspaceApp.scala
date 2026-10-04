@@ -1,8 +1,10 @@
 package desk
 
+import java.io.InputStream
 import java.nio.file.Path
 import java.util.concurrent.{CountDownLatch, LinkedBlockingQueue, TimeUnit}
-import java.util.concurrent.atomic.{AtomicInteger, AtomicReference}
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, AtomicReference}
+import scala.jdk.CollectionConverters.*
 import scala.util.Try
 
 object WorkspaceApp:
@@ -167,6 +169,59 @@ object WorkspaceApp:
       case Command.Pointer(_, _, button) if button != 0 => ()
       case _                                            => { val _ = measure() }
 
+  // The workspace's reader of the terminal. The time of every byte is kept, so a lone escape or
+  // a held first key expires by the time since the last byte, whatever state it is in.
+  private[desk] def readKeys(
+      input: InputStream,
+      running: () => Boolean,
+      promptOpen: () => Boolean,
+      bindings: () => Bindings,
+      emit: Command => Unit,
+      nanoTime: () => Long = () => System.nanoTime(),
+      idle: () => Unit = () => Thread.sleep(10L)
+  ): Unit =
+    var pending = Vector.empty[Int]
+    var lastByte = nanoTime()
+    while running() do
+      if input.available() > 0 then
+        val byte = input.read()
+        lastByte = nanoTime()
+        if byte < 0 then emit(Command.Quit)
+        else
+          val (next, command) =
+            Keys.step(pending, byte, promptOpen(), mouseEnabled = true, bindings = bindings())
+          pending = next
+          command.foreach(emit)
+      else
+        if pending.nonEmpty then
+          val (next, command) = Keys.expire(pending, promptOpen(), nanoTime() - lastByte)
+          pending = next
+          command.foreach(emit)
+        idle()
+
+  // The --config words the approval step takes. The vault's approval works only with a settings
+  // file inside ~/.config/desk.
+  private[desk] def approveConfig(args: Main.Args, home: Path): Either[String, Seq[String]] =
+    args.config.map(Path.of(_).toAbsolutePath.normalize()) match
+      case None => Right(Nil)
+      case Some(path) if path.startsWith(home.resolve(".config/desk").toAbsolutePath.normalize()) =>
+        Right(Seq("--config", path.toString))
+      case Some(_) => Left("Approval needs the settings file in ~/.config/desk")
+
+  // Writes the bindings. The folder rules of LocalFiles name the folder. Nothing else is shown.
+  private[desk] def saveBindings(home: Path, chosen: Bindings): Either[String, Unit] =
+    val path = Bindings.path(home)
+    Try(Bindings.save(path, chosen)).toEither.left.map { error =>
+      Option(error.getMessage)
+        .map(_.stripPrefix("requirement failed: "))
+        .filter(_.startsWith("local storage"))
+        .fold("The key bindings could not be written")(reason => s"$reason (${path.getParent})")
+    }
+
+  private def mouse(on: Boolean): String =
+    if on then Screen.esc + "[?1000h" + Screen.esc + "[?1006h"
+    else Screen.esc + "[?1006l" + Screen.esc + "[?1000l"
+
   private def background(name: String)(body: => Unit): Thread =
     val thread = Threads.daemon(name)(body)
     thread.start()
@@ -241,11 +296,17 @@ object WorkspaceApp:
       .getOrElse(home.resolve(".local/state/desk"))
       .toAbsolutePath
       .normalize()
+    // A refused bindings file stops the start like a refused settings file, before any Keychain
+    // read. The key screen child and the recorder read no keys from the workspace.
+    val bindings =
+      if args.keys || args.record then Bindings.defaults
+      else Bindings.load(Bindings.path(home)).fold(m => keyHooks.stop(64, Some(m)), identity)
     // The key step comes first. The key screen never touches the feed, the event queue or
     // diagnostics, and the single Keychain read happens before the workspace starts.
     val prepared = KeyStartup.prepare(args, loaded, directory, keyHooks)
     val config = prepared.config
     val session = prepared.session
+    val bound = new AtomicReference(bindings)
     val (connector, rest) = sources(config)
     if args.record then record(args, config, directory, connector, rest)
     else
@@ -316,8 +377,9 @@ object WorkspaceApp:
       lazy val controller: DeskController = new DeskController(
         PanelView(
           mode = mode,
-          sizes = config.sizes,
-          muted = args.audio == "mute"
+          terms = TradeTerms(config.sizes, config.slippage),
+          muted = args.audio == "mute",
+          bindings = bindings
         ),
         now,
         worker.preview,
@@ -325,6 +387,20 @@ object WorkspaceApp:
         worker.switchMode,
         announcements.setMuted,
         orderResults.handle
+      )
+      // The reload prints the Keychain prompt line over the settings screen, which then repaints.
+      val keyReload = new KeyReload(
+        args,
+        config,
+        session,
+        directory,
+        keyHooks.copy(say = text => {
+          print(Screen.esc + "[2J" + Screen.esc + "[H" + text)
+          Console.flush()
+        }),
+        createWorker,
+        (next, factory) => worker.replaceLive(next, factory),
+        terms => controller.setTerms(terms)
       )
       val outlook = new OutlookWorker(() => state.get(), now, controller.outlook)
       val alerts = new AlertPolicy
@@ -336,20 +412,25 @@ object WorkspaceApp:
           recorder,
           worker,
           diagnostics,
-          session
+          keyReload.session
         )
       val saved = enterTerminal(() => Term.enterRaw(), () => closeAll()).getOrElse {
         System.err.println("desk needs a terminal")
         sys.exit(1)
       }
-      print(Screen.esc + "[?1000h" + Screen.esc + "[?1006h")
+      print(mouse(true))
       Console.flush()
+      val children =
+        new SettingsWiring.Children(words => new ProcessBuilder(words.asJava).inheritIO().start())
       val restoration = new Restoration(
         () => closeAll(),
-        () => {
-          print(Screen.esc + "[?1006l" + Screen.esc + "[?1000l")
-          Term.restore(saved)
-        }
+        SettingsWiring.restoring(
+          children,
+          () => {
+            print(mouse(false))
+            Term.restore(saved)
+          }
+        )
       )
       def restore(): Unit = { restoration.restore(); () }
       Runtime.getRuntime.addShutdownHook(new Thread(() => restore()))
@@ -405,15 +486,68 @@ object WorkspaceApp:
         () => { val _ = pendingPrompts.decrementAndGet() },
         diagnostics.folded
       )
+      // While settings are open nothing is drawn. The fold, the feed and the workers go on.
+      val paused = new AtomicBoolean(false)
+      val terminal = new Term.Writer()
+      val ownerReading = new SettingsScreen.ReadGate
+      val javaCommand =
+        ProcessHandle
+          .current()
+          .info()
+          .command()
+          .orElse(System.getProperty("java.home") + "/bin/java")
+      val keyChild =
+        SettingsWiring.keyChild(args, javaCommand, System.getProperty("java.class.path"))
+      def handOff(command: Seq[String]): Either[String, Int] =
+        SettingsWiring.handOff(
+          command,
+          worker,
+          () => keyReload.reload(),
+          restoration,
+          saved,
+          System.in,
+          System.out,
+          SettingsWiring.terminal,
+          children.start
+        )
+      // Runs the settings screen on the keys thread. True when it asks Desk to quit.
+      def openSettings(): Boolean =
+        val context = SettingsWiring.context(
+          network = config.network,
+          config = args.config.map(Path.of(_)),
+          home = home,
+          bound = bound,
+          controller = controller,
+          keyRow = () => keyReload.keyRow(),
+          reload = () => keyReload.reload(),
+          ownerRead = () =>
+            OwnerStatus.read(
+              config.network,
+              sys.env,
+              (command, input) => ProcessRun.systemWithin(command, input, 20L)
+            ),
+          reading = ownerReading,
+          handOff = handOff,
+          keyChild = keyChild,
+          env = sys.env,
+          copy = SettingsWiring.copyAddress,
+          livePending = () => worker.livePending,
+          size = () => Term.size(),
+          now = now,
+          approve = approveConfig(args, home),
+          activeKey = () => keyReload.activeKey()
+        )
+        SettingsWiring.show(paused, inputLock, terminal, () => controller.invalidate(), System.out)(
+          SettingsScreen.run(context, System.in, System.out)
+        )
       val keys = background("keys") {
-        var pending = Vector.empty[Int]
         var marketPrompt = false
-        var escapeAt = 0L
         var quitting = false
-        def emit(command: Command): Unit =
+        // True when the controller took the command.
+        def handle(command: Command): Boolean =
           val began = System.nanoTime()
           measureInput(command, () => dimensions.read())
-          inputLock.synchronized {
+          val handled = inputLock.synchronized {
             val measured = actualSize.get()
             val handled = dispatchInput(
               command,
@@ -426,30 +560,19 @@ object WorkspaceApp:
               marketPrompt = Main.nextPromptOpen(marketPrompt, command)
               enqueueInput(command, measured, queue, pendingPrompts)
             if command == Command.Quit then quitting = true
+            handled
           }
           diagnostics.slow(DiagnosticPart.Input, System.nanoTime() - began)
-        while !quitting && !state.get().quit do
-          if System.in.available() > 0 then
-            val byte = System.in.read()
-            if byte < 0 then emit(Command.Quit)
-            else
-              val (next, command) = Keys.step(
-                pending,
-                byte,
-                marketPrompt,
-                mouseEnabled = true
-              )
-              pending = next
-              if pending == Vector(27) then escapeAt = System.nanoTime()
-              command.foreach(emit)
-          else
-            if pending == Vector(27) && System.nanoTime() - escapeAt >= Main.escapeWaitNanos then
-              val (next, command) = Keys.expire(pending, marketPrompt)
-              pending = next
-              command.foreach(emit)
-            Thread.sleep(10L)
+          handled
+        SettingsWiring.keys(
+          System.in,
+          () => !quitting && !state.get().quit,
+          () => marketPrompt,
+          bound,
+          handle,
+          () => openSettings()
+        )
       }
-      val terminal = new Term.Writer()
       val zone = java.time.ZoneId.systemDefault()
       val style = Main.style(args, sys.env)
       var size = inputLock.synchronized {
@@ -460,53 +583,58 @@ object WorkspaceApp:
       var sizeAt = 0L
       try
         while !state.get().quit do
-          val time = now()
-          if time - sizeAt >= 500L then
-            val _ = dimensions.read()
-            sizeAt = time
-          inputLock.synchronized {
-            val measured = actualSize.get()
-            if measured != size then
-              size = measured
-              Main.sizeEvent((state.get().cols, state.get().rows), size).foreach(queue.put)
-          }
-          val (market, execution) =
-            collectExecution(inputLock, controller, () => (state.get(), worker.view))
-          val view = execution.forMarket(market.coin)
-          diagnostics.execution(controller.panel.mode, view)
-          val building = System.nanoTime()
-          val frame =
-            drawFrame(
-              market,
-              view,
-              controller.panel,
-              size._1,
-              size._2,
-              time,
-              zone,
-              style,
-              outlook,
-              diagnostics.status.nonEmpty,
-              orderResults.unavailable()
-            )
-          diagnostics.slow(DiagnosticPart.Build, System.nanoTime() - building)
-          val waiting = System.nanoTime()
+          var market = state.get()
           var lockWait = 0L
           var terminalTime = 0L
-          var published = false
-          inputLock.synchronized {
-            lockWait = System.nanoTime() - waiting
+          var presented = Option.empty[(Int, Int)]
+          SettingsWiring.renderPass(paused, () => !state.get().quit, inputLock, Thread.sleep(_))(
+            () => {
+              val time = now()
+              if time - sizeAt >= 500L then
+                val _ = dimensions.read()
+                sizeAt = time
+              inputLock.synchronized {
+                val measured = actualSize.get()
+                if measured != size then
+                  size = measured
+                  Main.sizeEvent((state.get().cols, state.get().rows), size).foreach(queue.put)
+              }
+              val (snapshot, execution) =
+                collectExecution(inputLock, controller, () => (state.get(), worker.view))
+              market = snapshot
+              val view = execution.forMarket(snapshot.coin)
+              diagnostics.execution(controller.panel.mode, view)
+              val building = System.nanoTime()
+              val frame =
+                drawFrame(
+                  snapshot,
+                  view,
+                  controller.panel,
+                  size._1,
+                  size._2,
+                  time,
+                  zone,
+                  style,
+                  outlook,
+                  diagnostics.status.nonEmpty,
+                  orderResults.unavailable()
+                )
+              diagnostics.slow(DiagnosticPart.Build, System.nanoTime() - building)
+              frame
+            }
+          )((frame, waited) => {
+            lockWait = waited
             controller.invalidate()
             val writing = System.nanoTime()
             terminal.write(frame.lines, (frame.cols, frame.rows))
             terminalTime = System.nanoTime() - writing
             if state.get().coin == frame.coin && actualSize.get() == (frame.cols, frame.rows) then
               controller.publish(frame)
-              published = true
-          }
+              presented = Some((frame.cols, frame.rows))
+          })
           diagnostics.slow(DiagnosticPart.FrameLock, lockWait)
           diagnostics.slow(DiagnosticPart.Terminal, terminalTime)
-          if published then diagnostics.presented(market, frame.cols, frame.rows)
+          presented.foreach((cols, rows) => diagnostics.presented(market, cols, rows))
           Thread.sleep(25L)
       catch
         case error: Exception =>

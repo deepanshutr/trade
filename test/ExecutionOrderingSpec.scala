@@ -13,7 +13,7 @@ class ExecutionOrderingSpec extends munit.FunSuite:
     val controller = new DeskController(
       PanelView(mode = "PROP"),
       () => 1000L,
-      _ => Left("no new order"),
+      (_, _) => Left("no new order"),
       _ => false,
       _ => Left("no mode switch")
     )

@@ -521,7 +521,7 @@ class KeyNamesSpec extends TempDirectorySuite:
         Vector(firstEntry),
         Map("mainnet" -> second),
         Right(true),
-        "No active key for testnet. Run desk --keys",
+        "No active key for testnet. Choose one in settings",
         0
       ),
       (
@@ -530,7 +530,7 @@ class KeyNamesSpec extends TempDirectorySuite:
         Vector(firstEntry),
         Map.empty,
         Right(true),
-        "No active key for mainnet. Run desk --keys",
+        "No active key for mainnet. Choose one in settings",
         0
       ),
       (

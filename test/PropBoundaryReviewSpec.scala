@@ -10,6 +10,7 @@ class PropBoundaryReviewSpec extends TempDirectorySuite:
     val clock = new AtomicLong(start)
     val directory = tempDirectory("boundary-")
     val config = TradingConfig()
+    val terms = TradeTerms(config.sizes, config.slippage)
     if held > 0 then
       LocalFiles.write(
         directory.resolve("wallet-mainnet.json"),
@@ -33,8 +34,8 @@ class PropBoundaryReviewSpec extends TempDirectorySuite:
       publish()
       Wait.until("prop did not become ready")(worker.view.ready)
     def review(intent: OrderIntent = Trading.action(0)): OrderReview =
-      val plan = worker.preview(intent).toOption.get
-      OrderReview(intent, plan, clock.get(), clock.get() + 30000)
+      val plan = worker.preview(intent, terms).toOption.get
+      OrderReview(intent, plan, terms, clock.get(), clock.get() + 30000)
     def settle(): Unit =
       Wait.until("prop order remained pending")(
         !worker.view.pending && worker.view.outcome.nonEmpty
@@ -126,7 +127,7 @@ class PropBoundaryReviewSpec extends TempDirectorySuite:
       f.worker.synchronized {
         assert(f.worker.submitReviewed(review))
         assert(f.worker.view.pending)
-        assert(f.worker.preview(Trading.action(3)).isLeft)
+        assert(f.worker.preview(Trading.action(3), f.terms).isLeft)
         assert(!f.worker.submitReviewed(review))
       }
       f.settle()
@@ -140,9 +141,10 @@ class PropBoundaryReviewSpec extends TempDirectorySuite:
     val f = new Fixture
     try
       f.open()
-      val plan = f.worker.preview(Trading.action(0)).toOption.get
+      val plan = f.worker.preview(Trading.action(0), f.terms).toOption.get
       f.clock.addAndGet(5)
-      val review = OrderReview(Trading.action(0), plan, f.clock.get(), f.clock.get() + 30000)
+      val review =
+        OrderReview(Trading.action(0), plan, f.terms, f.clock.get(), f.clock.get() + 30000)
       assert(f.worker.submitReviewed(review))
       f.settle()
       assertEquals(f.ledger.account.count, 1L)

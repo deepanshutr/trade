@@ -70,7 +70,8 @@ object PropLedger:
         if !buying && q > old.quantity then Left("Prop limit: not enough " + plan.coin + " to sell")
         else if cash < 0 then
           Left(
-            "Prop limit: not enough stables including fees. Lower order sizes in settings, then restart."
+            "Prop limit: not enough stables including fees. Lower order sizes in settings. " +
+              "The change applies to the next order."
           )
         else
           val positions = if quantity == 0 then Map.empty[String, PropPosition]

@@ -13,6 +13,8 @@ final case class TradeSizes(
     target: BigDecimal = BigDecimal("1000")
 )
 
+final case class TradeTerms(sizes: TradeSizes, slippage: BigDecimal)
+
 final case class OrderIntent(
     side: Side,
     kind: OrderKind,

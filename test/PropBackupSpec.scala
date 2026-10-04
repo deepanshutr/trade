@@ -4,6 +4,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 class PropBackupSpec extends TempDirectorySuite:
+  private val terms = TradeTerms(TradeSizes(), Trading.defaultSlippage)
 
   private final class Fixture:
     val now = new AtomicLong(1800000000000L)
@@ -39,7 +40,13 @@ class PropBackupSpec extends TempDirectorySuite:
       assert(f.worker.view.message.toLowerCase.contains("backup"))
       val intent = OrderIntent(Side.Buy, OrderKind.Hard)
       val review =
-        OrderReview(intent, f.worker.preview(intent).toOption.get, f.now.get(), f.now.get() + 30000)
+        OrderReview(
+          intent,
+          f.worker.preview(intent, terms).toOption.get,
+          terms,
+          f.now.get(),
+          f.now.get() + 30000
+        )
       assert(f.worker.submitReviewed(review))
       Wait.until("the simulated fill did not complete")(!f.worker.view.pending)
       assertEquals(f.ledger.account.count, 1L)
@@ -76,7 +83,7 @@ class PropBackupSpec extends TempDirectorySuite:
       assert(f.worker.view.ready)
       f.now.addAndGet(251)
       assert(!f.worker.view.ready)
-      assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard)).isLeft)
+      assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), terms).isLeft)
       assertEquals(f.ledger.account.count, 0L)
     finally f.worker.close()
   }
@@ -111,7 +118,13 @@ class PropBackupSpec extends TempDirectorySuite:
       assert(f.worker.view.ready)
       val intent = OrderIntent(Side.Buy, OrderKind.Hard)
       val review =
-        OrderReview(intent, f.worker.preview(intent).toOption.get, f.now.get(), f.now.get() + 30000)
+        OrderReview(
+          intent,
+          f.worker.preview(intent, terms).toOption.get,
+          terms,
+          f.now.get(),
+          f.now.get() + 30000
+        )
       f.worker.observe(Event.SocketDown)
       f.worker.observe(Event.SocketDown)
       assert(f.worker.view.ready)
@@ -171,7 +184,7 @@ class PropBackupSpec extends TempDirectorySuite:
       assert(worker.view.ready)
       previewing = true
       assertEquals(
-        worker.preview(OrderIntent(Side.Buy, OrderKind.Hard)),
+        worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), terms),
         Left("Prop prices stale. Waiting for fresh depth")
       )
       assertEquals(reads, 1)

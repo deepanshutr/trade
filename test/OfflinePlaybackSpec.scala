@@ -69,12 +69,10 @@ class OfflinePlaybackSpec extends TempDirectorySuite:
           assertEquals(config, TradingConfig())
           assertEquals(enabled, false)
           assertEquals(coin, "ETH")
-          assertEquals(
-            journal,
-            Path.of(System.getProperty("user.home"), ".local/state/desk")
-          )
+          assertEquals(journal, directory.resolve(".local/state/desk"))
           throw new Stop
-        }
+        },
+        keys = KeyStartup.Hooks(home = directory, stop = (code, _) => fail(s"Desk stopped ($code)"))
       )
     }
     assertEquals(constructed, 1)

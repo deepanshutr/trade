@@ -84,11 +84,12 @@ class UiBoundarySpec extends munit.FunSuite:
   private class Fixture(mode: String = "PROP"):
     var currentView = view
     var sent = Vector.empty[OrderReview]
+    var previewed = Vector.empty[TradeTerms]
     var modes = Vector.empty[String]
     val controller = new DeskController(
       PanelView(mode = mode),
       () => now,
-      _ => Right(plan),
+      (_, terms) => { previewed :+= terms; Right(plan) },
       order => { sent :+= order; true },
       name => { modes :+= name; Right(()) }
     )
@@ -115,6 +116,23 @@ class UiBoundarySpec extends munit.FunSuite:
       frame
     def key(command: Command): Unit =
       controller.handle(command, snapshot, currentView, (120, 40), false)
+
+  test("a press previews with the panel terms, its review carries them, and new terms apply next") {
+    val f = new Fixture()
+    val start = f.controller.panel.terms
+    f.draw()
+    f.key(Command.PlaceOrder(intent))
+    val chosen = TradeTerms(TradeSizes(BigDecimal(20), BigDecimal(100)), BigDecimal("0.005"))
+    f.controller.setTerms(chosen)
+    assertEquals(f.controller.panel.terms, chosen)
+    f.key(Command.PlaceOrder(intent))
+    assertEquals(f.sent.size, 1, "a press on a frame drawn with the old sizes was sent")
+    val labels = f.draw().buttons.map(_.label)
+    assert(labels.contains("$20 *") && labels.contains("1 BUY $20"), labels)
+    f.key(Command.PlaceOrder(intent))
+    assertEquals(f.previewed, Vector(start, chosen))
+    assertEquals(f.sent.map(_.terms), Vector(start, chosen))
+  }
 
   test("one-click live submission captures the current observed leverage and margin") {
     val f = new Fixture("LIVE")

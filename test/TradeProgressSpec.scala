@@ -6,6 +6,7 @@ import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 
 class TradeProgressSpec extends TempDirectorySuite:
+  private val terms = TradeTerms(TradeSizes(), Trading.defaultSlippage)
   private val start = 1800000000000L
 
   private class Prop(balance: BigDecimal = BigDecimal(10000), fee: BigDecimal = BigDecimal(0)):
@@ -36,7 +37,13 @@ class TradeProgressSpec extends TempDirectorySuite:
       Wait.until("metadata unavailable")(worker.view.ready)
     def review(): OrderReview =
       val intent = Trading.action(0)
-      OrderReview(intent, worker.preview(intent).toOption.get, clock.get(), clock.get() + 30000)
+      OrderReview(
+        intent,
+        worker.preview(intent, terms).toOption.get,
+        terms,
+        clock.get(),
+        clock.get() + 30000
+      )
     def close(): Unit = worker.close()
 
   test("fees that exceed prop capacity are explained before Send without any write") {
@@ -44,7 +51,7 @@ class TradeProgressSpec extends TempDirectorySuite:
     try
       f.open()
       val before = f.ledger.account
-      val result = f.worker.preview(Trading.action(0))
+      val result = f.worker.preview(Trading.action(0), terms)
       assert(result.isLeft, s"unaffordable order reached review: $result")
       assert(result.swap.toOption.get.toLowerCase.contains("limit"))
       assertEquals(f.ledger.account, before)
@@ -80,9 +87,10 @@ class TradeProgressSpec extends TempDirectorySuite:
     val f = new Prop(BigDecimal(200))
     try
       f.open()
-      val reason = f.worker.preview(Trading.action(0)).swap.toOption.get
+      val reason = f.worker.preview(Trading.action(0), terms).swap.toOption.get
       assert(reason.contains("settings"), reason)
-      assert(reason.contains("restart"), reason)
+      assert(reason.contains("applies to the next order"), reason)
+      assert(!reason.contains("restart"), reason)
       assert(!reason.contains("reduce the position"), "flat account has no position to reduce")
     finally f.close()
   }
@@ -132,7 +140,7 @@ class TradeProgressSpec extends TempDirectorySuite:
       assertEquals(remaining.cash, BigDecimal(50))
       assertEquals(remaining.realized, BigDecimal(-150))
       assert(remaining.positions.isEmpty)
-      val reason = f.worker.preview(Trading.action(0)).swap.toOption.get
+      val reason = f.worker.preview(Trading.action(0), terms).swap.toOption.get
       assert(reason.contains("settings"), reason)
       assertEquals(f.ledger.account, remaining)
       assertEquals(f.ledger.account.count, 2L)
@@ -171,14 +179,14 @@ class TradeProgressSpec extends TempDirectorySuite:
           f.clock.incrementAndGet()
         )
       )
-      val result = f.worker.preview(Trading.action(0))
+      val result = f.worker.preview(Trading.action(0), terms)
       assert(result.isRight, s"affordable fresh partial fill rejected: $result")
       val plan = result.toOption.get
       assertEquals(plan.estimatedQuantity, BigDecimal(1))
       assertEquals(plan.estimatedValue, BigDecimal("100.05"))
       assert(
         f.worker.submitReviewed(
-          OrderReview(Trading.action(0), plan, f.clock.get(), f.clock.get() + 30000)
+          OrderReview(Trading.action(0), plan, terms, f.clock.get(), f.clock.get() + 30000)
         )
       )
       Wait.until("partial result absent")(!f.worker.view.pending)
@@ -218,7 +226,7 @@ class TradeProgressSpec extends TempDirectorySuite:
     bid = Some(BigDecimal("99.99")),
     ask = Some(BigDecimal(100))
   )
-  private def plan(intent: OrderIntent): Either[String, OrderPlan] =
+  private def plan(intent: OrderIntent, terms: TradeTerms): Either[String, OrderPlan] =
     Trading.plan(
       "XMR",
       rules,
@@ -226,9 +234,9 @@ class TradeProgressSpec extends TempDirectorySuite:
       ready.reference(intent.side).get,
       BigDecimal(0),
       intent,
-      TradeSizes(),
+      terms.sizes,
       1,
-      Trading.defaultSlippage
+      terms.slippage
     )
   private def draw(
       c: DeskController,
@@ -247,7 +255,7 @@ class TradeProgressSpec extends TempDirectorySuite:
       val c = new DeskController(
         PanelView(mode = "PROP"),
         () => start,
-        _ => fail("unavailable control prepared an order"),
+        (_, _) => fail("unavailable control prepared an order"),
         _ => fail("sent unavailable order"),
         _ => Left("disabled")
       )
@@ -337,7 +345,7 @@ class TradeProgressSpec extends TempDirectorySuite:
       try
         f.open()
         if scenario == "partial" || scenario == "capacity" then f.publish("1")
-        val before = f.worker.preview(Trading.action(0)).toOption.get
+        val before = f.worker.preview(Trading.action(0), terms).toOption.get
         val first = update("ready")
         val buy = first.buttons.find(_.action == DeskAction.Prepare(Trading.action(0))).get
         f.worker.synchronized {

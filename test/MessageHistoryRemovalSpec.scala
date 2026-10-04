@@ -16,7 +16,8 @@ object HistorylessWorkspaceProcess:
           ,
           new Rest:
             def post(body: String): Option[String] = throw new AssertionError("unexpected request")
-        )
+        ),
+      keys = KeyStartup.Hooks(home = Path.of(args(0)))
     )
 
 class MessageHistoryRemovalSpec extends TempDirectorySuite:
@@ -25,7 +26,7 @@ class MessageHistoryRemovalSpec extends TempDirectorySuite:
     val controller = new DeskController(
       PanelView(mode = "PROP"),
       () => now,
-      _ => Left("unused"),
+      (_, _) => Left("unused"),
       _ => false,
       _ => Left("unused")
     )

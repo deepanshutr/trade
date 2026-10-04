@@ -4,6 +4,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 class PropStatusSpec extends TempDirectorySuite:
+  private val terms = TradeTerms(TradeSizes(), Trading.defaultSlippage)
   test("prop status follows fresh data, expiry, disconnect and market selection") {
     val clock = new AtomicLong(1800000000000L)
     val rest = new Rest:
@@ -86,7 +87,8 @@ class PropStatusSpec extends TempDirectorySuite:
       val intent = OrderIntent(Side.Buy, OrderKind.Hard)
       val review = OrderReview(
         intent,
-        worker.preview(intent).toOption.get,
+        worker.preview(intent, terms).toOption.get,
+        terms,
         clock.get(),
         clock.get() + 30000
       )

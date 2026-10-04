@@ -21,7 +21,7 @@ class ExecutionReceiptOrderFinderSpec extends munit.FunSuite:
     val controller = new DeskController(
       PanelView(mode = "PROP"),
       () => at,
-      _ => throw new AssertionError("A pending input cannot request a new preview"),
+      (_, _) => throw new AssertionError("A pending input cannot request a new preview"),
       _ => throw new AssertionError("No submission is permitted in the receipt ordering check"),
       _ => Left("unused")
     )

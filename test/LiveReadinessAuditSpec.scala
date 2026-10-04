@@ -120,6 +120,19 @@ class LiveReadinessAuditSpec extends TempDirectorySuite:
       () => clock.get(),
       warmSigning = warmSigning
     )
+    // A review as the controller makes it on a press.
+    def review(intent: OrderIntent): OrderReview =
+      val terms = TradeTerms(config.sizes, config.slippage)
+      val view = worker.view
+      OrderReview(
+        intent,
+        worker.preview(intent, terms).toOption.get,
+        terms,
+        clock.get(),
+        clock.get() + TradingWorker.maximumReviewLifetimeMs,
+        view.leverage,
+        view.marginMode
+      )
     def fresh(): Unit =
       worker.observe(Event.SocketUp)
       worker.observe(
@@ -241,7 +254,7 @@ class LiveReadinessAuditSpec extends TempDirectorySuite:
       Wait.until("initial state did not become ready")(f.worker.view.ready)
       assertEquals(f.reads.get(), 1)
       Thread.sleep(20)
-      assert(f.worker.submit(OrderIntent(Side.Buy, OrderKind.Hard), "XMR"))
+      assert(f.worker.submitReviewed(f.review(OrderIntent(Side.Buy, OrderKind.Hard))))
       Wait.until("fake order did not complete")(f.worker.view.outcome.nonEmpty)
       val began = f.secondRead.await(300, TimeUnit.MILLISECONDS)
       assert(began, "completed order waited for the fixed account poll sleep")
@@ -315,7 +328,7 @@ class LiveReadinessAuditSpec extends TempDirectorySuite:
         "the old worker stayed enabled during retirement"
       )
       assert(closeEntered.await(2, TimeUnit.SECONDS))
-      assert(!f.worker.submit(OrderIntent(Side.Buy, OrderKind.Hard), "XMR"))
+      assert(!f.worker.submitReviewed(f.review(OrderIntent(Side.Buy, OrderKind.Hard))))
       intercept[Exception](OrderJournal.open(f.directory, f.config.identity))
       assert(route.switchMode("LIVE").isRight)
       assert(!route.view.ready)

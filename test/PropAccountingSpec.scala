@@ -5,6 +5,7 @@ import java.time.ZoneOffset
 import java.util.concurrent.atomic.AtomicBoolean
 
 class PropAccountingSpec extends TempDirectorySuite:
+  private val terms = TradeTerms(TradeSizes(), Trading.defaultSlippage)
   private val now = 1800000000000L
   private val fee = BigDecimal("0.001")
 
@@ -120,7 +121,13 @@ class PropAccountingSpec extends TempDirectorySuite:
         val empty = ledger.account
         assert(ledger.fill(plan(Side.Sell, 1, 100), now).isLeft)
         assertEquals(ledger.account, empty)
-        assert(ledger.fill(plan(Side.Buy, 10, 100), now).isLeft)
+        assertEquals(
+          ledger.fill(plan(Side.Buy, 10, 100), now).left.toOption,
+          Some(
+            "Prop limit: not enough stables including fees. Lower order sizes in settings. " +
+              "The change applies to the next order."
+          )
+        )
         assertEquals(ledger.account, empty)
         assert(ledger.fill(plan(Side.Buy, 2, 100), now).isRight)
         val held = ledger.account
@@ -238,7 +245,7 @@ class PropAccountingSpec extends TempDirectorySuite:
       assert(ledger.fill(plan(Side.Buy, BigDecimal("0.75"), 100), now).isRight)
       val worker = workerFor(ledger)
       try
-        val selected = worker.preview(OrderIntent(Side.Sell, OrderKind.Hard)).toOption.get
+        val selected = worker.preview(OrderIntent(Side.Sell, OrderKind.Hard), terms).toOption.get
         assertEquals(selected.quantity, BigDecimal("0.75"))
         assertEquals(selected.estimatedQuantity, BigDecimal("0.75"))
         assertEquals(selected.estimatedValue, BigDecimal("74.25"))
@@ -246,7 +253,7 @@ class PropAccountingSpec extends TempDirectorySuite:
         assert(ledger.fill(selected, now).isRight)
         assertEquals(ledger.account.cash, BigDecimal("999.10075"))
         assertEquals(ledger.account.positions, Map.empty[String, PropPosition])
-        assert(worker.preview(OrderIntent(Side.Sell, OrderKind.Hard)).isLeft)
+        assert(worker.preview(OrderIntent(Side.Sell, OrderKind.Hard), terms).isLeft)
       finally worker.close()
     }
   }

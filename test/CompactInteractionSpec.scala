@@ -13,7 +13,7 @@ class CompactInteractionSpec extends munit.FunSuite:
     val controller = new DeskController(
       PanelView(mode = "PROP"),
       () => now,
-      _ => Left("Order price is unavailable"),
+      (_, _) => Left("Order price is unavailable"),
       _ => { sent += 1; true },
       _ => Left("Live account is not configured"),
       mute = value => muted :+= value
@@ -54,7 +54,8 @@ class CompactInteractionSpec extends munit.FunSuite:
     f.draw()
     var pending = Vector.empty[Int]
     "hv123".foreach { c =>
-      val (next, command) = Keys.step(pending, c.toInt, true, mouseEnabled = true)
+      val (next, command) =
+        Keys.step(pending, c.toInt, true, mouseEnabled = true, bindings = Bindings.defaults)
       pending = next
       command.foreach(f.key)
     }

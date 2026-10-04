@@ -169,7 +169,7 @@ class LiveControlsSpec extends munit.FunSuite:
     for (position, sizes, expected) <- cases; big <- Vector(false, true) do
       val live = draw(
         readyView.copy(position = Some(BigDecimal(position))),
-        PanelView(mode = "LIVE", sizes = sizes, bigOrder = big)
+        PanelView(mode = "LIVE", terms = TradeTerms(sizes, Trading.defaultSlippage), bigOrder = big)
       )
       val close = live.buttons.filter(_.action == DeskAction.Close)
       assertEquals(close.map(_.label), Vector(expected), position)

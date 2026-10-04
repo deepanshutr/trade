@@ -33,8 +33,9 @@ final case class TradingView(
 object TradingWorker:
   val ownerMismatchMessage: String = "Signer does not match the configured owner"
   val savedOwnerMismatchMessage: String = "Saved order belongs to another owner"
-  val setupMessage: String =
-    "Live setup required: owner in settings and an active key (desk --keys). See docs/trading.md"
+  // The workspace shows this sentence with the key bound to settings, s by default.
+  def setupFor(key: String): String = s"Live setup required. Press $key for settings"
+  val setupMessage: String = setupFor("s")
   val maximumReviewLifetimeMs: Long = 30000L
   val openingPauseMs: Long = 2000L
   val openingPausedMessage: String = "Opening paused for 2 s after closing"
@@ -114,9 +115,7 @@ final class TradingWorker private[desk] (
       bookAt: Long,
       accountAt: Long,
       activeAt: Long,
-      leverage: Int,
-      marginMode: String,
-      review: Option[OrderReview]
+      review: OrderReview
   )
   private val busy = new AtomicBoolean(false)
   private val started = new AtomicBoolean(false)
@@ -310,7 +309,7 @@ final class TradingWorker private[desk] (
   // Close into an opening order.
   // For a short time after a reduce-only order completes, only reduce-only plans pass. So a
   // press repeated on the reducing side cannot run through flat into the other side.
-  private def estimate(intent: OrderIntent): Either[String, OrderPlan] =
+  private def estimate(intent: OrderIntent, terms: TradeTerms): Either[String, OrderPlan] =
     if !marketReady then Left("Waiting for fresh selected-market depth")
     else
       position
@@ -323,9 +322,9 @@ final class TradingWorker private[desk] (
             if intent.side == Side.Buy then touch.get.ask else touch.get.bid,
             held,
             intent,
-            config.sizes,
+            terms.sizes,
             activeLeverage,
-            config.slippage
+            terms.slippage
           )
         )
         .filterOrElse(
@@ -335,8 +334,8 @@ final class TradingWorker private[desk] (
           TradingWorker.openingPausedMessage
         )
 
-  def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized(
-    estimate(intent)
+  def preview(intent: OrderIntent, terms: TradeTerms): Either[String, OrderPlan] = synchronized(
+    estimate(intent, terms)
   )
 
   private def reviewCurrent(review: OrderReview): Boolean =
@@ -349,36 +348,25 @@ final class TradingWorker private[desk] (
       activeMode
     )
 
+  // The worker plans again with the sizes and slippage the review carries, so a change in
+  // settings after the review cannot alter what is sent.
   def submitReviewed(review: OrderReview): Boolean = synchronized {
-    submitPlan(review.intent, review.plan.coin, Some(review))
-  }
-
-  def submit(intent: OrderIntent, expectedCoin: String): Boolean =
-    synchronized {
-      submitPlan(intent, expectedCoin, None)
-    }
-
-  private def submitPlan(
-      intent: OrderIntent,
-      expectedCoin: String,
-      review: Option[OrderReview]
-  ): Boolean =
     if disabled.get() || closed
-        .get() || expectedCoin != coin || !view.ready || !busy.compareAndSet(
+        .get() || review.plan.coin != coin || !view.ready || !busy.compareAndSet(
         false,
         true
       )
     then false
     else
       outcome = None
-      estimate(intent) match
+      estimate(review.intent, review.terms) match
         case Left(reason) =>
           message = reason
           busy.set(false)
           false
         case Right(plan) =>
-          val maximum = maximums(if intent.side == Side.Buy then 0 else 1)
-          if review.exists(r => plan != r.plan || !reviewCurrent(r)) then
+          val maximum = maximums(if review.intent.side == Side.Buy then 0 else 1)
+          if plan != review.plan || !reviewCurrent(review) then
             message = "Order review changed or expired. Review again before sending"
             busy.set(false)
             false
@@ -394,8 +382,6 @@ final class TradingWorker private[desk] (
               exact.get.at,
               accountAt,
               activeAt,
-              activeLeverage,
-              activeMode,
               review
             )
             lastPlan = Some(plan)
@@ -404,6 +390,7 @@ final class TradingWorker private[desk] (
             else
               busy.set(false)
               false
+  }
 
   private def signed(
       action: ujson.Value,
@@ -486,8 +473,8 @@ final class TradingWorker private[desk] (
         config.positionAgeMs
       ) &&
       fresh(press.activeAt, config.positionAgeMs) &&
-      press.leverage == activeLeverage && press.marginMode == activeMode &&
-      press.review.forall(r => reviewCurrent(r) && estimate(r.intent).contains(r.plan)) &&
+      reviewCurrent(press.review) &&
+      estimate(press.review.intent, press.review.terms).contains(press.review.plan) &&
       press.plan.quantity <= maximums(if press.plan.side == Side.Buy then 0
       else 1) &&
       wall() < p.expiresAfter

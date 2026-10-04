@@ -247,7 +247,7 @@ class MarketSelectionSpec extends munit.FunSuite:
     val controller = new DeskController(
       PanelView(mode = "PROP"),
       () => 1000L,
-      _ => { previews += 1; Left("must not preview") },
+      (_, _) => { previews += 1; Left("must not preview") },
       _ => { sends += 1; true },
       _ => Left("disabled")
     )
@@ -283,7 +283,7 @@ class MarketSelectionSpec extends munit.FunSuite:
     val controller = new DeskController(
       PanelView(),
       () => 1000L,
-      _ => Left("disabled"),
+      (_, _) => Left("disabled"),
       _ => false,
       _ => Left("disabled")
     )

@@ -1171,6 +1171,7 @@ class KeyScreenSpec extends TempDirectorySuite:
         l.contains("key names file is invalid at line 1") && l.contains("key-names.jsonl")
       )
     )
+    assert(lines(f.output).exists(_.contains("Fix or move the file, then open settings again")))
     assertEquals(f.kinds, Vector.empty[String])
     assertEquals(Files.readString(f.names), "garbage\n")
   }

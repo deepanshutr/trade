@@ -44,6 +44,17 @@ class TermWriterSpec extends munit.FunSuite:
     assertEquals(sink.flushes, flushes)
   }
 
+  test("reset forgets the last frame so the next write is a full repaint") {
+    val sink = new Sink
+    val writer = new Term.Writer(new PrintStream(sink))
+    val lines = Vector("header", "BUY SELL")
+    writer.write(lines, (100, 30))
+    sink.reset()
+    writer.reset()
+    writer.write(lines, (100, 30))
+    assertEquals(sink.text, full(lines))
+  }
+
   test("only changed rows are written at their absolute positions with no intervening full clear") {
     val sink = new Sink
     val writer = new Term.Writer(new PrintStream(sink))

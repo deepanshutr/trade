@@ -3,6 +3,7 @@ package desk
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 
 class RuntimeSpec extends TempDirectorySuite:
+  private val terms = TradeTerms(TradeSizes(), Trading.defaultSlippage)
 
   test("prop execution uses public data, requires reviewed plan and refuses stale books") {
     var time = 1800000000000L
@@ -30,8 +31,8 @@ class RuntimeSpec extends TempDirectorySuite:
       )
       Wait.until("RuntimeSpec condition")(worker.view.ready)
       val intent = OrderIntent(Side.Buy, OrderKind.Hard)
-      val plan = worker.preview(intent).toOption.get
-      val review = OrderReview(intent, plan, time, time + 30000)
+      val plan = worker.preview(intent, terms).toOption.get
+      val review = OrderReview(intent, plan, terms, time, time + 30000)
       assert(!worker.submitReviewed(review.copy(plan = plan.copy(quantity = plan.quantity + 1))))
       assertEquals(ledger.account.count, 0L)
       assert(worker.submitReviewed(review))

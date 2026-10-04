@@ -74,6 +74,7 @@ class MainWiringFollowupSpec extends munit.FunSuite:
     java.nio.file.Files.writeString(config, """{"network":"testnet"}""")
     final class Stop extends RuntimeException
     var calls = 0
+    val home = java.nio.file.Files.createTempDirectory("desk-wiring-home")
     try
       intercept[Stop] {
         Main.run(
@@ -84,9 +85,12 @@ class MainWiringFollowupSpec extends munit.FunSuite:
             assertEquals(settings.socketUrl, "wss://api.hyperliquid-testnet.xyz/ws")
             assertEquals(settings.baseUrl + "/info", "https://api.hyperliquid-testnet.xyz/info")
             throw new Stop
-          }
+          },
+          keys = KeyStartup.Hooks(home = home, stop = (code, _) => fail(s"Desk stopped ($code)"))
         )
       }
       assertEquals(calls, 1)
-    finally java.nio.file.Files.deleteIfExists(config)
+    finally
+      java.nio.file.Files.deleteIfExists(config)
+      java.nio.file.Files.deleteIfExists(home)
   }

@@ -16,6 +16,7 @@ class MetadataReadinessSpec extends TempDirectorySuite:
         calls.incrementAndGet()
         respond()
     val config = TradingConfig()
+    val terms = TradeTerms(config.sizes, config.slippage)
     val path = tempDirectory("desk-metadata-readiness-")
     val ledger = PropLedger.open(path, "mainnet", config.propBalance, config.propFee)
     val worker =
@@ -62,7 +63,7 @@ class MetadataReadinessSpec extends TempDirectorySuite:
       val f = new Fixture(Some(ujson.read(valid) -> stamp), () => None)
       try
         assert(!f.worker.view.ready, s"Metadata timestamp $stamp was accepted")
-        assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard)).isLeft)
+        assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms).isLeft)
       finally f.close()
   }
 
@@ -148,7 +149,7 @@ class MetadataReadinessSpec extends TempDirectorySuite:
         assert(f.worker.view.ready)
         f.worker.start()
         Wait.until("Removal or delisting left stale rules tradable")(!f.worker.view.ready)
-        assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard)).isLeft)
+        assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms).isLeft)
       finally f.close()
   }
 

@@ -28,7 +28,7 @@ class InteractionSpec extends munit.FunSuite:
     val controller = new DeskController(
       PanelView(mode = mode),
       () => now,
-      order => {
+      (order, terms) => {
         planned :+= order
         Trading.plan(
           "XMR",
@@ -37,9 +37,9 @@ class InteractionSpec extends munit.FunSuite:
           ready.reference(order.side).get,
           held,
           order,
-          TradeSizes(),
+          terms.sizes,
           start.leverage.getOrElse(1),
-          Trading.defaultSlippage
+          terms.slippage
         )
       },
       order => { sent :+= order; view = view.copy(ready = false, pending = true); true },
@@ -63,7 +63,13 @@ class InteractionSpec extends munit.FunSuite:
     def press(button: DeskButton): Unit = key(Command.PointerPress(button.x, button.y, 0))
     def release(button: DeskButton): Unit = key(Command.Pointer(button.x, button.y, 0))
     def x(size: (Int, Int) = (120, 40)): Unit =
-      key(Keys.step(Vector.empty, 'x'.toInt, snapshot.prompt.nonEmpty)._2.get, size)
+      key(
+        Keys
+          .step(Vector.empty, 'x'.toInt, snapshot.prompt.nonEmpty, bindings = Bindings.defaults)
+          ._2
+          .get,
+        size
+      )
     def notice: Option[String] = controller.panel.actionNotice
 
   test("a displayed shortcut submits immediately once and Enter cannot repeat it") {
