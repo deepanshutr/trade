@@ -57,6 +57,10 @@ final class PropWorker(
   private var stage = "queued"
   private var lastPlan = Option.empty[OrderPlan]
   private var prepared = Option.empty[Prepared]
+  private var reducedAt = Option.empty[Long]
+  private var fills = Map.empty[String, Vector[Fill]]
+  // The (time, id) pairs of the trades already counted, kept for the tape window.
+  private val seenTrades = scala.collection.mutable.TreeSet.empty[(Long, Long)]
   private val pending = new AtomicBoolean(false)
   private val closed = new AtomicBoolean(false)
   private val started = new AtomicBoolean(false)
@@ -94,6 +98,36 @@ final class PropWorker(
   private def held(account: PropAccount): BigDecimal =
     account.positions.get(coin).map(_.quantity).getOrElse(BigDecimal(0))
   def account: PropAccount = ledger.account
+  private def resting(account: PropAccount): Vector[RestingOrder] = account.resting.map { order =>
+    val asset =
+      metadata.flatMap(m => Try(Exchange.market(m, order.coin)).toOption).fold(-1)(_.asset)
+    RestingOrder(
+      order.id,
+      order.coin,
+      asset,
+      order.side,
+      order.price,
+      order.quantity,
+      order.quantity,
+      order.reduceOnly,
+      order.createdAt
+    )
+  }
+  // The price keeps its tick decimals, so the texts read it as the ticket showed it.
+  private def order(plan: OrderPlan, id: String, at: Long): PropOrder = PropOrder(
+    id,
+    plan.coin,
+    plan.side,
+    BigDecimal(Trading.priceText(plan.limit, rules.get)),
+    plan.quantity,
+    plan.reduceOnly,
+    at
+  )
+  private def record(fill: Fill): Unit =
+    fills = fills.updated(
+      fill.coin,
+      (fills.getOrElse(fill.coin, Vector.empty) :+ fill).takeRight(200)
+    )
   def view: TradingView = synchronized {
     val account = ledger.account
     val reason = blockReason
@@ -123,7 +157,12 @@ final class PropWorker(
           Option.when(dataReady)(touch.map(_.midpoint)).flatten
         )
       else PortfolioView(),
-      blockCode = reason.fold(BlockCode.Blocked)(_.code)
+      blockCode = reason.fold(BlockCode.Blocked)(_.code),
+      usableMargin = Option.when(ledger.available)(ledger.usable),
+      leverage = Some(1),
+      resting = resting(account),
+      fills = fills.valuesIterator.flatten.toVector,
+      stale = !touch.exists(t => fresh(t.receivedAt))
     )
   }
   def select(next: String): Unit = synchronized {
@@ -171,18 +210,56 @@ final class PropWorker(
           quote <- touch
           capped <- capBook(previous, quote)
         yield (capped, receivedAt)
-      case _ => ()
+      case Event.Trades(c, batch) if c == coin && !backup && !closed.get() => fillThrough(batch)
+      case _                                                               => ()
   }
+
+  // A trade fills every resting buy priced above it and every resting sell priced below it,
+  // once, and only when it printed after the order rested. A trade at the price does not fill,
+  // since the queue place is unknown. Batches on backup prices may replay and count nothing.
+  private def fillThrough(batch: Vector[Trade]): Unit =
+    val cutoff = wall() - State.tapeMs
+    while seenTrades.headOption.exists(_._1 < cutoff) do seenTrades -= seenTrades.head
+    val counted = batch
+      .filter(t => t.time >= cutoff && t.id.exists(id => seenTrades.add((t.time, id))))
+      .sortBy(t => (t.time, t.id))
+    val texts = counted.flatMap { trade =>
+      Try(BigDecimal(trade.px)).toOption.toVector.flatMap { price =>
+        ledger.account.resting
+          .filter(o =>
+            o.coin == coin && o.createdAt < trade.time &&
+              (if o.side == Side.Buy then o.price > price else o.price < price)
+          )
+          .sortBy(o => ((o.price - price).abs, o.createdAt))
+          .map(o => settle(o, trade.time))
+      }
+    }
+    if texts.nonEmpty then
+      outcome = Some(texts.mkString("\n"))
+      outcomeId = OrderUpdates.nextId()
+
+  private def settle(order: PropOrder, at: Long): String =
+    ledger.resolve(order.id, at) match
+      case Left(error)             => error
+      case Right((text, quantity)) =>
+        if quantity > 0 then
+          record(Fill(order.coin, order.side, at, order.price, quantity))
+          // Prop holds only longs, so every sell that fills reduces.
+          if order.side == Side.Sell then reducedAt = Some(monotonic())
+        text
   def preview(intent: OrderIntent, terms: TradeTerms): Either[String, OrderPlan] = synchronized {
     if closed.get() then Left("Prop worker is closed")
     else if pending.get() then Left("Wait for the pending prop order")
     else
       val account = ledger.account
       val position = held(account)
+      val reserved = Trading.reserved(position, resting(account).filter(_.coin == coin))
       val result = block match
         case Some(reason)                                      => Left(reason)
         case None if intent.side == Side.Sell && position <= 0 => Left("No " + coin + " to sell")
-        case None                                              =>
+        case None if intent.price.nonEmpty && account.resting.size >= Trading.restingCap =>
+          Left(PropLedger.capText)
+        case None =>
           Trading
             .plan(
               coin,
@@ -193,22 +270,34 @@ final class PropWorker(
               intent,
               terms.sizes,
               1,
-              terms.slippage
+              terms.slippage,
+              reserved
             )
             .map(plan =>
               if intent.side == Side.Sell then plan.copy(quantity = plan.quantity.min(position))
               else plan
             )
-            .flatMap(plan =>
-              Trading.fillAtLimit(
-                plan,
-                rules.get,
-                book.get._1,
-                touch.get.quote(intent.side),
-                position
-              )
+            // For a short time after a fill reduced the position, only reducing plans pass.
+            .filterOrElse(
+              plan =>
+                plan.reduceOnly ||
+                  reducedAt.forall(at => monotonic() - at >= TradingWorker.openingPauseMs),
+              TradingWorker.openingPausedMessage
             )
-            .flatMap(plan => ledger.check(plan, account).map(_ => plan))
+            // A posted order has no depth inside its price. It rests if the cash holds it.
+            .flatMap(plan =>
+              if plan.post then ledger.checkResting(order(plan, "", 0L), account).map(_ => plan)
+              else
+                Trading
+                  .fillAtLimit(
+                    plan,
+                    rules.get,
+                    book.get._1,
+                    touch.get.quote(intent.side),
+                    position
+                  )
+                  .flatMap(plan => ledger.check(plan, account).map(_ => plan))
+            )
       prepared =
         result.toOption.map(plan => Prepared(intent, plan, terms, rules.get, account.count, wall()))
       result
@@ -217,7 +306,7 @@ final class PropWorker(
     def validRequest: Boolean =
       review.plan.coin == coin && review.createdAt <= wall() && wall() < review.expiresAt &&
         BigInt(review.expiresAt) - BigInt(review.createdAt) <= 30000L &&
-        review.leverage.isEmpty && review.marginMode.isEmpty
+        review.leverage.forall(_ == 1) && review.marginMode.isEmpty
     def samePreparation: Boolean = prepared.exists(p =>
       p.intent == review.intent && p.plan == review.plan && p.terms == review.terms &&
         rules.contains(p.rules) &&
@@ -226,7 +315,22 @@ final class PropWorker(
     )
     !closed.get() && ready && validRequest && samePreparation
   def submitReviewed(review: OrderReview): Boolean = synchronized {
-    if !matches(review) || !pending.compareAndSet(false, true) then false
+    if !matches(review) || pending.get() then false
+    else if review.plan.post then
+      // A posted order rests at once. Nothing waits for its fill. A price the touch reached
+      // since the review would take liquidity, so it is refused as the venue refuses it.
+      val id = "0x" + java.util.UUID.randomUUID().toString.replace("-", "")
+      val plan = review.plan
+      val result = touch
+        .flatMap(t => Trading.crossing(plan.side, plan.limit, t.bidPrice, t.askPrice))
+        .toLeft(())
+        .flatMap(_ => ledger.rest(order(plan, id, wall()), prepared.get.accountCount))
+      lastPlan = Some(review.plan)
+      prepared = None
+      outcome = Some(result.fold(identity, identity))
+      outcomeId = OrderUpdates.nextId()
+      true
+    else if !pending.compareAndSet(false, true) then false
     else
       lastPlan = Some(review.plan)
       outcome = None
@@ -237,6 +341,16 @@ final class PropWorker(
       else
         pending.set(false)
         false
+  }
+  // Prop has no venue to ask, so a cancel removes the orders at once.
+  def cancel(ids: Vector[String]): Boolean = synchronized {
+    if closed.get() || pending.get() then false
+    else
+      val texts = ids.distinct.flatMap(id => ledger.cancel(id).toOption)
+      if texts.nonEmpty then
+        outcome = Some(texts.mkString("\n"))
+        outcomeId = OrderUpdates.nextId()
+      texts.nonEmpty
   }
   def start(): Unit =
     if started.compareAndSet(false, true) then
@@ -284,13 +398,22 @@ final class PropWorker(
             }
             fill.flatMap { (plan, count) =>
               synchronized { stage = "saving" }
-              ledger.fill(plan, wall(), Some(count))
+              val at = wall()
+              ledger.fill(plan, at, Some(count)).map(text => (text, plan, at))
             }
           catch
             case scala.util.control.NonFatal(_) => Left("Prop order failed. Review before retry")
           synchronized {
+            result.foreach { (_, plan, at) =>
+              plan.average.foreach(price =>
+                record(Fill(plan.coin, plan.side, at, price, plan.estimatedQuantity))
+              )
+              // A CLOSE pauses opening, as in live. Any other immediate sell does not, so its
+              // proceeds can fund the next buy at once, as before resting orders.
+              if review.intent.kind == OrderKind.Close then reducedAt = Some(monotonic())
+            }
             prepared = None
-            outcome = Some(result.fold(identity, identity))
+            outcome = Some(result.fold(identity, _._1))
             outcomeId = OrderUpdates.nextId()
             pending.set(false)
           }
