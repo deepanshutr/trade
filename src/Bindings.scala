@@ -10,7 +10,7 @@ import scala.util.Try
 // market prompt text are fixed.
 enum Bind:
   case Quit, Prop, Live, Market, Chart, Sound, LongSmall, LongBig, ShortSmall, ShortBig, Close,
-    Settings
+    Settings, OrderType, Orders
 
   private def words: Vector[String] = toString.split("(?=[A-Z])").toVector
   def label: String = (words.head +: words.tail.map(_.toLowerCase)).mkString(" ")
@@ -33,6 +33,7 @@ object KeyGroup:
     19 -> "Control S is flow control",
     26 -> "Control Z stops programs",
     27 -> "Esc cancels",
+    97 -> "a places at the selected order's price",
     28 -> "Control backslash quits programs",
     127 -> "Delete erases in the market prompt"
   )
@@ -113,7 +114,7 @@ object KeyGroup:
     case bytes if bytes.headOption.contains(27) =>
       if !escapeGroup(bytes) then Some(notKey)
       else if bytes.size == 3 && bytes(2) >= 65 && bytes(2) <= 68 then
-        Some("The arrows move the chart")
+        Some("The arrows move the chart and the ticket price")
       else if pasteMarkers.contains(bytes) then Some("Paste markers are not keys")
       else if bytes(1) == 91 && (bytes(2) == 60 || bytes.size == 3 && mouseOpeners(bytes(2))) then
         Some("Mouse reports are not keys")
@@ -183,7 +184,7 @@ object Bindings:
 
   val defaults: Bindings = Bindings(
     Bind.values
-      .zip("qplmcv1234xs")
+      .zip("qplmcv1234xsto")
       .map((action, key) => action -> Binding(Vector(KeyGroup(Vector(key.toInt)))))
       .toMap
   )
@@ -201,6 +202,8 @@ object Bindings:
     case Bind.ShortBig   => Command.PlaceOrder(Trading.action(3))
     case Bind.Close      => Command.Close
     case Bind.Settings   => Command.Settings
+    case Bind.OrderType  => Command.OrderType
+    case Bind.Orders     => Command.Orders
 
   def path(home: Path): Path = home.resolve(".config/desk/bindings.json")
 
@@ -238,6 +241,16 @@ object Bindings:
         })
       )
 
+  // Actions added after version 1 files were written. A saved file that has no entry for one
+  // and already uses its default key keeps that key for its owner. The action stays unbound.
+  private val added = Vector(Bind.OrderType, Bind.Orders)
+
+  private def withoutTaken(all: Map[Bind, Binding], stored: Set[Bind]): Map[Bind, Binding] =
+    added.filterNot(stored).foldLeft(all) { (found, action) =>
+      val others = Bind.values.toVector.filter(_ != action).flatMap(a => found.get(a).map(a -> _))
+      if found.get(action).exists(problem(_, others).nonEmpty) then found - action else found
+    }
+
   private def parse(text: String): Either[String, Bindings] =
     Try(ujson.read(text)).toOption
       .toRight("the file is not JSON")
@@ -249,16 +262,20 @@ object Bindings:
           .toRight("the file needs version 1 and bindings")
       }
       .flatMap { entries =>
-        entries.toVector.foldLeft[Either[String, Map[Bind, Binding]]](Right(defaults.map)) {
-          case (all, (field, value)) =>
-            all.flatMap { found =>
-              Bind.values.find(_.field == field).toRight("unknown action").flatMap { action =>
-                keys(value)
-                  .toRight(s"$field must be a list of one or two keys")
-                  .map(binding => found.updated(action, binding))
+        entries.toVector
+          .foldLeft[Either[String, Map[Bind, Binding]]](Right(defaults.map)) {
+            case (all, (field, value)) =>
+              all.flatMap { found =>
+                Bind.values.find(_.field == field).toRight("unknown action").flatMap { action =>
+                  keys(value)
+                    .toRight(s"$field must be a list of one or two keys")
+                    .map(binding => found.updated(action, binding))
+                }
               }
-            }
-        }
+          }
+          .map(found =>
+            withoutTaken(found, Bind.values.filter(a => entries.contains(a.field)).toSet)
+          )
       }
       .flatMap { all =>
         val ordered = Bind.values.toVector.flatMap(action => all.get(action).map(action -> _))

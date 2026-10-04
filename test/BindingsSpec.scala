@@ -20,7 +20,7 @@ class BindingsSpec extends TempDirectorySuite:
   private val notKey = Some("That is not one key")
   private val dead = Some("That key needs a second press on this layout")
 
-  test("the defaults are today's keys plus x for close and s for settings") {
+  test("the defaults are today's keys plus x, s, t and o") {
     val expected = Vector(
       Bind.Quit -> "q",
       Bind.Prop -> "p",
@@ -33,7 +33,9 @@ class BindingsSpec extends TempDirectorySuite:
       Bind.ShortSmall -> "3",
       Bind.ShortBig -> "4",
       Bind.Close -> "x",
-      Bind.Settings -> "s"
+      Bind.Settings -> "s",
+      Bind.OrderType -> "t",
+      Bind.Orders -> "o"
     )
     assertEquals(Bind.values.toVector, expected.map(_._1))
     assertEquals(Bindings.defaults.map, expected.map((action, text) => action -> one(text)).toMap)
@@ -52,7 +54,9 @@ class BindingsSpec extends TempDirectorySuite:
       Bind.ShortSmall -> Command.PlaceOrder(OrderIntent(Side.Sell, OrderKind.Hard)),
       Bind.ShortBig -> Command.PlaceOrder(OrderIntent(Side.Sell, OrderKind.Hard, big = true)),
       Bind.Close -> Command.Close,
-      Bind.Settings -> Command.Settings
+      Bind.Settings -> Command.Settings,
+      Bind.OrderType -> Command.OrderType,
+      Bind.Orders -> Command.Orders
     )
     for (action, command) <- commands do
       assertEquals(Bindings.command(action), command)
@@ -60,7 +64,7 @@ class BindingsSpec extends TempDirectorySuite:
         Bindings.defaults.command(Bindings.defaults.map(action).keys.head),
         Some(command)
       )
-    for text <- Vector("5", "6", "7", "8", "9", "0", "i", "Q") do
+    for text <- Vector("5", "6", "7", "8", "9", "0", "i", "Q", "a") do
       assertEquals(Bindings.defaults.command(key(text)), None)
   }
 
@@ -79,7 +83,9 @@ class BindingsSpec extends TempDirectorySuite:
         "Short small",
         "Short big",
         "Close",
-        "Settings"
+        "Settings",
+        "Order type",
+        "Orders"
       )
     )
     assertEquals(
@@ -96,7 +102,9 @@ class BindingsSpec extends TempDirectorySuite:
         "shortSmall",
         "shortBig",
         "close",
-        "settings"
+        "settings",
+        "orderType",
+        "orders"
       )
     )
   }
@@ -150,6 +158,7 @@ class BindingsSpec extends TempDirectorySuite:
       26 -> "Control Z stops programs",
       27 -> "Esc cancels",
       28 -> "Control backslash quits programs",
+      97 -> "a places at the selected order's price",
       127 -> "Delete erases in the market prompt"
     )
     for byte <- 0 to 255 do
@@ -160,7 +169,7 @@ class BindingsSpec extends TempDirectorySuite:
   }
 
   test("every reserved group is refused with its reason") {
-    val arrows = Some("The arrows move the chart")
+    val arrows = Some("The arrows move the chart and the ticket price")
     val mouse = Some("Mouse reports are not keys")
     val cases = Vector(
       "\u001b[A" -> arrows,
@@ -327,7 +336,7 @@ class BindingsSpec extends TempDirectorySuite:
     assertEquals(d.updated(Bind.Quit, Binding(Vector(bytes(3)))), Left("Control C quits Desk"))
     assertEquals(
       d.updated(Bind.Quit, Binding(Vector(key("g"), key("\u001b[A")))),
-      Left("The arrows move the chart")
+      Left("The arrows move the chart and the ticket price")
     )
     assertEquals(d.updated(Bind.Quit, one("é")), Left(dead.get))
     assertEquals(
@@ -370,6 +379,61 @@ class BindingsSpec extends TempDirectorySuite:
     assertEquals(example.map(_.map(Bind.Settings)), Right(one("\u001bOP")))
   }
 
+  test("a file without the new fields loads with t and o at their defaults") {
+    val loaded = Bindings.load(put(path(), file("\"quit\":[\"Q\"]"))).toOption.get
+    assertEquals(loaded.map(Bind.OrderType), one("t"))
+    assertEquals(loaded.map(Bind.Orders), one("o"))
+    assertEquals(loaded.command(key("t")), Some(Command.OrderType))
+    assertEquals(loaded.command(key("o")), Some(Command.Orders))
+  }
+
+  test("a is reserved so no binding can take it") {
+    assertEquals(
+      KeyGroup.refused(bytes(97)),
+      Some("a places at the selected order's price")
+    )
+    assert(Bindings.defaults.updated(Bind.Quit, one("a")).isLeft)
+  }
+
+  test("an owner binding on t leaves order type unbound and the file loads") {
+    for field <- Vector("quit", "close", "settings") do
+      val loaded = Bindings.load(put(path(), file(s"\"$field\":[\"t\"]")))
+      val bindings = loaded.toOption.get
+      val action = Bind.values.find(_.field == field).get
+      assertEquals(bindings.map(action), one("t"))
+      assertEquals(bindings.map.get(Bind.OrderType), None)
+      assertEquals(bindings.map(Bind.Orders), one("o"))
+      assertEquals(bindings.command(key("t")), Some(Bindings.command(action)))
+  }
+
+  test("an owner binding on o leaves orders unbound and the file loads") {
+    val loaded = Bindings.load(put(path(), file("\"market\":[\"o\"]"))).toOption.get
+    assertEquals(loaded.map(Bind.Market), one("o"))
+    assertEquals(loaded.map.get(Bind.Orders), None)
+    assertEquals(loaded.map(Bind.OrderType), one("t"))
+    assertEquals(loaded.command(key("o")), Some(Command.StartMarketPrompt))
+  }
+
+  test("a sequence starting with t or o also leaves the new action unbound") {
+    val first = Bindings.load(put(path(), file("\"quit\":[\"t\",\"q\"]"))).toOption.get
+    assertEquals(first.map.get(Bind.OrderType), None)
+    val second = Bindings.load(put(path(), file("\"quit\":[\"o\",\"q\"]"))).toOption.get
+    assertEquals(second.map.get(Bind.Orders), None)
+  }
+
+  test("an unbound new action saves and loads back unbound") {
+    val saved = put(path(), file("\"quit\":[\"t\"]"))
+    Files.setPosixFilePermissions(saved.getParent, PosixFilePermissions.fromString("rwx------"))
+    val bindings = Bindings.load(saved).toOption.get
+    Bindings.save(saved, bindings)
+    assertEquals(Bindings.load(saved).map(_.map), Right(bindings.map))
+  }
+
+  test("a clash between two explicit entries still refuses the file") {
+    val loaded = Bindings.load(put(path(), file("\"quit\":[\"t\"],\"orderType\":[\"t\"]")))
+    assert(loaded.isLeft, loaded)
+  }
+
   test("save writes a private file that loads back exactly") {
     val p = path()
     val changed = Bindings.defaults
@@ -408,7 +472,7 @@ class BindingsSpec extends TempDirectorySuite:
   test("a hand edit is refused with the action named") {
     val cases = Vector(
       file("\"close\":[\"\\u0003\"]") -> "close: Control C quits Desk",
-      file("\"close\":[\"\\u001b[A\"]") -> "close: The arrows move the chart",
+      file("\"close\":[\"\\u001b[A\"]") -> "close: The arrows move the chart and the ticket price",
       file("\"close\":[\"g\",\"\\u001b[200~\"]") -> "close: Paste markers are not keys",
       file("\"close\":[\"é\"]") -> "close: That key needs a second press on this layout",
       file("\"close\":[\"qq\"]") -> "close: That is not one key",

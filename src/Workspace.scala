@@ -7,6 +7,21 @@ enum DeskAction:
   case Cancel
   case Mode(name: String)
   case ConfirmMode(name: String)
+  case OrderType
+  case Orders
+  case Place
+
+enum OrderMode:
+  case Market, Limit
+
+final case class Ticket(
+    coin: String,
+    intent: OrderIntent,
+    price: BigDecimal,
+    step: BigDecimal,
+    plan: Option[OrderPlan],
+    notice: Option[String]
+)
 
 final case class OrderReview(
     intent: OrderIntent,
@@ -27,7 +42,10 @@ final case class PanelView(
     actionNumber: Long = 0L,
     bigOrder: Boolean = false,
     // Labels show the key that presses each control.
-    bindings: Bindings = Bindings.defaults
+    bindings: Bindings = Bindings.defaults,
+    orderMode: OrderMode = OrderMode.Market,
+    ticket: Option[Ticket] = None,
+    focus: Option[Int] = None
 )
 final case class DeskButton(
     label: String,
