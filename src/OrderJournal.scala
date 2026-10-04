@@ -176,7 +176,8 @@ final class OrderJournal private (
       Math.addExact(now, 5000L),
       now,
       Some(owner),
-      plan.reduceOnly
+      plan.reduceOnly,
+      plan.post
     )
     persist(nonce, Some(p))
     p

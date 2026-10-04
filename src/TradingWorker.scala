@@ -840,8 +840,7 @@ final class TradingWorker private[desk] (
     }
     val request = Try {
       beforeOrderSign()
-      // The journal keeps no post flag for the order in flight, so the plan gives it.
-      signed(Exchange.action(p.copy(post = press.plan.post)), p.nonce, Some(p.expiresAfter))
+      signed(Exchange.action(p), p.nonce, Some(p.expiresAfter))
     }
     val canSend = synchronized {
       !disabled.get() && !closed

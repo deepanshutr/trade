@@ -436,6 +436,63 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     }
   }
 
+  test("a reserved limit order is saved with its post flag and reloads with it") {
+    val directory = tempDirectory("desk-post-flag")
+    val identity = "mainnet-" + "1" * 40
+    val file = directory.resolve(identity + ".json")
+    def plan(post: Boolean): OrderPlan = OrderPlan(
+      "XMR",
+      0,
+      Side.Buy,
+      OrderKind.Hard,
+      BigDecimal("0.183"),
+      BigDecimal("546.09"),
+      BigDecimal("546.09"),
+      BigDecimal(0),
+      BigDecimal(0),
+      None,
+      BigDecimal(0),
+      false,
+      post = post
+    )
+    val first = OrderJournal.open(directory, identity)
+    val saved =
+      try first.reserve(plan(post = true), owner, 10000L)
+      finally first.close()
+    assert(saved.post)
+    assertEquals(
+      ujson.read(java.nio.file.Files.readString(file))("pending")("post"),
+      ujson.Bool(true)
+    )
+    val second = OrderJournal.open(directory, identity)
+    try
+      assertEquals(second.pending.map(_.post), Some(true))
+      assert(second.rest(saved.id, 77738308L).post)
+    finally second.close()
+    val third = OrderJournal.open(directory, identity)
+    try
+      assertEquals(third.resting.map(_.post), Vector(true))
+      third.settle(saved.id)
+      val market = third.reserve(plan(post = false), owner, 20000L)
+      assert(!market.post)
+      assert(!ujson.read(java.nio.file.Files.readString(file))("pending").obj.contains("post"))
+    finally third.close()
+  }
+
+  test("a limit press is journalled as posted while in flight and after it rests") {
+    using(new Fixture()) { f =>
+      f.ready()
+      val hold = new Hold
+      f.postHold.set(hold)
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      hold.await()
+      assertEquals(f.journal.pending.map(_.post), Some(true))
+      hold.open()
+      Wait.until("order did not rest")(f.resting.size == 1)
+      assert(f.resting.head.post)
+    }
+  }
+
   test("a market press is sent immediate and its fill is marked from the reply") {
     using(new Fixture()) { f =>
       f.ready()
