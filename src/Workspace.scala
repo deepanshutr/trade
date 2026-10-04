@@ -239,16 +239,15 @@ object Workspace:
       val tradeTop = rows - 15
       val warnings = (if logsUnavailable then " !logs" else "") +
         (if orderResultsUnavailable then " !results" else "")
+      // The band stays fifteen rows until the panel moves. The price rows are tradeTop - 10, and
+      // the rows the chart block leaves above the band are blank.
       val marketFrame = Screen.renderMarket(
         s,
-        chartWidth,
-        priceRows = (tradeTop - 8).min(
-          tradeTop - 3 - Layout.referenceRows * State.refCoins.distinct.count(_ != s.coin)
-        ),
-        now = now,
-        zone = zone,
-        style = style,
-        portfolio = view.portfolio,
+        now,
+        zone,
+        style,
+        Layout.regions(cols, rows).copy(priceRows = tradeTop - 10),
+        AxisDecor.plain,
         headerWidth = Some(chartWidth - warnings.length)
       )
       val gauges = indicatorRows(s, now, (leftWidth - 1) / 2, style).map(Chart.fit(_, leftWidth))

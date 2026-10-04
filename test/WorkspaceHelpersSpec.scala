@@ -39,18 +39,28 @@ class WorkspaceHelpersSpec extends munit.FunSuite:
   }
 
   test("workspace frame bytes stay fixed for compact display fixtures") {
-    val lines = for
+    val frames = for
       coin <- Vector("XMR", "BTC", "PAXG")
       mode <- ChartMode.values.toVector
       style <- Vector(Style.mono, Style.colour)
       (cols, rows) <- CompactDisplayFixtures.sizes
-      line <- CompactDisplayFixtures
+    yield (
+      rows,
+      CompactDisplayFixtures
         .draw(
           CompactDisplayFixtures.snapshot(coin, mode, cols, rows),
           CompactDisplayFixtures.panel(coin),
           style
         )
         .lines
-    yield line
-    assertEquals(digest(lines), "6955154499f4d7643110445073671f84867d7e2ffc0d782f5afc1bf21dc27652")
+    )
+    assertEquals(
+      digest(frames.flatMap(_._2)),
+      "4b9c2b1cddb4c1f854fdcfc4520ffd1121e2e6030163642ac5a05c40f663b41c"
+    )
+    // The band rows from tradeTop down hash as they did before the chart block changed.
+    assertEquals(
+      digest(frames.flatMap((rows, lines) => lines.drop(rows - 15))),
+      "edf4e1a9bad4efb82d521023a1ea8fd742a4c249b3f018ec21c657b1412fbd9a"
+    )
   }

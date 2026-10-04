@@ -9,34 +9,7 @@ final case class PortfolioView(
     entry: Option[BigDecimal] = None,
     liquidation: Option[BigDecimal] = None,
     openProfit: Option[BigDecimal] = None
-):
-  def markerRows(axis: Option[Axis], mode: ChartMode, width: Int, style: Style): Map[Int, String] =
-    axis.fold(Map.empty[Int, String]) { a =>
-      val marks = Vector("Entry" -> entry, "Liq" -> liquidation).flatMap { (name, value) =>
-        value.filter(_ > 0).map { price =>
-          val px = price.toDouble
-          val row = if px > a.hi then 0
-          else if px < a.lo then a.rows - 1
-          else if mode == ChartMode.Line then a.dot(px) / 4
-          else a.row(px)
-          val pointer = if px > a.hi then "↑" else if px < a.lo then "↓" else ""
-          (row, name, price, pointer)
-        }
-      }
-      marks.groupBy(_._1).map { (row, here) =>
-        val partWidth = (width - 1 - (here.size - 1) * 3) / here.size
-        val label = here
-          .map { (_, name, price, pointer) =>
-            val prefix = pointer + name + " "
-            prefix + Trading.display(price, partWidth - prefix.length)
-          }
-          .mkString(" / ")
-        row -> style.wrap(
-          if here.exists(_._2 == "Liq") then style.ask else style.bitcoin,
-          Chart.fit(label, width - 1) + " "
-        )
-      }
-    }
+)
 
 object PortfolioView:
   def prop(account: PropAccount, coin: String, mark: Option[BigDecimal]): PortfolioView =
