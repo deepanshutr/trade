@@ -51,11 +51,14 @@ class LimitControllerSpec extends munit.FunSuite:
     DeskAction.Orders,
     DeskAction.Place
   )
-  private val modes: Vector[DeskAction] = Vector(
+  // The buttons every frame carries, side by side on row 0.
+  private val clicks: Vector[DeskAction] = Vector(
     DeskAction.Mode("PROP"),
     DeskAction.Mode("LIVE"),
     DeskAction.ConfirmMode("PROP"),
-    DeskAction.ConfirmMode("LIVE")
+    DeskAction.ConfirmMode("LIVE"),
+    DeskAction.OrderSize(false),
+    DeskAction.OrderSize(true)
   )
 
   // The axis as a tall screen draws it, every mark on its own row, from 540 to 560 on 60 rows.
@@ -79,6 +82,7 @@ class LimitControllerSpec extends munit.FunSuite:
     var accept = true
     var refusal = Option.empty[String]
     var reshape: OrderPlan => OrderPlan = identity
+    var switched = Vector.empty[String]
     val controller = new DeskController(
       PanelView(mode = mode, bigOrder = big),
       () => now,
@@ -104,7 +108,7 @@ class LimitControllerSpec extends munit.FunSuite:
           )
       },
       review => { sent :+= review; accept },
-      _ => Right(()),
+      name => { switched :+= name; Right(()) },
       cancel = ids => { cancelled :+= ids; true }
     )
     private def buttons(actions: Vector[DeskAction], row: Int): Vector[DeskButton] =
@@ -118,7 +122,7 @@ class LimitControllerSpec extends munit.FunSuite:
     ): WorkspaceFrame =
       WorkspaceFrame(
         Vector.empty,
-        buttons(modes, 0),
+        buttons(clicks, 0),
         snapshot.coin,
         120,
         40,
@@ -128,7 +132,9 @@ class LimitControllerSpec extends munit.FunSuite:
         axis = axis,
         focus = focus,
         orderMode = controller.panel.orderMode,
-        ticket = controller.panel.ticket
+        ticket = controller.panel.ticket,
+        bigOrder = controller.panel.bigOrder,
+        modeReview = controller.panel.modeReview
       )
     // As the render pass does: the controller sees the view, then the frame drawn from it.
     def frame(
@@ -141,6 +147,10 @@ class LimitControllerSpec extends munit.FunSuite:
       controller.publish(build(shortcuts, disabled, axis, focus))
     def key(command: Command): Boolean =
       controller.handle(command, snapshot, view, (120, 40), false)
+    def click(action: DeskAction): Unit =
+      val x = clicks.indexOf(action) * 12
+      key(Command.PointerPress(x, 0, 0))
+      key(Command.Pointer(x, 0, 0))
     def panel: PanelView = controller.panel
     def notice: Option[String] = panel.actionNotice
     def ticket: Option[Ticket] = panel.ticket
@@ -264,6 +274,40 @@ class LimitControllerSpec extends munit.FunSuite:
     g.key(Command.PlaceOrder(buy))
     assertEquals(g.sent.map(_.intent), Vector(buy))
     assertEquals(g.ticket, None)
+  }
+
+  test("a press waits for a frame drawn with the size as it is now") {
+    val large = buy.copy(big = true)
+    val f = new Fixture
+    f.frame()
+    // A frame drawn with $500 chosen and published after $1000 was chosen.
+    val before = f.build()
+    f.click(DeskAction.OrderSize(true))
+    assertEquals(f.panel.bigOrder, true)
+    f.controller.publish(before)
+    f.key(Command.PlaceOrder(buy))
+    f.key(Command.PlaceOrder(large))
+    f.nothingSent()
+    assertEquals((f.notice, f.panel.actionNumber), (None, 0L), "the press waits, not refused")
+    f.frame(trade + DeskAction.Prepare(large))
+    f.key(Command.PlaceOrder(large))
+    assertEquals(f.sent.map(_.intent), Vector(large))
+  }
+
+  test("Enter waits for a frame drawn with the mode review as it is now") {
+    val f = new Fixture
+    f.frame()
+    // A frame drawn with no review and published after p opened one.
+    val before = f.build()
+    f.key(Command.Mode("PROP"))
+    assertEquals(f.panel.modeReview, Some("PROP"))
+    f.controller.publish(before)
+    f.key(Command.Confirm)
+    assertEquals((f.switched, f.panel.mode), (Vector.empty, "LIVE"))
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals((f.switched, f.panel.mode), (Vector("PROP"), "PROP"))
+    f.nothingSent()
   }
 
   test("only a sized press opens a ticket or sends") {

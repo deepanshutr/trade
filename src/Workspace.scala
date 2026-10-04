@@ -70,9 +70,12 @@ final case class WorkspaceFrame(
     axis: Option[Placed] = None,
     // The axis cursor this frame drew, from the panel it drew.
     focus: Option[Int] = None,
-    // The order type and the ticket this frame drew, from the panel it drew.
+    // The order type, the ticket, the size and the mode review this frame drew, from the panel
+    // it drew.
     orderMode: OrderMode = OrderMode.Market,
-    ticket: Option[Ticket] = None
+    ticket: Option[Ticket] = None,
+    bigOrder: Boolean = false,
+    modeReview: Option[String] = None
 ):
   def controls: Vector[DeskButton] = buttons ++ disabledButtons
 
@@ -453,5 +456,8 @@ object Workspace:
         shortcuts = active.collect {
           case b if b.action.isInstanceOf[DeskAction.Prepare] || b.action == DeskAction.Close =>
             b.action
-        }.toSet
+        }.toSet,
+        // This frame draws the size choice and the mode review from the panel, so it records them.
+        bigOrder = panel.bigOrder,
+        modeReview = panel.modeReview
       )

@@ -167,6 +167,8 @@ final class DeskController(
       ticket = Some(Ticket(coin, intent.copy(price = Some(price)), price, step, None, None))
     )
     point(Vector.empty, None)
+    // The ticket changes which controls the panel offers, so the frame without it is dropped.
+    shown = None
 
   def handle(
       command: Command,
@@ -234,13 +236,16 @@ final class DeskController(
           current = current.copy(ticket = Some(next))
         case None => addMessage("order", "no further step")
     def act(action: DeskAction, shortcut: Boolean = false): Unit =
-      // A press acts only through a frame drawn with the order type as it is now, and Place only
-      // through a frame drawn with the ticket as it is now. Otherwise they wait for that frame.
+      // A press acts only through a frame drawn with the order type and size as they are now,
+      // Place only through one drawn with the ticket as it is now, and a confirm only through one
+      // drawn with the same mode review. Otherwise they wait for that frame.
       val seen = available.filter(f =>
         action match
-          case DeskAction.Prepare(_) => f.orderMode == current.orderMode
-          case DeskAction.Place      => f.ticket == current.ticket
-          case _                     => true
+          case DeskAction.Prepare(_) =>
+            f.orderMode == current.orderMode && f.bigOrder == current.bigOrder
+          case DeskAction.Place          => f.ticket == current.ticket
+          case DeskAction.ConfirmMode(_) => f.modeReview == current.modeReview
+          case _                         => true
       )
       val visible = seen.exists(_.buttons.exists(_.action == action))
       val fromKey = shortcut && seen.exists(_.shortcuts.contains(action))
@@ -328,7 +333,6 @@ final class DeskController(
           case DeskAction.Orders if current.mode != "VIEW"                              => focus()
           case DeskAction.OrderSize(big) if !view.pending && current.modeReview.isEmpty =>
             current = current.copy(bigOrder = big, actionNotice = None)
-            shown = None
           // A mode review takes Enter and Esc, so a ticket or a cursor does not stay behind it.
           case DeskAction.Mode(name) if !view.pending && name != current.mode =>
             current = current.copy(modeReview = Some(name), ticket = None)
