@@ -78,23 +78,27 @@ object OrdersAxis:
         val shown = (up :+ centre) ++ down
         Placed(shown.filter(m => m.row >= 0 && m.row < rows).sortBy(_.row), above, below)
 
-  // Places the marks nearest first, each on its true row or next to the mark placed before it.
-  // A mark with no row left on its side is counted, and so is every mark after it.
+  // Places the marks, nearest first, on one side of row `from`. The side keeps as many marks as
+  // it has rows and counts the rest. Distances count rows outward from `from`, so one rule serves
+  // both sides. Going out, each mark takes its true row or one beyond the mark before it. Coming
+  // back from the farthest, each mark stays inside the edge and one nearer than the mark after it.
   private def pass(
       marks: Vector[AxisMark],
       from: Int,
       up: Boolean,
       rows: Int
   ): (Vector[AxisMark], Int) =
-    val (placed, _) = marks.foldLeft((Vector.empty[AxisMark], from)) { (done, m) =>
-      val (shown, previous) = done
-      val row = if up then m.trueRow.min(previous - 1) else m.trueRow.max(previous + 1)
-      if row < 0 || row >= rows then done
-      else
-        val tie = if row == m.trueRow then ' ' else if row > m.trueRow then ',' else '\''
-        (shown :+ m.copy(row = row, tie = tie), row)
+    val step = if up then -1 else 1
+    val room = if up then from else rows - 1 - from
+    val kept = marks.take(room.max(0))
+    val outward = kept.scanLeft(0)((previous, m) => ((m.trueRow - from) * step).max(previous + 1))
+    val inward = outward.tail.scanRight(room + 1)((distance, next) => distance.min(next - 1))
+    val placed = kept.zip(inward).map { (m, distance) =>
+      val row = from + step * distance
+      val tie = if row == m.trueRow then ' ' else if row > m.trueRow then ',' else '\''
+      m.copy(row = row, tie = tie)
     }
-    (placed, marks.size - placed.size)
+    (placed, marks.size - kept.size)
 
   def lines(
       placed: Placed,

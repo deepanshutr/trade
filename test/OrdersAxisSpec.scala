@@ -102,18 +102,79 @@ class OrdersAxisSpec extends munit.FunSuite:
     assertEquals((placed.above, placed.below), (0, 2))
   }
 
-  test("without a current price the marks go down from the top in one pass") {
+  test("two marks on the top row both show while rows above the current price are free") {
+    val sells =
+      Vector(order("s1", Side.Sell, "551.90", "0.1"), order("s2", Side.Sell, "552.00", "0.1"))
+    val placed = place(resting = sells, ticket = None)
+    assertEquals(
+      seen(placed),
+      Vector(
+        (d("552.00"), AxisKind.Sell, 0, ' '),
+        (d("551.90"), AxisKind.Sell, 1, ','),
+        (d("546.09"), AxisKind.Current, 6, '>')
+      )
+    )
+    assertEquals(placed.marks.map(_.trueRow), Vector(0, 0, 6))
+    assertEquals((placed.above, placed.below), (0, 0))
+  }
+
+  test("two marks on the bottom row both show while rows below the current price are free") {
+    val buys =
+      Vector(order("b1", Side.Buy, "544.10", "0.1"), order("b2", Side.Buy, "544.00", "0.1"))
+    val placed = place(resting = buys, ticket = None)
+    assertEquals(
+      seen(placed),
+      Vector(
+        (d("546.09"), AxisKind.Current, 6, '>'),
+        (d("544.10"), AxisKind.Buy, 7, '\''),
+        (d("544.00"), AxisKind.Buy, 8, ' ')
+      )
+    )
+    assertEquals(placed.marks.map(_.trueRow), Vector(6, 8, 8))
+    assertEquals((placed.above, placed.below), (0, 0))
+  }
+
+  test("more marks than rows on one side leave off the farthest and settle the rest inward") {
+    val sells =
+      Vector("546.10", "546.11", "546.12", "546.13", "551.80", "551.90", "552.00").zipWithIndex
+        .map((p, i) => order(s"s$i", Side.Sell, p, "0.1"))
+    val placed = place(resting = sells, ticket = None)
+    assertEquals(
+      seen(placed),
+      Vector(
+        (d("551.90"), AxisKind.Sell, 0, ' '),
+        (d("551.80"), AxisKind.Sell, 1, ','),
+        (d("546.13"), AxisKind.Sell, 2, '\''),
+        (d("546.12"), AxisKind.Sell, 3, '\''),
+        (d("546.11"), AxisKind.Sell, 4, '\''),
+        (d("546.10"), AxisKind.Sell, 5, '\''),
+        (d("546.09"), AxisKind.Current, 6, '>')
+      )
+    )
+    assertEquals((placed.above, placed.below), (1, 0))
+  }
+
+  test("without a current price the marks go down from the top and settle on the free rows") {
     val placed =
       place(current = None, resting = sample :+ order("b3", Side.Buy, "545.00", "0.1"))
     assertEquals(
       seen(placed),
       Vector(
         (d("552.00"), AxisKind.Sell, 0, ' '),
-        (d("546.10"), AxisKind.Ticket, 6, ' '),
-        (d("546.00"), AxisKind.Buy, 7, ','),
-        (d("545.00"), AxisKind.Buy, 8, ',')
+        (d("546.10"), AxisKind.Ticket, 5, '\''),
+        (d("546.00"), AxisKind.Buy, 6, ' '),
+        (d("545.00"), AxisKind.Buy, 7, ' '),
+        (d("544.00"), AxisKind.Buy, 8, ' ')
       )
     )
+    assertEquals((placed.above, placed.below), (0, 0))
+  }
+
+  test("without a current price more marks than rows leave off the lowest") {
+    val buys = (0 to 9).toVector.map(i => order(s"b$i", Side.Buy, s"544.$i", "0.1"))
+    val placed = place(current = None, resting = buys, ticket = None)
+    assertEquals(placed.marks.map(_.price), (1 to 9).reverse.toVector.map(i => d(s"544.$i")))
+    assertEquals(placed.marks.map(_.row), (0 to 8).toVector)
     assertEquals((placed.above, placed.below), (0, 1))
   }
 
