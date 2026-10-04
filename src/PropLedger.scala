@@ -246,8 +246,6 @@ final class PropLedger private[desk] (
         )
   }
 
-  def fillResting(id: String, at: Long): Either[String, String] = resolve(id, at).map(_._1)
-
   // The order fills whole at its own price with the maker fee. A sell fills only what the
   // position holds. What cannot fill is removed with its reason. The quantity is what filled.
   private[desk] def resolve(id: String, at: Long): Either[String, (String, BigDecimal)] =

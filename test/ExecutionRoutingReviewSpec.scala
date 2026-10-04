@@ -179,9 +179,11 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
         loads.incrementAndGet()
         key.clone()
       ,
+      // Counted once the open holds the lock, so a test that sees the count also sees the lock.
       () =>
+        val opened = OrderJournal.open(directory, config.identity, beforeReplace, afterReplace)
         journalOpens.incrementAndGet()
-        OrderJournal.open(directory, config.identity, beforeReplace, afterReplace)
+        opened
       ,
       () => clock.get(),
       () => clock.get(),
