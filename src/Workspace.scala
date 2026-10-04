@@ -65,7 +65,9 @@ final case class WorkspaceFrame(
     mode: String = "VIEW",
     outlook: Option[OutlookView] = None,
     disabledButtons: Vector[DeskButton] = Vector.empty,
-    shortcuts: Set[DeskAction] = Set.empty
+    shortcuts: Set[DeskAction] = Set.empty,
+    // The orders axis exactly as this frame drew it. Keys on the axis act on these rows.
+    axis: Option[Placed] = None
 ):
   def controls: Vector[DeskButton] = buttons ++ disabledButtons
 

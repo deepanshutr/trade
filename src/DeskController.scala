@@ -16,14 +16,25 @@ final class DeskController(
   private var current = initial
   private var shown = Option.empty[WorkspaceFrame]
   private var pressed = Option.empty[(WorkspaceFrame, DeskButton, Boolean)]
-  // The axis row under the cursor. Keys act on this row, and current.focus is its index among
-  // the rows as drawn, so the cursor stays on its orders when rows above it come or go.
+  // The axis row under the cursor, and current.focus its index among the rows of the frame that
+  // drew it. Until a published frame draws the cursor on that row, moved holds and no key acts on
+  // the row.
   private var cursor = Option.empty[AxisMark]
+  private var moved = false
+  // The orders and entry the axis rows are made of, as last seen.
+  private var made = (Vector.empty[(String, BigDecimal)], Option.empty[BigDecimal])
   private val orderUpdates = new OrderUpdates
   def panel: PanelView = synchronized(current)
+  // The render pass calls this before it draws, so a frame shows the orders seen here. Orders that
+  // change after a frame was drawn hold the axis keys until the next frame.
   def orders(view: TradingView): Unit = synchronized {
     orderUpdates.collect(view)(addMessage("order", _))
-    follow(view)
+    val now = (
+      view.resting.filter(_.coin == view.coin).map(o => (o.id, o.price)),
+      view.position.filter(_ != 0).flatMap(_ => view.portfolio.entry)
+    )
+    if now != made then moved = true
+    made = now
   }
   private def sameControl(
       before: WorkspaceFrame,
@@ -40,6 +51,7 @@ final class DeskController(
       (before, button, valid && sameControl(before, button, frame))
     )
     shown = Some(frame)
+    current.focus.foreach(refocus(frame, _))
   }
   def invalidate(): Unit = synchronized { shown = None }
   // A ticket or a cursor never carries one market's price or row to another.
@@ -99,51 +111,33 @@ final class DeskController(
   private def same(a: AxisMark, b: AxisMark): Boolean =
     a.kind == b.kind && (a.kind == AxisKind.Entry || a.price == b.price)
 
-  // The axis rows of the view's market in the order the axis draws them. There are rows enough
-  // on both sides of the current price that no mark is left off.
-  private def placed(view: TradingView): Placed =
-    val resting = view.resting.filter(_.coin == view.coin)
-    val entry = for
-      size <- view.position.filter(_ != 0)
-      price <- view.portfolio.entry.filter(_ > 0)
-    yield (price, size)
-    val room = resting.size + 2
-    view.bid.zip(view.ask).map((bid, ask) => (bid + ask) / 2) match
-      case Some(mid) =>
-        val at = mid.toDouble
-        OrdersAxis.marks(
-          Some(mid),
-          entry,
-          resting,
-          None,
-          view.leverage,
-          at - 1,
-          at + 1,
-          2 * room + 1
-        )
-      case None => OrdersAxis.marks(None, entry, resting, None, view.leverage, 0, 1, room)
-
-  private def rows(view: TradingView): Vector[AxisMark] = OrdersAxis.selectable(placed(view))
-
-  // A move to another row drops the frame, so no key acts on a row before it is drawn.
+  // A move to another row holds the axis keys until a frame draws it.
   private def point(rows: Vector[AxisMark], at: Option[AxisMark]): Unit =
-    if !cursor.zip(at).exists(same(_, _)) && (cursor.nonEmpty || at.nonEmpty) then shown = None
+    if !cursor.zip(at).exists(same(_, _)) then moved = true
     cursor = at
     current = current.copy(focus = at.map(row => rows.indexWhere(same(_, row))))
 
-  // The cursor keeps its row while rows change. When its row is gone it moves to the nearest
-  // order row, the one above on a tie, and never by itself onto the entry row. Focus drops when
-  // no order row remains.
-  private def follow(view: TradingView): Unit =
-    cursor.foreach { was =>
-      val now = rows(view)
-      val orders = now.filter(isOrder)
-      val next = now
-        .find(same(_, was))
-        .filter(_ => orders.nonEmpty)
-        .orElse(orders.minByOption(row => ((row.price - was.price).abs, row.row)))
-      point(now, next)
-    }
+  // The frame drew the cursor at the focus index. When that row is the cursor's row, the keys may
+  // act on it. Otherwise the cursor follows its row, or moves to the nearest order row, the one
+  // above on a tie and never by itself onto the entry row, and waits for the frame that draws
+  // it there. Focus drops when the frame draws no order row.
+  private def refocus(frame: WorkspaceFrame, focus: Int): Unit =
+    val rows = frame.axis.fold(Vector.empty[AxisMark])(OrdersAxis.selectable)
+    val orders = rows.filter(isOrder)
+    rows.lift(focus).filter(row => orders.nonEmpty && cursor.exists(same(_, row))) match
+      case Some(row) =>
+        cursor = Some(row)
+        moved = false
+      case None =>
+        val next = cursor
+          .flatMap(was =>
+            rows
+              .find(same(_, was))
+              .orElse(orders.minByOption(row => ((row.price - was.price).abs, row.row)))
+          )
+          .filter(_ => orders.nonEmpty)
+        point(rows, next)
+        moved = true
 
   // What a fill of the row's orders would do to the position. A flip names the money that
   // would open the other side.
@@ -190,8 +184,6 @@ final class DeskController(
       size: (Int, Int),
       promptOpen: Boolean
   ): Boolean = synchronized {
-    // The row drawn under the cursor, before this view moves it.
-    val seen = cursor
     orders(view)
     val axis = view.forMarket(snapshot.coin)
     val frame = shown.filter(f =>
@@ -208,6 +200,12 @@ final class DeskController(
         if view.pending then "Order pending"
         else view.block.getOrElse("Not sent: price or account changed")
       )
+    // The axis as the shown frame drew it. Without it the axis keys do nothing, as a press does
+    // without a frame.
+    val drawn = available.flatMap(_.axis)
+    val rows = drawn.fold(Vector.empty[AxisMark])(OrdersAxis.selectable)
+    // The row the shown frame drew under the cursor, once nothing has moved since.
+    val chosen = if moved then None else current.focus.flatMap(rows.lift)
     def toggle(): Unit =
       current = current.copy(orderMode =
         if current.orderMode == OrderMode.Market then OrderMode.Limit else OrderMode.Market
@@ -218,30 +216,29 @@ final class DeskController(
       if current.ticket.isEmpty then
         if current.focus.nonEmpty then point(Vector.empty, None)
         else
-          val all = placed(axis)
-          val now = OrdersAxis.selectable(all)
-          OrdersAxis.start(all).flatMap(now.lift) match
-            case Some(row) =>
-              point(now, Some(row))
-              current = current.copy(actionNotice = effect(axis, row))
-            case None => addMessage("order", s"No orders on ${snapshot.coin}")
+          drawn.foreach { placed =>
+            OrdersAxis.start(placed).flatMap(rows.lift) match
+              case Some(row) =>
+                point(rows, Some(row))
+                current = current.copy(actionNotice = effect(axis, row))
+              case None => addMessage("order", s"No orders on ${snapshot.coin}")
+          }
     def step(by: Int): Unit =
-      val now = rows(axis)
-      current.focus.foreach { i =>
-        val at = now.lift((i + by).max(0).min(now.size - 1))
-        point(now, at)
+      current.focus.filter(_ => rows.nonEmpty).foreach { i =>
+        val at = rows.lift((i + by).max(0).min(rows.size - 1))
+        point(rows, at)
         current = current.copy(actionNotice = at.flatMap(effect(axis, _)))
       }
     def move(ticket: Ticket, delta: BigDecimal, up: Boolean): Unit =
       axis.rules.flatMap(Trading.movePrice(ticket.price, _, delta, up)) match
         case Some(price) =>
-          val moved = ticket.copy(
+          val next = ticket.copy(
             intent = ticket.intent.copy(price = Some(price)),
             price = price,
             step = (price - ticket.price).abs,
             notice = None
           )
-          current = current.copy(ticket = Some(moved))
+          current = current.copy(ticket = Some(next))
           shown = None
         case None => addMessage("order", "no further step")
     def act(action: DeskAction, shortcut: Boolean = false): Unit =
@@ -352,14 +349,17 @@ final class DeskController(
           case DeskAction.Cancel                                           => dismiss()
           case DeskAction.Prepare(_) | DeskAction.Close | DeskAction.Place => refuse()
           case _                                                           => ()
-    // Enter on the row the owner saw. The entry row is key x. An order row cancels the orders
-    // at its side and price, once a frame shows the cursor there.
-    def choose(row: AxisMark): Unit =
-      if row.kind == AxisKind.Entry then act(DeskAction.Close, shortcut = true)
+    // Enter on the row the frame drew under the cursor. The entry row is key x. An order row
+    // cancels exactly the ids the frame drew there. A row whose orders have all gone answers so.
+    def choose(): Unit =
+      val resting = axis.resting.map(_.id).toSet
+      if cursor.exists(row => isOrder(row) && !row.ids.exists(resting)) then
+        addMessage("order", "Nothing to cancel at that price")
       else
-        rows(axis).find(same(_, row)) match
-          case Some(now) => if available.nonEmpty && !cancel(now.ids) then refuse()
-          case None      => addMessage("order", "Nothing to cancel at that price")
+        chosen.foreach { row =>
+          if row.kind == AxisKind.Entry then act(DeskAction.Close, shortcut = true)
+          else if !cancel(row.ids) then refuse()
+        }
     command match
       case Command.Cancel
           if snapshot.marketPending.nonEmpty || promptOpen || snapshot.prompt.nonEmpty =>
@@ -404,9 +404,9 @@ final class DeskController(
           case Command.Orders =>
             focus()
             true
-          // a opens a ticket at the side and price of the order row the owner saw.
+          // a opens a ticket at the side and price of the order row the frame drew under the cursor.
           case Command.Place =>
-            seen
+            chosen
               .filter(row => isOrder(row) && current.ticket.isEmpty)
               .foreach { row =>
                 val side = if row.kind == AxisKind.Buy then Side.Buy else Side.Sell
@@ -419,7 +419,7 @@ final class DeskController(
             else
               current.modeReview match
                 case Some(name) => act(DeskAction.ConfirmMode(name))
-                case None       => seen.foreach(choose)
+                case None       => choose()
             true
           case Command.Cancel =>
             dismiss()

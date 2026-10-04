@@ -1,7 +1,8 @@
 package desk
 
 // The controller in limit mode, driven with hand built frames. A frame carries the actions a
-// drawn screen would offer, so these tests do not depend on how the panel is drawn.
+// drawn screen would offer and the orders axis it drew, so these tests do not depend on how the
+// panel is drawn.
 class LimitControllerSpec extends munit.FunSuite:
   private val now = 1800000000000L
   private val xmr = MarketRules(7, 3, 5)
@@ -57,6 +58,18 @@ class LimitControllerSpec extends munit.FunSuite:
     DeskAction.ConfirmMode("LIVE")
   )
 
+  // The axis as a tall screen draws it, every mark on its own row, from 540 to 560 on 60 rows.
+  private def drawn(view: TradingView): Placed =
+    val entry = for
+      size <- view.position.filter(_ != 0)
+      price <- view.portfolio.entry
+    yield (price, size)
+    val mid = view.bid.zip(view.ask).map((bid, ask) => (bid + ask) / 2)
+    OrdersAxis.marks(mid, entry, view.resting, None, view.leverage, 540, 560, 60)
+
+  private def mark(price: String, kind: AxisKind, row: Int, ids: String*): AxisMark =
+    AxisMark(d(price), None, kind, ids.toVector, row, row, ' ', false)
+
   private class Fixture(mode: String = "LIVE", start: TradingView = ready):
     val snapshot = Snapshot.initial("XMR", now)
     var view = start
@@ -95,10 +108,13 @@ class LimitControllerSpec extends munit.FunSuite:
     )
     private def buttons(actions: Vector[DeskAction], row: Int): Vector[DeskButton] =
       actions.zipWithIndex.map((a, i) => DeskButton(a.toString, a, i * 12, row, 11))
+    // As the render pass does: the controller sees the view, then the frame drawn from it.
     def frame(
         shortcuts: Set[DeskAction] = trade,
-        disabled: Vector[DeskAction] = Vector.empty
+        disabled: Vector[DeskAction] = Vector.empty,
+        axis: Option[Placed] = Some(drawn(view))
     ): Unit =
+      controller.orders(view)
       controller.publish(
         WorkspaceFrame(
           Vector.empty,
@@ -108,7 +124,8 @@ class LimitControllerSpec extends munit.FunSuite:
           40,
           controller.panel.mode,
           disabledButtons = buttons(disabled, 1),
-          shortcuts = shortcuts
+          shortcuts = shortcuts,
+          axis = axis
         )
       )
     def key(command: Command): Boolean =
@@ -317,25 +334,113 @@ class LimitControllerSpec extends munit.FunSuite:
     assertEquals(f.notice, Some("opens"))
   }
 
-  test("every row is reachable without a touch and with the most orders Desk holds") {
-    val f = new Fixture(start = rested.copy(bid = None, ask = None))
+  test("on an axis drawn with marks left off, Enter acts on the ids the frame drew at the cursor") {
+    // Four price rows: the sell at 552.00 is left off above and the buy at 544.50 below.
+    val crowded = Placed(
+      Vector(
+        mark("548.00", AxisKind.Sell, 0, "s2"),
+        mark("546.095", AxisKind.Current, 1),
+        mark("546.05", AxisKind.Entry, 2),
+        mark("546.00", AxisKind.Buy, 3, "b1", "b2")
+      ),
+      1,
+      1
+    )
+    val f = new Fixture(start = rested)
+    f.frame(axis = Some(crowded))
+    f.key(Command.Orders)
+    assertEquals(f.panel.focus, Some(2))
+    f.frame(axis = Some(crowded))
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled, Vector(Vector("b1", "b2")))
+    f.key(Command.ZoomIn)
+    f.key(Command.ZoomIn)
+    assertEquals(f.panel.focus, Some(0))
+    f.frame(axis = Some(crowded))
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled, Vector(Vector("b1", "b2"), Vector("s2")))
+    f.key(Command.Place)
+    assertEquals(f.ticket.map(t => (t.intent.side, t.price)), Some((Side.Sell, d("548.00"))))
+  }
+
+  test("when a price move shifts the drawn rows, Enter waits for the frame that draws the cursor") {
+    // Five price rows. The sell at 552.00 is left off, then after the price moves the buy at
+    // 544.50 is, so the buys at 546.00 go from the third selectable row to the fourth.
+    val before = Placed(
+      Vector(
+        mark("548.00", AxisKind.Sell, 0, "s2"),
+        mark("546.095", AxisKind.Current, 1),
+        mark("546.05", AxisKind.Entry, 2),
+        mark("546.00", AxisKind.Buy, 3, "b1", "b2"),
+        mark("544.50", AxisKind.Buy, 4, "b3")
+      ),
+      1,
+      0
+    )
+    val after = Placed(
+      Vector(
+        mark("552.00", AxisKind.Sell, 0, "s1"),
+        mark("548.00", AxisKind.Sell, 1, "s2"),
+        mark("546.095", AxisKind.Current, 2),
+        mark("546.05", AxisKind.Entry, 3),
+        mark("546.00", AxisKind.Buy, 4, "b1", "b2")
+      ),
+      0,
+      1
+    )
+    val f = new Fixture(start = rested)
+    f.frame(axis = Some(before))
+    f.key(Command.Orders)
+    f.frame(axis = Some(before))
+    assertEquals(f.panel.focus, Some(2))
+    f.frame(axis = Some(after))
+    assertEquals(f.panel.focus, Some(3))
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled, Vector.empty, "that frame drew the entry row under the cursor")
+    f.frame(axis = Some(after))
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled, Vector(Vector("b1", "b2")))
+  }
+
+  test("without a drawn axis the axis keys do nothing") {
+    val f = new Fixture(start = rested)
+    f.frame(axis = None)
+    f.key(Command.Orders)
+    assertEquals((f.panel.focus, f.notice), (None, None))
+    f.controller.invalidate()
+    f.key(Command.Orders)
+    assertEquals((f.panel.focus, f.notice), (None, None))
     f.frame()
     f.key(Command.Orders)
-    assertEquals(f.panel.focus, Some(0))
-    Vector.fill(5)(Command.ZoomOut).foreach(f.key)
+    f.frame()
+    assertEquals(f.panel.focus, Some(3))
+    f.controller.invalidate()
+    f.key(Command.ZoomIn)
+    f.key(Command.Confirm)
+    f.key(Command.Place)
+    assertEquals(f.panel.focus, Some(3))
+    f.frame(axis = None)
+    f.key(Command.Confirm)
+    f.key(Command.Place)
+    assertEquals(f.ticket, None)
+    f.nothingSent()
+  }
+
+  test("after an order is added Enter waits for a frame that draws the cursor on its row") {
+    val f = new Fixture(start = rested)
+    f.frame()
+    f.key(Command.Orders)
+    f.frame()
+    f.view = rested.copy(resting = rested.resting :+ order("s3", Side.Sell, "550.00"))
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled, Vector.empty, "the frame was drawn before the order came")
+    f.frame()
     assertEquals(f.panel.focus, Some(4))
-    val sells = Vector.tabulate(Trading.restingCap)(i => order(s"s$i", Side.Sell, s"${547 + i}.00"))
-    val g = new Fixture(start = rested.copy(resting = sells))
-    g.frame()
-    g.key(Command.Orders)
-    assertEquals(g.panel.focus, Some(Trading.restingCap - 1))
-    Vector.fill(Trading.restingCap + 5)(Command.ZoomIn).foreach(g.key)
-    assertEquals(g.panel.focus, Some(0))
-    g.frame()
-    g.key(Command.Confirm)
-    assertEquals(g.cancelled, Vector(Vector(s"s${Trading.restingCap - 1}")))
-    Vector.fill(Trading.restingCap + 5)(Command.ZoomOut).foreach(g.key)
-    assertEquals(g.panel.focus, Some(Trading.restingCap))
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled, Vector.empty, "that frame drew the cursor on the row above")
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled, Vector(Vector("b1", "b2")))
   }
 
   test("o without order rows answers No orders on XMR and does not focus") {
@@ -388,26 +493,23 @@ class LimitControllerSpec extends munit.FunSuite:
     f.frame()
     f.key(Command.Orders)
     f.view = rested.copy(resting = rested.resting :+ order("s3", Side.Sell, "550.00"))
-    f.controller.orders(f.view)
-    assertEquals(f.panel.focus, Some(4))
     f.frame()
-    f.key(Command.Confirm)
-    assertEquals(f.cancelled, Vector(Vector("b1", "b2")))
+    assertEquals(f.panel.focus, Some(4))
     // The entry at 546.05 is nearer, but the cursor only ever lands on an order row by itself.
     f.view = f.view.copy(resting = f.view.resting.filterNot(_.price == d("546.00")))
-    f.controller.orders(f.view)
+    f.frame()
     assertEquals(f.panel.focus, Some(4))
     f.frame()
     f.key(Command.Confirm)
-    assertEquals(f.cancelled.last, Vector("b3"))
+    assertEquals(f.cancelled, Vector(Vector("b3")))
     // From 544.50, the sell at 548.00 and the buy at 541.00 are equally near.
     f.view = f.view.copy(resting =
       f.view.resting.filter(_.side == Side.Sell) :+ order("b4", Side.Buy, "541.00")
     )
-    f.controller.orders(f.view)
+    f.frame()
     assertEquals(f.panel.focus, Some(2), "the one above on a tie")
     f.view = f.view.copy(resting = Vector.empty)
-    f.controller.orders(f.view)
+    f.frame()
     assertEquals(f.panel.focus, None)
     val g = new Fixture(start = rested)
     g.frame()
@@ -415,7 +517,7 @@ class LimitControllerSpec extends munit.FunSuite:
     g.key(Command.ZoomIn)
     assertEquals(g.panel.focus, Some(2))
     g.view = rested.copy(resting = Vector.empty)
-    g.controller.orders(g.view)
+    g.frame()
     assertEquals(g.panel.focus, None, "the entry row alone keeps no focus")
   }
 
@@ -468,9 +570,13 @@ class LimitControllerSpec extends munit.FunSuite:
     f.frame()
     f.key(Command.Orders)
     f.key(Command.ZoomIn)
+    f.frame()
     f.key(Command.Place)
     assertEquals((f.ticket, f.panel.focus), (None, Some(2)))
     f.key(Command.ZoomIn)
+    f.key(Command.Place)
+    assertEquals(f.ticket, None, "a waits for the frame that draws the cursor")
+    f.frame()
     f.key(Command.Place)
     assertEquals(
       f.ticket,
