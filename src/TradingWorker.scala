@@ -22,7 +22,10 @@ final case class TradingView(
     outcomeId: Long = 0L,
     portfolio: PortfolioView = PortfolioView(),
     blockCode: BlockCode = BlockCode.Blocked,
-    usableMargin: Option[BigDecimal] = None
+    usableMargin: Option[BigDecimal] = None,
+    resting: Vector[RestingOrder] = Vector.empty,
+    fills: Vector[Fill] = Vector.empty,
+    stale: Boolean = false
 ):
   def reference(side: Side): Option[BigDecimal] =
     if side == Side.Buy then ask else bid
