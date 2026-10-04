@@ -484,7 +484,7 @@ object WorkspaceApp:
       // While settings are open nothing is drawn. The fold, the feed and the workers go on.
       val paused = new AtomicBoolean(false)
       val terminal = new Term.Writer()
-      val ownerReading = new AtomicBoolean(false)
+      val ownerReading = new SettingsScreen.ReadGate
       val javaCommand =
         ProcessHandle
           .current()

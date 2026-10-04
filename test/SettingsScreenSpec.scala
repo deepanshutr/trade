@@ -534,6 +534,15 @@ class SettingsScreenSpec extends munit.FunSuite:
     assert(new Fixture().run(enter + "1" + interrupt))
   }
 
+  test("Control C quits at once, whatever input follows it") {
+    // Each script would leave settings with Esc if Control C were only a key.
+    assert(new Fixture().run(interrupt + esc))
+    assert(new Fixture().run(down + interrupt + "r", esc))
+    assert(new Fixture().run(enter + "1" + interrupt + esc, esc))
+    assert(new Fixture().run(quitRow + enter + "g" + interrupt + esc, esc))
+    assert(new Fixture().run(quitRow + enter + interrupt + esc, esc))
+  }
+
   test("a refused bindings write keeps the old bindings") {
     val f = new Fixture
     f.bindWrite = _ => Left("local storage must be private (/somewhere/.config/desk)")
@@ -550,7 +559,7 @@ class SettingsScreenSpec extends munit.FunSuite:
   ) {
     val f = new Fixture
     val reads = new AtomicInteger()
-    val running = new AtomicBoolean(false)
+    val gate = new SettingsScreen.ReadGate
     val owner = new SettingsScreen.OwnerReads(
       () => {
         reads.incrementAndGet()
@@ -558,7 +567,7 @@ class SettingsScreenSpec extends munit.FunSuite:
       },
       () => f.clock,
       _.run(),
-      running
+      gate
     )
     val context =
       f.context.copy(ownerStatus = () => owner.status, refreshOwner = () => owner.refresh())
@@ -592,17 +601,17 @@ class SettingsScreenSpec extends munit.FunSuite:
   test("a slow status read never blocks the screen and a second read waits for the first") {
     val release = new CountDownLatch(1)
     val reads = new AtomicInteger()
-    val running = new AtomicBoolean(false)
+    val gate = new SettingsScreen.ReadGate
     def reader(): SettingsScreen.OwnerReads = new SettingsScreen.OwnerReads(
       () => {
-        reads.incrementAndGet()
+        val n = reads.incrementAndGet()
         // Bounded, so a read on the screen's own thread fails the timing check instead of hanging.
         val _ = release.await(5L, java.util.concurrent.TimeUnit.SECONDS)
-        Right(status())
+        Right(status(message = s"read $n"))
       },
       () => start,
       task => Threads.daemon("owner-status-test")(task.run()).start(),
-      running
+      gate
     )
     val first = reader()
     val f = new Fixture
@@ -616,19 +625,75 @@ class SettingsScreenSpec extends munit.FunSuite:
       assert(System.nanoTime() - began < 3000000000L)
       assertEquals(value(f.row("Owner")), "Reading owner status")
       Wait.until("the status read never started")(reads.get() == 1)
-      first.refresh()
+      // The next screen asks while the first read runs. Its read waits for that one.
       val second = reader()
       second.refresh()
       Thread.sleep(50L)
       assertEquals(reads.get(), 1)
       release.countDown()
-      Wait.until("the first read never finished")(first.status.nonEmpty)
-      // The second screen's reference never takes the first screen's result.
-      assertEquals(second.status, None)
-      Wait.until("the read flag never cleared")(!running.get())
-      second.refresh()
-      Wait.until("the second screen never read")(second.status.nonEmpty)
+      Wait.until("the waiting read never ran")(second.status.nonEmpty)
+      // Each screen shows only its own read.
+      assertEquals(first.status.flatMap(_._1.toOption).map(_.message), Some("read 1"))
+      assertEquals(second.status.flatMap(_._1.toOption).map(_.message), Some("read 2"))
+      Thread.sleep(100L)
       assertEquals(reads.get(), 2)
+    finally release.countDown()
+  }
+
+  test("a refresh asked while a read runs gets one more read after it, coalesced to one") {
+    val release = new CountDownLatch(1)
+    val reads = new AtomicInteger()
+    val reader = new SettingsScreen.OwnerReads(
+      () => {
+        val n = reads.incrementAndGet()
+        if n == 1 then
+          val _ = release.await(5L, java.util.concurrent.TimeUnit.SECONDS)
+        Right(status(message = s"read $n"))
+      },
+      () => start,
+      task => Threads.daemon("owner-status-test")(task.run()).start(),
+      new SettingsScreen.ReadGate
+    )
+    try
+      reader.refresh()
+      Wait.until("the first read never started")(reads.get() == 1)
+      for _ <- 1 to 3 do reader.refresh()
+      Thread.sleep(50L)
+      assertEquals(reads.get(), 1)
+      release.countDown()
+      Wait.until("the asked read never ran")(
+        reader.status.exists(_._1.exists(_.message == "read 2"))
+      )
+      Thread.sleep(100L)
+      assertEquals(reads.get(), 2)
+    finally release.countDown()
+  }
+
+  test("a screen waiting on a slow status read asks for it once") {
+    val release = new CountDownLatch(1)
+    val reads = new AtomicInteger()
+    val reader = new SettingsScreen.OwnerReads(
+      () => {
+        reads.incrementAndGet()
+        val _ = release.await(5L, java.util.concurrent.TimeUnit.SECONDS)
+        Right(status())
+      },
+      () => start,
+      task => Threads.daemon("owner-status-test")(task.run()).start(),
+      new SettingsScreen.ReadGate
+    )
+    val f = new Fixture
+    try
+      val context =
+        f.context.copy(ownerStatus = () => reader.status, refreshOwner = () => reader.refresh())
+      // Two pauses, so the screen polls many times while the read runs.
+      assert(
+        !SettingsScreen.run(context, new Script(Vector(down, down, esc)), new PrintStream(f.out))
+      )
+      release.countDown()
+      Wait.until("the status read never finished")(reader.status.nonEmpty)
+      Thread.sleep(100L)
+      assertEquals(reads.get(), 1)
     finally release.countDown()
   }
 
@@ -931,7 +996,7 @@ class SettingsScreenSpec extends munit.FunSuite:
         val _ = release.await(5L, java.util.concurrent.TimeUnit.SECONDS)
         Right(status())
       },
-      reading = new AtomicBoolean(false),
+      reading = new SettingsScreen.ReadGate,
       handOff = command => {
         handed += command
         Right(0)

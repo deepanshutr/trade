@@ -3,6 +3,7 @@ package desk
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.PosixFilePermissions
 import scala.collection.mutable.ArrayBuffer
+import scala.jdk.CollectionConverters.*
 
 class MainRuntimeSpec extends TempDirectorySuite:
   test("live one-click submission captures observed leverage and margin") {
@@ -749,4 +750,38 @@ class MainRuntimeSpec extends TempDirectorySuite:
     Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwx------"))
     assertEquals(WorkspaceApp.saveBindings(home, Bindings.defaults), Right(()))
     assertEquals(Bindings.load(Bindings.path(home)), Right(Bindings.defaults))
+  }
+
+  test("every test start of Desk names its home, so no test reads the owner's own files") {
+    val folder = Path.of("test")
+    assert(Files.isDirectory(folder), Path.of("").toAbsolutePath)
+    val openings = Vector("Main" + ".run(", "WorkspaceApp" + ".run(")
+    val calls =
+      for
+        file <- Files.list(folder).iterator.asScala.filter(_.toString.endsWith(".scala")).toVector
+        text = Files.readString(file)
+        opening <- openings
+        start <- Iterator
+          .iterate(text.indexOf(opening))(at => text.indexOf(opening, at + 1))
+          .takeWhile(_ >= 0)
+      yield
+        var depth = 1
+        var end = start + opening.length
+        while depth > 0 do
+          if text(end) == '(' then depth += 1
+          else if text(end) == ')' then depth -= 1
+          end += 1
+        (file.getFileName.toString, text.slice(start, end))
+    assert(calls.size >= 6, calls)
+    assertEquals(calls.filterNot(_._2.contains("keys =")).map(_._1), Vector.empty[String])
+  }
+
+  test("a reload with nothing changed replaces nothing when --trade has a key and no owner") {
+    val s = new Startup("""{"network":"testnet"}""")
+    s.makeUsable()
+    val r = new Reload(s)
+    assertEquals(r.start.config.agent, Some(keyAddress))
+    assertEquals(r.keys.reload(), Right(()))
+    assertEquals((r.replaced.size, s.reads.size), (0, 0))
+    assertEquals(r.keys.keyRow(), Right("Main   0xaaaa...aaaa   active, in Keychain"))
   }

@@ -25,6 +25,10 @@ object KeyStartup:
   private[desk] val waiting = "Waiting for the Keychain prompt. Choose Allow, not Always Allow."
 
   // A usable key has an active choice for the network, a name on that network and a Keychain item.
+  // Desk takes a key when it may trade: with --trade or with an owner, and never when recording.
+  private[desk] def wantsKey(args: Main.Args, config: TradingConfig): Boolean =
+    !args.record && (args.trade || config.owner.nonEmpty)
+
   private[desk] def check(config: TradingConfig, hooks: Hooks): Either[String, String] =
     for
       names <- KeyNames.load(KeyNames.path(hooks.home))
@@ -55,7 +59,7 @@ object KeyStartup:
     if args.keys then
       val _ = screen(config, stateDirectory, hooks)
       hooks.stop(0, None)
-    else if args.record || !(args.trade || config.owner.nonEmpty) then Prepared(config, None)
+    else if !wantsKey(args, config) then Prepared(config, None)
     else
       check(config, hooks).toOption match
         case None          => Prepared(config, None)
@@ -124,9 +128,10 @@ final class KeyReload(
       else
         setTerms(TradeTerms(loaded.sizes, loaded.slippage))
         val found = KeyStartup.check(loaded, hooks)
-        val address = found.toOption.filter(_ => loaded.owner.nonEmpty)
+        // The agent follows the start-up rule. A key is read only with an owner.
+        val address = found.toOption.filter(_ => KeyStartup.wantsKey(args, loaded))
         val next = loaded.copy(agent = address)
-        val session = address match
+        val session = address.filter(_ => loaded.owner.nonEmpty) match
           case None                                                          => None
           case Some(key) if config.agent.contains(key) && held.exists(holds) => held
           case Some(_)                                                       =>

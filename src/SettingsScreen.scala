@@ -1,7 +1,7 @@
 package desk
 
 import java.io.{IOException, InputStream, PrintStream}
-import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
+import java.util.concurrent.atomic.AtomicReference
 import scala.util.Try
 import scala.util.control.NonFatal
 
@@ -75,25 +75,48 @@ object SettingsScreen:
     pause(false)
     result
 
-  // Reads the owner status off the keys thread, so a slow venue never holds Esc. At most one read
-  // runs at a time across every opening of the screen. Each opening has its own reader, so a read
-  // still running when its screen closes finishes on its own and is never shown.
+  // Shared by every opening of the screen. At most one status read runs. A read asked while one
+  // runs waits for it, and asks made meanwhile make one read. The last reader to ask is the one
+  // that waits, so an old screen's ask gives way to the current one.
+  private[desk] final class ReadGate:
+    private var running = false
+    private var next = Option.empty[OwnerReads]
+    // True when the reader may read now. Otherwise it waits for the read that runs.
+    private[SettingsScreen] def ask(reader: OwnerReads): Boolean = synchronized {
+      if running then
+        next = Some(reader)
+        false
+      else
+        running = true
+        true
+    }
+    // A read ended. The reader that waits, if any, reads next.
+    private[SettingsScreen] def done(): Option[OwnerReads] = synchronized {
+      val waiting = next
+      next = None
+      if waiting.isEmpty then running = false
+      waiting
+    }
+
+  // Reads the owner status off the keys thread, so a slow venue never holds Esc. Each opening has
+  // its own reader, so a read still running when its screen closes finishes on its own and is
+  // never shown.
   private[desk] final class OwnerReads(
       read: () => Either[String, OwnerStatus],
       now: () => Long,
       spawn: Runnable => Unit,
-      running: AtomicBoolean
+      gate: ReadGate
   ):
     private val latest = new AtomicReference(Option.empty[(Either[String, OwnerStatus], Long)])
     def status: Option[(Either[String, OwnerStatus], Long)] = latest.get()
-    def refresh(): Unit =
-      if running.compareAndSet(false, true) then
-        try
-          spawn(() =>
-            try latest.set(Some((Try(read()).getOrElse(Left(OwnerStatus.unavailable)), now())))
-            finally running.set(false)
-          )
-        catch case NonFatal(_) => running.set(false)
+    def refresh(): Unit = if gate.ask(this) then start()
+    private[SettingsScreen] def start(): Unit =
+      try
+        spawn(() =>
+          try latest.set(Some((Try(read()).getOrElse(Left(OwnerStatus.unavailable)), now())))
+          finally gate.done().foreach(_.start())
+        )
+      catch case NonFatal(_) => gate.done().foreach(_.start())
 
   // The terminal hand-off for one child. Live is stopped first and resumed last, whatever happens
   // between. The terminal leaves raw mode only after the Control C guard is on and is back in raw
@@ -278,12 +301,21 @@ object SettingsScreen:
         sizeAt = Some(now)
       size
 
-    def loop(): Boolean =
+    // The status is asked for at open, after a child, on r, and then every 15 seconds. A read
+    // already asked for is never asked again before 15 seconds, so a slow one gets no twin.
+    private var asked = 0L
+    private def ask(): Unit =
+      asked = context.now()
       context.refreshOwner()
+
+    def loop(): Boolean =
+      ask()
       var leaving = false
       while !leaving && !quit do
-        if context.ownerStatus().forall((_, at) => context.now() - at >= statusEveryMs) then
-          context.refreshOwner()
+        val now = context.now()
+        if now - asked >= statusEveryMs &&
+          context.ownerStatus().forall((_, at) => now - at >= statusEveryMs)
+        then ask()
         draw()
         input.poll() match
           case None                  => idle()
@@ -328,7 +360,7 @@ object SettingsScreen:
 
     // After a child or r the files may have changed, and the screen under the child is gone.
     private def afterward(): Unit =
-      context.refreshOwner()
+      ask()
       snapshot = context.settings()
       drawn = Vector.empty
 

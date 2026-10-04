@@ -127,7 +127,7 @@ object SettingsWiring:
       keyRow: () => Either[String, String],
       reload: () => Either[String, Unit],
       ownerRead: () => Either[String, OwnerStatus],
-      reading: AtomicBoolean,
+      reading: SettingsScreen.ReadGate,
       handOff: Seq[String] => Either[String, Int],
       keyChild: Seq[String],
       env: Map[String, String],
