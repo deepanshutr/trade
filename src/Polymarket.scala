@@ -131,6 +131,23 @@ object Polymarket:
         fields.map((token, price) => token -> (BigDecimal(price.str) * 100).toDouble).toMap
       }.toEither.left.map(_ => "bad midpoints reply")
 
+  /** Reads at most maxBody bytes. A reply over the cap is a failure with status -1. */
+  def readCapped(in: java.io.InputStream): Either[Int, String] =
+    val bytes = in.readNBytes(maxBody + 1)
+    if bytes.length > maxBody then Left(-1)
+    else Right(new String(bytes, java.nio.charset.StandardCharsets.UTF_8))
+
+  /** Lets at most `limit` requests start in any sliding minute, waiting with `sleep`. */
+  final class Pacer(limit: Int, now: () => Long, sleep: Long => Unit):
+    private val sent = mutable.Queue.empty[Long]
+    private def drop(): Unit = while sent.nonEmpty && sent.head <= now() - 60000L do sent.dequeue()
+    def take(): Unit =
+      drop()
+      while sent.size >= limit do
+        sleep(sent.head + 60000L - now())
+        drop()
+      sent.enqueue(now())
+
   // No header is set here. The JVM adds its own User-Agent when the request is sent.
   def getRequest(url: String): HttpRequest =
     HttpRequest.newBuilder(URI.create(url)).timeout(timeout).GET().build()
@@ -144,16 +161,24 @@ object Polymarket:
       .build()
 
 object PolymarketReader:
-  /** The two real calls. A status other than 200, or no reply, is a Left. */
-  def http(): (String => Either[Int, String], (String, String) => Either[Int, String]) =
-    val client = HttpClient
-      .newBuilder()
-      .connectTimeout(Polymarket.timeout)
-      .followRedirects(HttpClient.Redirect.NEVER)
-      .build()
-    def send(request: HttpRequest): Either[Int, String] =
-      val reply = client.send(request, HttpResponse.BodyHandlers.ofString())
-      if reply.statusCode == 200 then Right(reply.body) else Left(reply.statusCode)
+  private def realSend(client: HttpClient)(request: HttpRequest): Either[Int, String] =
+    val reply = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
+    val stream = reply.body
+    try if reply.statusCode == 200 then Polymarket.readCapped(stream) else Left(reply.statusCode)
+    finally stream.close()
+
+  /** The two calls. Requests are built only by getRequest and postRequest. A status other than 200,
+    * no reply, or a reply over the size cap is a Left.
+    */
+  def http(
+      send: HttpRequest => Either[Int, String] = realSend(
+        HttpClient
+          .newBuilder()
+          .connectTimeout(Polymarket.timeout)
+          .followRedirects(HttpClient.Redirect.NEVER)
+          .build()
+      )
+  ): (String => Either[Int, String], (String, String) => Either[Int, String]) =
     (
       url => send(Polymarket.getRequest(url)),
       (url, body) => send(Polymarket.postRequest(url, body))
@@ -180,7 +205,7 @@ final class PolymarketReader(
   @volatile private var thread = Option.empty[Thread]
 
   // Everything below runs on the reader thread only.
-  private val sent = mutable.Queue.empty[Long]
+  private val pacer = new Pacer(perMinute, now, sleep)
   private var nextDiscovery = 0L
   private var nextMidpoints = 0L
   private var discoveryFailures = 0
@@ -191,16 +216,8 @@ final class PolymarketReader(
 
   private def boundary(at: Long): Long = (at / 300000L + 1) * 300000L + 5000L
 
-  private def pace(): Unit =
-    def drop(): Unit = while sent.nonEmpty && sent.head <= now() - 60000L do sent.dequeue()
-    drop()
-    while sent.size >= perMinute do
-      sleep(sent.head + 60000L - now())
-      drop()
-    sent.enqueue(now())
-
   private def call(request: => Either[Int, String]): Either[Int, String] =
-    pace()
+    pacer.take()
     countRequest()
     try request
     catch case NonFatal(_) => Left(0)

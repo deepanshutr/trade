@@ -160,10 +160,20 @@ class PolymarketSpec extends munit.FunSuite:
     )
   }
 
-  test("parseMarkets ignores startDate") {
-    val got = Polymarket.parseMarkets(markets, wantedAtFixture, T0).toOption.get
-    // startDate of the 5m market is a day early, the period start is eventStartTime.
-    assertNotEquals(got(("BTC", M5)).get.startsAt, ms("2026-10-03T03:43:25Z"))
+  test("parseMarkets reads the period start from eventStartTime and never from startDate") {
+    val body = ujson.write(
+      ujson.Arr(
+        market(
+          "btc-updown-5m-1791084900",
+          "t5",
+          "2026-10-04T03:35:00Z",
+          "2026-10-04T03:40:00Z"
+        )
+      )
+    )
+    val got = Polymarket.parseMarkets(body, wantedAtFixture, T0).toOption.get
+    assertEquals(got(("BTC", M5)).map(_.startsAt), Some(ms("2026-10-04T03:35:00Z")))
+    assertNotEquals(got(("BTC", M5)).map(_.startsAt), Some(ms("2020-01-01T00:00:00Z")))
   }
 
   test("parseMarkets finds the gold daily on a trading day") {
@@ -248,6 +258,12 @@ class PolymarketSpec extends munit.FunSuite:
       got("31750954484327394320672724772442108660811593152701484269129225540821664624104"),
       99.5
     )
+  }
+
+  test("parseMidpoints refuses a valid reply over the size cap") {
+    val oversize = """{"a":"0.5"""" + " " * Polymarket.maxBody + "}"
+    assert(ujson.read(oversize).obj.nonEmpty)
+    assert(Polymarket.parseMidpoints(oversize).isLeft)
   }
 
   test("parseMidpoints fails on no fields, not JSON, an array or a price that is not a number") {
@@ -430,13 +446,17 @@ class PolymarketSpec extends munit.FunSuite:
   }
 
   test("a failing midpoints read backs off and the old points stay with their age") {
+    val failed429 = failureCount(429)
+    val failed500 = failureCount(500)
     val rig = new Rig(
       600000L,
       both,
       (_, _, _) => Right(markets),
-      (n, _, _) => if n <= 3 then Right(prices) else Left(500)
+      (n, _, _) => if n <= 3 then Right(prices) else if n == 4 then Left(429) else Left(500)
     ).run()
     rig.stop()
+    assertEquals(failureCount(429) - failed429, 1L)
+    assertEquals(failureCount(500) - failed500, 3L)
     assertEquals(
       rig.posts.toVector.map(_ - T0),
       Vector(0L, 30000L, 60000L, 90000L, 150000L, 270000L, 510000L)
@@ -454,7 +474,7 @@ class PolymarketSpec extends munit.FunSuite:
     val rig = fixtureRig(runMs = 60000L).run()
     rig.stop()
     assert(!rig.reader.isStale("BTC", H1))
-    rig.clock = T0 + 60000L + Polymarket.staleAfterMs
+    rig.clock = T0 + 60000L + 120000L
     assert(!rig.reader.isStale("BTC", H4))
     rig.clock += 1
     assert(rig.reader.isStale("BTC", H4))
@@ -546,5 +566,82 @@ class PolymarketSpec extends munit.FunSuite:
       rig.getUrls.forall(
         _.matches("https://gamma-api\\.polymarket\\.com/markets\\?(slug=[a-z0-9-]+&?)+")
       )
+    )
+  }
+
+  test("the pacer lets no more than six requests start in any sliding minute") {
+    var clock = 0L
+    val waits = ArrayBuffer.empty[Long]
+    val pacer = new Polymarket.Pacer(
+      6,
+      () => clock,
+      wait =>
+        waits += wait
+        clock += wait
+    )
+    val starts = (1 to 20).map { _ =>
+      pacer.take()
+      clock
+    }
+    starts.foreach(t => assert(starts.count(x => x >= t && x < t + 60000L) <= 6, t.toString))
+    assertEquals(starts.take(7).toVector, Vector(0L, 0L, 0L, 0L, 0L, 0L, 60000L))
+    assertEquals(starts.last, 180000L)
+    assertEquals(waits.head, 60000L)
+  }
+
+  test("the six a minute ceiling holds in the reader when the schedule asks for more") {
+    var clock = 0L
+    val times = ArrayBuffer.empty[Long]
+    val pacer = new Polymarket.Pacer(Polymarket.perMinute, () => clock, wait => clock += wait)
+    (1 to 30).foreach { _ =>
+      pacer.take()
+      times += clock
+    }
+    assertEquals(Polymarket.perMinute, 6)
+    times.foreach(t => assert(times.count(x => x >= t && x < t + 60000L) <= 6, t.toString))
+  }
+
+  test("http builds every request through getRequest and postRequest") {
+    val seen = ArrayBuffer.empty[java.net.http.HttpRequest]
+    val (get, post) = PolymarketReader.http { request =>
+      seen += request
+      Right("{}")
+    }
+    assertEquals(get("https://gamma-api.polymarket.com/markets?slug=a"), Right("{}"))
+    assertEquals(post("https://clob.polymarket.com/midpoints", "[]"), Right("{}"))
+    assertEquals(seen.size, 2)
+    assertEquals(seen(0).method, "GET")
+    assertEquals(seen(0).headers.map.asScala.toMap, Map.empty[String, java.util.List[String]])
+    assertEquals(seen(0).timeout.get, Duration.ofSeconds(3))
+    assertEquals(seen(1).method, "POST")
+    assertEquals(
+      seen(1).headers.map.asScala.view
+        .mapValues(_.asScala.toList)
+        .toMap
+        .map((k, v) => k.toLowerCase -> v),
+      Map("content-type" -> List("application/json"))
+    )
+    assertEquals(seen(1).timeout.get, Duration.ofSeconds(3))
+  }
+
+  test("a reply is read up to the cap plus one byte and an oversize reply is refused") {
+    var taken = 0L
+    val endless = new java.io.InputStream:
+      def read(): Int =
+        taken += 1
+        'x'.toInt
+      override def read(buffer: Array[Byte], offset: Int, length: Int): Int =
+        java.util.Arrays.fill(buffer, offset, offset + length, 'x'.toByte)
+        taken += length
+        length
+    assertEquals(Polymarket.readCapped(endless), Left(-1))
+    assert(taken <= Polymarket.maxBody + 1L, taken.toString)
+    val exact = new java.io.ByteArrayInputStream(Array.fill(Polymarket.maxBody)('x'.toByte))
+    assertEquals(Polymarket.readCapped(exact).map(_.length), Right(Polymarket.maxBody))
+    val over = new java.io.ByteArrayInputStream(Array.fill(Polymarket.maxBody + 1)('x'.toByte))
+    assertEquals(Polymarket.readCapped(over), Left(-1))
+    assertEquals(
+      Polymarket.readCapped(new java.io.ByteArrayInputStream("{}".getBytes)),
+      Right("{}")
     )
   }
