@@ -109,6 +109,26 @@ object WorkspaceApp:
     result
   }
 
+  // The workspace's controller. Every order action it takes goes to the router, which sends it
+  // to the worker of the selected mode.
+  private[desk] def deskController(
+      panel: PanelView,
+      now: () => Long,
+      worker: ExecutionRouter,
+      mute: Boolean => Unit,
+      result: (Long, String) => Unit
+  ): DeskController =
+    new DeskController(
+      panel,
+      now,
+      worker.preview,
+      worker.submitReviewed,
+      worker.switchMode,
+      mute,
+      result,
+      worker.cancel
+    )
+
   private[desk] def drawFrame(
       market: Snapshot,
       view: TradingView,
@@ -374,7 +394,7 @@ object WorkspaceApp:
         diagnostics,
         number => controller.orderResultNotSaved(number)
       )
-      lazy val controller: DeskController = new DeskController(
+      lazy val controller: DeskController = deskController(
         PanelView(
           mode = mode,
           terms = TradeTerms(config.sizes, config.slippage),
@@ -382,9 +402,7 @@ object WorkspaceApp:
           bindings = bindings
         ),
         now,
-        worker.preview,
-        worker.submitReviewed,
-        worker.switchMode,
+        worker,
         announcements.setMuted,
         orderResults.handle
       )

@@ -214,14 +214,20 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
 
   private val buy = OrderIntent(Side.Buy, OrderKind.Hard)
 
-  private def router(f: Fixture, mode: String = "LIVE"): ExecutionRouter =
+  private def router(
+      f: Fixture,
+      mode: String = "LIVE",
+      rest: Rest = new Rest {
+        def post(body: String): Option[String] = fail("unexpected prop market request")
+      }
+  ): ExecutionRouter =
     new ExecutionRouter(
       f.config,
       mode,
       "XMR",
       f.worker,
       _ => fail("unexpected live worker replacement"),
-      new Rest { def post(body: String): Option[String] = fail("unexpected prop market request") },
+      rest,
       f.directory,
       () => f.clock.get(),
       () => f.clock.get()
@@ -597,4 +603,198 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
     assert(result.isFailure)
     assertEquals(factories.get(), 0)
     assertEquals(Files.readString(directory.resolve("public")), "owned storage fixture failure")
+  }
+
+  // Test 15. A cancel goes to the worker of the selected mode. Each case holds a live order in
+  // the fake journal file and a prop order in the prop ledger file, and names both ids, so a
+  // cancel sent to the wrong worker, or to both, shows.
+
+  // A prop worker asks for market details. These tests need none.
+  private val quiet = new Rest { def post(body: String): Option[String] = None }
+
+  // Writes one resting live order into the journal file before any worker opens it.
+  private def restLive(f: Fixture): String =
+    val journal = OrderJournal.open(f.directory, f.config.identity)
+    try
+      val plan = OrderPlan(
+        "XMR",
+        0,
+        Side.Buy,
+        OrderKind.Hard,
+        BigDecimal("0.2"),
+        BigDecimal("99"),
+        BigDecimal("99"),
+        BigDecimal(0),
+        BigDecimal(0),
+        None,
+        BigDecimal(0),
+        false,
+        post = true
+      )
+      val saved = journal.reserve(plan, f.owner, f.clock.get())
+      journal.rest(saved.id, 77738308L).id
+    finally journal.close()
+
+  private val propId = "0x" + "a" * 32
+
+  private def propLedger(f: Fixture): PropLedger =
+    PropLedger.open(
+      f.directory.resolve("prop"),
+      f.config.network,
+      f.config.propBalance,
+      f.config.propFee
+    )
+
+  private def restProp(f: Fixture): Unit =
+    val ledger = propLedger(f)
+    try
+      val order =
+        PropOrder(propId, "XMR", Side.Buy, BigDecimal(99), BigDecimal("0.2"), false, 1000L)
+      assert(ledger.rest(order, 0L).isRight)
+    finally ledger.close()
+
+  // The prop orders the ledger file holds, read once the router has closed it.
+  private def propResting(f: Fixture): Vector[String] =
+    val ledger = propLedger(f)
+    try ledger.account.resting.map(_.id)
+    finally ledger.close()
+
+  // The ids of the last cancel the fake venue received.
+  private def cancelSent(f: Fixture): Vector[String] =
+    val body = f.lastPost.get()
+    if body.objOpt.exists(_("action")("type").str == "cancelByCloid") then
+      body("action")("cancels").arr.toVector.map(_("cloid").str)
+    else Vector.empty
+
+  test("cancel in live reaches the live worker and leaves the prop order") {
+    val f = new Fixture(autoStart = false)
+    val id = restLive(f)
+    restProp(f)
+    val route = router(f, "LIVE", quiet)
+    try
+      route.start()
+      f.ready()
+      assertEquals(route.view.resting.map(_.id), Vector(id))
+      assert(route.cancel(Vector(id, propId)))
+      Wait.until("the live worker never sent the cancel")(cancelSent(f) == Vector(id))
+    finally
+      route.close()
+      f.close()
+    assertEquals(propResting(f), Vector(propId))
+  }
+
+  test("cancel in prop reaches the prop worker and never the live worker") {
+    val f = new Fixture(autoStart = false)
+    val id = restLive(f)
+    restProp(f)
+    val route = router(f, "PROP", quiet)
+    try
+      // A live worker able to cancel its order, so a cancel routed to it would show.
+      f.worker.start()
+      f.ready()
+      route.start()
+      assertEquals(route.view.resting.map(_.id), Vector(propId))
+      assert(route.cancel(Vector(id, propId)))
+      assertEquals(route.view.resting, Vector.empty)
+      Thread.sleep(200L)
+      assertEquals(cancelSent(f), Vector.empty)
+      assertEquals(f.worker.view.resting.map(_.id), Vector(id))
+    finally
+      route.close()
+      f.close()
+    assertEquals(propResting(f), Vector.empty)
+  }
+
+  test("cancel in view answers false and reaches neither worker") {
+    val f = new Fixture(autoStart = false)
+    val id = restLive(f)
+    restProp(f)
+    val route = router(f, "VIEW", quiet)
+    try
+      route.start()
+      f.ready()
+      assert(!route.cancel(Vector(id, propId)))
+      Thread.sleep(200L)
+      assertEquals(cancelSent(f), Vector.empty)
+      assertEquals(f.worker.view.resting.map(_.id), Vector(id))
+      // The positive control: the same live worker takes the same cancel when asked directly.
+      assert(f.worker.cancel(Vector(id)))
+      Wait.until("the live worker never sent the direct cancel")(cancelSent(f) == Vector(id))
+    finally
+      route.close()
+      f.close()
+    assertEquals(propResting(f), Vector(propId))
+  }
+
+  test("a resting order shows through the live worker restarted after a settings child") {
+    val f = new Fixture(autoStart = false)
+    val id = restLive(f)
+    val made = new AtomicInteger()
+    val route = making(f, "LIVE", made)
+    try
+      route.start()
+      Wait.until("the first worker never showed the order")(
+        route.view.resting.map(_.id) == Vector(id)
+      )
+      assertEquals(route.suspendLive(), Right(()))
+      assert(f.worker.isRetired)
+      assertEquals(route.view.resting, Vector.empty)
+      // No worker runs, and the journal file still holds the order.
+      val held = OrderJournal.open(f.directory, f.config.identity)
+      try assertEquals(held.resting.map(_.id), Vector(id))
+      finally held.close()
+      route.resumeLive()
+      assertEquals(made.get(), 1)
+      Wait.until("the restarted worker never showed the order")(
+        route.view.resting.map(_.id) == Vector(id)
+      )
+      assertEquals(f.journalOpens.get(), 2)
+    finally
+      route.close()
+      f.close()
+  }
+
+  // The workspace builds its controller with WorkspaceApp.deskController, so an order row's
+  // Enter reaches the router. A frame drawn by hand carries the axis, as the screen draws it.
+  test("the workspace controller cancels a prop order row through the router") {
+    val f = new Fixture(autoStart = false)
+    restProp(f)
+    val route = router(f, "PROP", quiet)
+    val controller = WorkspaceApp.deskController(
+      PanelView(mode = "PROP"),
+      () => f.clock.get(),
+      route,
+      _ => (),
+      (_, _) => ()
+    )
+    val snapshot = Snapshot.initial("XMR", f.clock.get())
+    def frame(): Unit =
+      val view = route.view
+      controller.orders(view)
+      controller.publish(
+        WorkspaceFrame(
+          Vector.empty,
+          Vector.empty,
+          "XMR",
+          120,
+          40,
+          "PROP",
+          axis = Some(OrdersAxis.marks(None, None, view.resting, None, view.leverage, 90, 110, 40)),
+          focus = controller.panel.focus
+        )
+      )
+    def key(command: Command): Unit =
+      val _ = controller.handle(command, snapshot, route.view, (120, 40), false)
+    try
+      route.start()
+      frame()
+      key(Command.Orders)
+      frame()
+      assertEquals(route.view.resting.map(_.id), Vector(propId))
+      key(Command.Confirm)
+      assertEquals(route.view.resting, Vector.empty)
+    finally
+      route.close()
+      f.close()
+    assertEquals(propResting(f), Vector.empty)
   }

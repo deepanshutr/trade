@@ -140,6 +140,12 @@ final class ExecutionRouter(
     if selected == "PROP" then propWorker().submitReviewed(review)
     else selected == "LIVE" && liveEnabled && live.submitReviewed(review)
   }
+  // A cancel goes to the worker of the selected mode. View holds no orders, so it answers false.
+  // A live worker that is retiring is disabled and refuses the cancel itself.
+  def cancel(ids: Vector[String]): Boolean = synchronized {
+    if selected == "PROP" then propWorker().cancel(ids)
+    else selected == "LIVE" && live.cancel(ids)
+  }
   def livePending: Boolean = synchronized(live.view.pending)
   // Stops the live worker for a child and waits for it, as close does. A worker that has not
   // retired in time may still hold the journal lock, so no child may start.
