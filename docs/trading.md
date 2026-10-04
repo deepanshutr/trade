@@ -78,7 +78,8 @@ whole file at once with mode `600`, so no reader sees half a file, and is refuse
 the file after settings read it. When no settings file exists, the first write creates
 `~/.config/desk/config.json`. When Desk was started with `--config PATH`, it writes that
 file. A write needs the file's folder to be private. Otherwise it is refused with "local
-storage must be private" and the folder's full path. Run `chmod 700` on that folder.
+storage must be private" and the folder's full path. Run `chmod 700` on that folder. A
+`--config` file belongs in a private folder of its own, not in your home folder.
 
 A saved size or slippage applies to the next order without a restart. Every order
 review carries the sizes and slippage it was made with, so an order already reviewed

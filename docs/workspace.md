@@ -147,7 +147,8 @@ cursor. Enter edits or acts on the row under it. `r` reads the settings, the key
 owner again. While a live order is pending, `r` reads only the owner and says "Wait for
 the pending order". The last line shows the latest result or refusal and clears on the
 next key. On a terminal smaller than 100 by 30, lines are cut at the width and the page
-scrolls to keep the cursor visible.
+scrolls to keep the cursor visible. Enter, Esc, the arrows and `r` are fixed inside
+settings, whatever the workspace binds them to.
 
 Enter on Small amount, Big amount or Slippage opens a field. It takes digits and one
 dot. Enter saves and Esc cancels. Slippage is shown and typed in percent. A refused
