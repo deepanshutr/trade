@@ -219,7 +219,7 @@ class PropRestingSpec extends TempDirectorySuite:
         f.worker.view.fills,
         Vector(Fill("XMR", Side.Buy, start, d("546.1"), d("1.739")))
       )
-      assertEquals(f.ledger.fillResting(order.id, start), Left("Prop order not found"))
+      assertEquals(f.ledger.resolve(order.id, start), Left("Prop order not found"))
     }
   }
 
