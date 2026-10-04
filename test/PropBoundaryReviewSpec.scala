@@ -80,7 +80,7 @@ class PropBoundaryReviewSpec extends TempDirectorySuite:
       changedIntents.foreach(intent =>
         assert(!f.worker.submitReviewed(review.copy(intent = intent)), intent.toString)
       )
-      assert(!f.worker.submitReviewed(review.copy(leverage = Some(1))))
+      assert(!f.worker.submitReviewed(review.copy(leverage = Some(5))))
       assert(!f.worker.submitReviewed(review.copy(marginMode = Some("cross"))))
       assertEquals(f.ledger.account.count, 0L)
       assert(f.worker.submitReviewed(review))
