@@ -66,7 +66,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
       style <- Vector(Style.mono, Style.colour)
     do
       val frame = draw(market.copy(chartMode = mode), cols = cols, rows = rows, style = style)
-      val height = rows - 24
+      val height = rows - 25
       assert(cells(frame, 0).zip(Outlook.horizons.reverse).forall((c, h) => c.contains(h.label)))
       for (column, i) <- outlook.columns.reverse.zipWithIndex do
         for (label, value) <- Vector("S" -> column.support.get, "TR" -> column.target.get) do
@@ -89,8 +89,8 @@ class AlignedOutlookSpec extends munit.FunSuite:
     )
     val frame = draw(o = outside)
     assert(cells(frame, 1).forall(_.startsWith("↑TR ")), frame.lines.mkString("\n"))
-    assert(cells(frame, 6).forall(_.startsWith("↓S ")), frame.lines.mkString("\n"))
-    assert("[─⠉⠒⠤⣀][STR]".r.findFirstIn(frame.lines.slice(1, 7).mkString).isEmpty)
+    assert(cells(frame, 5).forall(_.startsWith("↓S ")), frame.lines.mkString("\n"))
+    assert("[─⠉⠒⠤⣀][STR]".r.findFirstIn(frame.lines.slice(1, 6).mkString).isEmpty)
   }
 
   test("distinct levels that share one row keep every label and no misleading single price") {
@@ -100,7 +100,7 @@ class AlignedOutlookSpec extends munit.FunSuite:
       )
     )
     val frame = draw(o = close)
-    assert(cells(frame, 3).forall(_ == "⣀STR *"), frame.lines.mkString("\n"))
+    assert(cells(frame, 3).forall(_ == "⠒STR *"), frame.lines.mkString("\n"))
   }
 
   test("trade controls stay below the columns when selected size changes") {
@@ -140,16 +140,22 @@ class AlignedOutlookSpec extends munit.FunSuite:
     do
       val s = market.copy(samples = samples, offsetSec = offset, zoom = zoom)
       val frame = draw(s, cols = width, rows = height)
-      val priceRows = height - 24
-      val labels =
-        frame.lines.slice(1, 1 + priceRows).map(line => Chart.plain(line).take(8).trim.toDouble)
+      val priceRows = height - 25
+      // The plain numbers are row middles. Two of them give the top and the height of a row.
+      val labels = frame.lines
+        .slice(1, 1 + priceRows)
+        .map(line => Chart.plain(line).take(16).trim)
+        .zipWithIndex
+        .collect { case (text, row) if text.nonEmpty => (row, text.toDouble) }
+      val (first, top) = labels.head
+      val (last, bottom) = labels.last
+      val step = (top - bottom) / (last - first)
+      val hi = top + (first + 0.5) * step
+      val lo = hi - priceRows * step
       for (column, index) <- outlook.columns.reverse.zipWithIndex do
         val price = column.target.get
         val nearest = math
-          .floor(
-            (labels.head - price) / (labels.head - labels.last) *
-              (priceRows * 4 - 1) + 0.5
-          )
+          .floor((hi - price) / (hi - lo) * (priceRows * 4 - 1) + 0.5)
           .toInt / 4
         assert(cells(frame, 1 + nearest)(index).contains("TR"), frame.lines.mkString("\n"))
   }
@@ -175,8 +181,8 @@ class AlignedOutlookSpec extends munit.FunSuite:
   test("stale quotes retain descriptive levels but never active rates or direction") {
     val stale = draw(market.copy(book = Some(book.copy(time = now - 6000))))
     assert(!cells(stale, 0).exists(c => c.contains("↑") || c.contains("↓")))
-    assert(cells(stale, 7).forall(_.contains("Stale price")))
-    assert(cells(stale, 8).forall(_ == "Base --"))
-    assert(cells(stale, 9).forall(_ == "Match --"))
-    assert(stale.lines.slice(1, 7).exists(_.contains("TR ")))
+    assert(cells(stale, 6).forall(_.contains("Stale price")))
+    assert(cells(stale, 7).forall(_ == "Base --"))
+    assert(cells(stale, 8).forall(_ == "Match --"))
+    assert(stale.lines.slice(1, 6).exists(_.contains("TR ")))
   }

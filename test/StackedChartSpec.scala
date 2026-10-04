@@ -11,14 +11,17 @@ class StackedChartSpec extends munit.FunSuite:
       zone: java.time.ZoneId,
       style: Style
   ): Vector[String] =
+    // cols is the chart area here, so the terminal is that plus the outlook and its bar.
     Screen
       .renderMarket(
         s,
-        cols,
-        rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin),
         now,
         zone,
-        style
+        style,
+        Layout
+          .regions(cols + Layout.outlookWidth + 1, rows)
+          .copy(priceRows = rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin)),
+        AxisDecor.plain
       )
       .lines
   private val now = Golden.now

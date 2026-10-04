@@ -81,7 +81,7 @@ class StatusPanelSpec extends munit.FunSuite:
     )
     val bothHeader = both.lines.head.takeWhile(_ != '|')
     assert(bothHeader.contains("!logs") && bothHeader.contains("!results"), bothHeader)
-    assert(bothHeader.contains("connection stale 9876.5s"), bothHeader)
+    assert(bothHeader.contains("ping stale"), bothHeader)
     assert(bothHeader.contains("mid 312.452123"), bothHeader)
 
     val logsOnly = draw(blocked, logsUnavailable = true, s = snapshot.copy(ctx = Some(ctx)))
@@ -116,23 +116,26 @@ class StatusPanelSpec extends munit.FunSuite:
       "volume 31.2M"
     )
     assert(header.contains("!logs") && header.contains("!results"), header)
-    assert(header.contains("connection active 0.0s"), header)
-    assert(header.contains(name), header)
-    val withoutWarnings = header.takeWhile(_ != '!').trim
-    val stats = withoutWarnings.drop(withoutWarnings.indexOf(name) + name.length).trim
+    assert(header.contains("ping 0.0s"), header)
+    assert(header.startsWith(name + "  "), header)
+    val withoutWarnings = header.takeWhile(_ != '!')
+    val stats = withoutWarnings
+      .take(withoutWarnings.indexOf("ping 0.0s"))
+      .drop(name.length)
+      .trim
     val shown = if stats.isEmpty then Vector.empty else stats.split("  ").toVector
     assert(shown.forall(expected.contains), s"cut or partial statistics field in: $header")
     assert(
-      shown == Vector(expected(0)),
-      s"expected only the complete mid before the next field: $header"
+      shown == Vector(expected(0), expected(1)),
+      s"expected only the complete mid and mark before the next field: $header"
     )
   }
 
-  test("long connection details shrink before a warning constrained header overflows") {
+  test("a long ping and bad count leave the header whole beside the warnings") {
     val ctx = Ctx("400", "401", "0.0001", "210160.16", "31202156.16", "300", Some("312.452123"))
     for (feed, bad, health) <- Vector(
-        (Health.Down(now - 604800000L, now - 604800000L), 1234, "connection disconnected"),
-        (Health.Live(now - 99999999000L), 999999, "connection stale")
+        (Health.Down(now - 604800000L, now - 604800000L), 1234, "ping down"),
+        (Health.Live(now - 99999999000L), 999999, "ping stale")
       )
     do
       val s = snapshot.copy(coin = "SOLANA", ctx = Some(ctx), feed = feed, bad = bad)
@@ -147,8 +150,8 @@ class StatusPanelSpec extends munit.FunSuite:
       val header = frame.lines.head.takeWhile(_ != '|')
       assertEquals(frame.lines.map(_.length), Vector.fill(30)(100))
       assert(header.contains("!logs") && header.contains("!results"), header)
-      assert(header.startsWith(health), header)
-      assert(header.contains("SOLANA") || header.contains("..."), header)
+      assert(header.contains(health), header)
+      assert(header.startsWith("SOLANA") || header.contains("..."), header)
       val expectedStats = Vector(
         "mid 312.452123",
         "mark 400",
@@ -160,8 +163,8 @@ class StatusPanelSpec extends munit.FunSuite:
       )
       val coin = if header.contains("SOLANA") then "SOLANA" else "..."
       val stats = header
+        .take(header.indexOf(health))
         .drop(header.indexOf(coin) + coin.length)
-        .takeWhile(_ != '!')
         .trim
       val shownStats = if stats.isEmpty then Vector.empty else stats.split("  ").toVector
       assert(shownStats.forall(expectedStats.contains), s"partial statistics field: $header")
@@ -183,9 +186,8 @@ class StatusPanelSpec extends munit.FunSuite:
         s = s
       ).lines.head.takeWhile(_ != '|')
       val age = (now - State.lastMsgAt(feed)).max(0L) / 1000.0
-      val health = if age > 5 then "stale" else "active"
-      val badText = if bad > 0 then s" bad $bad" else ""
-      val status = f"connection $health $age%.1fs$badText"
+      val ping = if age > 5 then "ping stale" else f"ping $age%.1fs"
+      val status = ping + (if bad > 0 then s" bad $bad" else "")
       val headerWidth = Layout.workspaceChartWidth(Layout.minCols) - 15
       val marketWidth = (headerWidth - status.length - 2).min(Layout.marketLabelWidth).max(3)
       val shortened =

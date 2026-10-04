@@ -9,35 +9,36 @@ class DisplayCleanupSpec extends munit.FunSuite:
       zone: java.time.ZoneId,
       style: Style
   ): Vector[String] =
+    // cols is the chart area here, so the terminal is that plus the outlook and its bar.
     Screen
       .renderMarket(
         s,
-        cols,
-        rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin),
         now,
         zone,
-        style
+        style,
+        Layout
+          .regions(cols + Layout.outlookWidth + 1, rows)
+          .copy(priceRows = rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin)),
+        AxisDecor.plain
       )
       .lines
   private val now = Golden.now
   private val zone = java.time.ZoneId.of("UTC")
-  test("header keeps connection health before statistics and beside the market prompt") {
+  test("header keeps the market first and the ping last beside the market prompt") {
     for cols <- Vector(100, 120) do
       for (health, label) <- Vector(
-          Health.Live(now - 300) -> "connection active 0.3s",
-          Health.Live(now - 5500) -> "connection stale 5.5s",
-          Health.Down(now - 100, now - 300) -> "connection disconnected 0.3s"
+          Health.Live(now - 300) -> "ping 0.3s",
+          Health.Live(now - 5500) -> "ping stale",
+          Health.Down(now - 100, now - 300) -> "ping down"
         )
       do
         for prompt <- Vector(None, Some("BTC")) do
           val s = Golden.snapshot.copy(coin = "X" * 20, feed = health, bad = 3, prompt = prompt)
-          val header = Screen.stats(s, now, cols)
+          val header = Chart.plain(Screen.stats(s, now, cols))
           assertEquals(header.length, cols)
-          assert(header.startsWith(label), header)
-          assert(header.contains(s.coin), header)
-          assert(header.contains(label), header)
-          assert(header.contains("bad 3"), header)
-          assert(header.indexOf(label) < header.indexOf("mark") || !header.contains("mark"), header)
+          assert(header.startsWith(s.coin + "  "), header)
+          assert(header.endsWith(label + " bad 3 "), header)
+          assert(header.indexOf(label) > header.indexOf("mark"), header)
           prompt.foreach(p => assert(header.contains(s"market: ${p}_"), header))
   }
 
@@ -52,22 +53,23 @@ class DisplayCleanupSpec extends munit.FunSuite:
     assertEquals(submitted.prompt, None)
     for cols <- Vector(100, 120) do
       for (health, label) <- Vector(
-          Health.Live(now - 300) -> "connection active 0.3s",
-          Health.Live(now - 5500) -> "connection stale 5.5s",
-          Health.Down(now - 100, now - 300) -> "connection disconnected 0.3s"
+          Health.Live(now - 300) -> "ping 0.3s",
+          Health.Live(now - 5500) -> "ping stale",
+          Health.Down(now - 100, now - 300) -> "ping down"
         )
       do
         val current = submitted.copy(feed = health, bad = 2147483647)
-        val header = Screen.stats(current, now, cols)
+        val header = Chart.plain(Screen.stats(current, now, cols))
         assertEquals(header.length, cols)
-        assert(header.startsWith(label + " bad 2147483647"), header)
-        assert(header.contains(name), header)
+        assert(header.endsWith(label + " bad 2147483647 "), header)
+        assert(header.startsWith(name + "  "), header)
         val input = ("Y" * 200 + "TAIL").foldLeft(
           State.reduce(current, Event.Key(Command.StartMarketPrompt), now)
         )((s, c) => State.reduce(s, Event.Key(Command.PromptChar(c)), now))
-        val editing = Screen.stats(input, now, cols)
+        val editing = Chart.plain(Screen.stats(input, now, cols))
         assertEquals(editing.length, cols)
-        assert(editing.startsWith(label + " bad 2147483647"), editing)
+        assert(editing.endsWith(label + " bad 2147483647 "), editing)
+        assert(editing.startsWith(name + "  "), editing)
         assert(editing.contains("market: ...") && editing.contains("TAIL_"), editing)
         assertEquals(input.coin, name)
   }

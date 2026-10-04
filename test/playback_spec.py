@@ -210,9 +210,14 @@ class PlaybackSpec(unittest.TestCase):
                 self.assertIn((denied, "denied"), calls)
 
     @staticmethod
-    def clock_frame(first, captured_ns):
-        values = [(first + offset) % 86400 for offset in (0, 61, 121)]
-        row = "c line 1s/col " + " ".join(f"{v // 3600:02}:{v // 60 % 60:02}:{v % 60:02}" for v in values)
+    def clock_frame(last, captured_ns):
+        # A time axis of 43 cells at two seconds a cell whose last cell starts at second last,
+        # with labelled ticks at cells 2, 17 and 32 and the outlook after it.
+        plot = [" "] * 43
+        for cell in (2, 17, 32):
+            value = (last - (42 - cell) * 2) % 86400
+            plot[cell:cell + 9] = f"|{value // 3600:02}:{value // 60 % 60:02}:{value % 60:02}"
+        row = "c line 2s/col".rjust(37) + " " + "".join(plot) + "|" + " " * 38
         return {"captured_ns": captured_ns, "lines": [row]}
 
     def test_history_moves_back_and_returns_across_midnight(self):
@@ -232,12 +237,14 @@ class PlaybackSpec(unittest.TestCase):
                 with self.subTest(elapsed=elapsed, shift=shift):
                     self.assertFalse(playback.history_matches(before, after, shift))
 
-    def test_history_requires_three_clocks_and_bounds_the_elapsed_allowance(self):
+    def test_history_requires_agreeing_ticks_and_bounds_the_elapsed_allowance(self):
         before = self.clock_frame(100, 0)
         good = self.clock_frame(70, 100_000_000)
-        wrong = {**good, "lines": [good["lines"][0].replace("00:02:11", "00:02:41")]}
+        self.assertTrue(playback.history_matches(before, good, -30))
+        wrong = {**good, "lines": [good["lines"][0].replace("|00:00:50", "|00:01:20")]}
         self.assertFalse(playback.history_matches(before, wrong, -30))
-        self.assertFalse(playback.history_matches(before, {**good, "lines": ["c line 1s/col 00:01:10"]}, -30))
+        blank = "c line 2s/col".rjust(37) + " " + " " * 43 + "|" + " " * 38
+        self.assertFalse(playback.history_matches(before, {**good, "lines": [blank]}, -30))
         self.assertFalse(playback.history_matches(before, self.clock_frame(70, 11_000_000_000), -30))
 
     def test_nonblocking_claim_needs_held_work_at_quit_and_a_real_queue_trace(self):
