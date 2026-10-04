@@ -58,7 +58,9 @@ class LimitControllerSpec extends munit.FunSuite:
     DeskAction.ConfirmMode("PROP"),
     DeskAction.ConfirmMode("LIVE"),
     DeskAction.OrderSize(false),
-    DeskAction.OrderSize(true)
+    DeskAction.OrderSize(true),
+    DeskAction.Prepare(buy),
+    DeskAction.Place
   )
 
   // The axis as a tall screen draws it, every mark on its own row, from 540 to 560 on 60 rows.
@@ -248,6 +250,7 @@ class LimitControllerSpec extends munit.FunSuite:
     g.key(Command.ZoomOut)
     g.controller.publish(before)
     g.key(Command.Confirm)
+    g.click(DeskAction.Place)
     assertEquals(g.ticket.map(_.price), Some(d("546.08")))
     g.nothingSent()
     g.frame()
@@ -269,7 +272,9 @@ class LimitControllerSpec extends munit.FunSuite:
     g.key(Command.OrderType)
     g.controller.publish(before)
     g.key(Command.PlaceOrder(buy))
+    g.click(DeskAction.Prepare(buy))
     g.nothingSent()
+    assertEquals(g.ticket, None)
     g.frame()
     g.key(Command.PlaceOrder(buy))
     assertEquals(g.sent.map(_.intent), Vector(buy))
@@ -308,6 +313,43 @@ class LimitControllerSpec extends munit.FunSuite:
     f.key(Command.Confirm)
     assertEquals((f.switched, f.panel.mode), (Vector("PROP"), "PROP"))
     f.nothingSent()
+  }
+
+  test("x right after a press opens a ticket waits for the frame that draws the ticket") {
+    val f = new Fixture(start = rested)
+    f.limit()
+    f.key(Command.PlaceOrder(buy))
+    assert(f.ticket.nonEmpty)
+    f.key(Command.Close)
+    f.nothingSent()
+    f.frame()
+    f.key(Command.Close)
+    assertEquals(f.planned, Vector(close))
+  }
+
+  test("a second Enter after a refused place waits for the frame that draws the refusal") {
+    val f = new Fixture
+    f.open(buy)
+    f.accept = false
+    f.key(Command.Confirm)
+    assertEquals(f.ticket.flatMap(_.notice), Some("Not sent: price or account changed"))
+    f.key(Command.Confirm)
+    assertEquals(f.sent.size, 1, "the frame drew the ticket without the reason")
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent.size, 2)
+  }
+
+  test("a press waits silently on a frame of another order type that drew it disabled") {
+    val f = new Fixture
+    f.frame(trade - DeskAction.Prepare(buy), Vector(DeskAction.Prepare(buy)))
+    f.key(Command.OrderType)
+    f.key(Command.PlaceOrder(buy))
+    assertEquals((f.notice, f.panel.actionNumber), (None, 0L))
+    f.nothingSent()
+    f.frame()
+    f.key(Command.PlaceOrder(buy))
+    assertEquals(f.ticket.map(_.price), Some(d("546.09")))
   }
 
   test("only a sized press opens a ticket or sends") {
