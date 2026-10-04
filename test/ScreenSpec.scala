@@ -268,6 +268,18 @@ class ScreenSpec extends munit.FunSuite:
       assert(text.forall(_.length == r.left + r.plot), text.map(_.length))
   }
 
+  test("the marker sits on the current price's true row") {
+    // The mid 547.47 is on true row 5 of the 543.60 to 552.40 axis, where the rounded row is 4.
+    val touch = Book(Vector(lv("547.46", "1")), Vector(lv("547.48", "1")), pinNow)
+    val frame = chart(pinned.copy(book = Some(touch)), 100, 30, Style.mono)
+    assertEqualsDouble(frame.axis.get.lo, 543.6, 1e-9)
+    assertEqualsDouble(frame.axis.get.hi, 552.4, 1e-9)
+    val marked = frame.lines.slice(1, 10).map(plain).zipWithIndex.collect {
+      case (line, row) if line.charAt(16) == '>' => row
+    }
+    assertEquals(marked, Vector(5))
+  }
+
   test("the plot takes the cells the right scale held") {
     val text = chart(pinned, 100, 30, Style.mono).lines.map(plain)
     val newest = text.slice(1, 10).map(_.charAt(60))
@@ -341,8 +353,11 @@ class ScreenSpec extends munit.FunSuite:
     assert(chart(pinned, 100, 30, Style.mono).axis.exists(_.lo > 543.0))
   }
 
-  test("the workspace draws the chart block above the fifteen row band") {
-    for (cols, rows) <- Vector((100, 30), (120, 40)) do
+  test("the workspace draws the chart block above the fifteen row band in every mode") {
+    for
+      (cols, rows) <- Vector((100, 30), (120, 40))
+      mode <- Vector("LIVE", "PROP", "VIEW")
+    do
       val tradeTop = rows - 15
       val r = Layout.regions(cols, rows)
       val width = r.left + r.plot
@@ -350,7 +365,7 @@ class ScreenSpec extends munit.FunSuite:
         .draw(
           pinned,
           TradingView("XMR", message = "ready"),
-          PanelView(),
+          PanelView(mode = mode),
           cols,
           rows,
           pinNow,
@@ -371,7 +386,7 @@ class ScreenSpec extends munit.FunSuite:
         .lines
         .map(plain)
       assertEquals(block.size, tradeTop - 1)
-      assertEquals(text.take(tradeTop - 1).map(_.take(width)), block)
+      assertEquals(text.take(tradeTop - 1).map(_.take(width)), block, mode)
       assertEquals(text(tradeTop - 1).take(width), " " * width)
       assert(text.take(tradeTop).forall(_.charAt(width) == '|'))
       assertEquals(text(tradeTop - 2).take(38), " " * 24 + "c line 2s/col ")

@@ -523,6 +523,23 @@ class ChartSpec extends munit.FunSuite:
       ),
       Vector(PlotMark(22, 6, '▼', Screen.bold))
     )
+    // A mono buy carries no colour either.
+    assertEquals(
+      Chart.fillMarks(
+        Vector(fill(Side.Buy, 999_000L, "546.00", "0.2")),
+        a,
+        1_000_000L,
+        2000L,
+        23,
+        Style.mono
+      ),
+      Vector(PlotMark(22, 6, '▲', Screen.bold))
+    )
+    // 547.47 is on true row 5, where the rounded row would be 4.
+    assertEquals(
+      marks(fill(Side.Buy, 999_000L, "547.47", "0.2")),
+      Vector(PlotMark(22, 5, '▲', buy))
+    )
   }
 
   test("two fills in one cell show the larger dollar fill, the later on a tie") {
