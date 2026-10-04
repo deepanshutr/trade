@@ -1182,32 +1182,34 @@ class SettingsScreenSpec extends munit.FunSuite:
     val release = new CountDownLatch(1)
     val readers = ArrayBuffer.empty[String]
     val handed = ArrayBuffer.empty[Seq[String]]
-    val context = SettingsWiring.context(
-      network = "mainnet",
-      config = None,
-      home = Path.of("/nowhere"),
-      bound = bound,
-      controller = controller,
-      keyRow = () => Right("Main"),
-      reload = () => Right(()),
-      ownerRead = () => {
-        readers.synchronized(readers += Thread.currentThread().getName)
-        val _ = release.await(5L, java.util.concurrent.TimeUnit.SECONDS)
-        Right(status())
-      },
-      reading = new SettingsScreen.ReadGate,
-      handOff = command => {
-        handed += command
-        Right(0)
-      },
-      keyChild = Seq("java", "--keys"),
-      env = Map.empty,
-      copy = _ => Right(()),
-      livePending = () => false,
-      size = () => (100, 30),
-      now = () => start,
-      approve = Right(Nil)
-    )
+    def build(keyChild: Either[String, Seq[String]]): SettingsScreen.Context =
+      SettingsWiring.context(
+        network = "mainnet",
+        config = None,
+        home = Path.of("/nowhere"),
+        bound = bound,
+        controller = controller,
+        keyRow = () => Right("Main"),
+        reload = () => Right(()),
+        ownerRead = () => {
+          readers.synchronized(readers += Thread.currentThread().getName)
+          val _ = release.await(5L, java.util.concurrent.TimeUnit.SECONDS)
+          Right(status())
+        },
+        reading = new SettingsScreen.ReadGate,
+        handOff = command => {
+          handed += command
+          Right(0)
+        },
+        keyChild = keyChild,
+        env = Map.empty,
+        copy = _ => Right(()),
+        livePending = () => false,
+        size = () => (100, 30),
+        now = () => start,
+        approve = Right(Nil)
+      )
+    val context = build(Right(Seq("java", "--keys")))
     try
       val chosen =
         Bindings.defaults.updated(Bind.Close, Binding(Vector(KeyGroup(Vector(11))))).toOption.get
@@ -1230,7 +1232,62 @@ class SettingsScreenSpec extends munit.FunSuite:
         Left(Child.notInstalled)
       )
       assertEquals(handed.toVector, Vector(Seq("java", "--keys")))
+      val development = build(Left("Settings children need the installed desk.jar"))
+      assertEquals(
+        development.runKeyScreen(),
+        Left("Settings children need the installed desk.jar")
+      )
+      assertEquals(handed.size, 1)
     finally release.countDown()
+  }
+
+  test("the key child runs only from a regular desk jar") {
+    val folder = java.nio.file.Files.createTempDirectory("desk-jar")
+    try
+      val args = Main.Args("XMR", false)
+      val jar = java.nio.file.Files.createFile(folder.resolve("desk.jar")).toString
+      assertEquals(
+        SettingsWiring.keyChild(args, "/java", jar),
+        Right(Child.keyScreen(args, "/java", jar))
+      )
+      val refused = Left("Settings children need the installed desk.jar")
+      val zip = java.nio.file.Files.createFile(folder.resolve("desk.zip")).toString
+      val classes = java.nio.file.Files.createDirectory(folder.resolve("classes.jar")).toString
+      for path <- Vector(s"$jar:$zip", folder.resolve("missing.jar").toString, zip, classes) do
+        assertEquals(SettingsWiring.keyChild(args, "/java", path), refused, path)
+    finally TempDirectories.remove(folder)
+  }
+
+  test("Desk ends a running child before it gives the terminal back") {
+    val events = ArrayBuffer.empty[String]
+    final class Started(running: Boolean) extends Process:
+      private var alive = running
+      def getOutputStream: OutputStream = OutputStream.nullOutputStream()
+      def getInputStream: InputStream = InputStream.nullInputStream()
+      def getErrorStream: InputStream = InputStream.nullInputStream()
+      def waitFor(): Int = 0
+      def exitValue(): Int = 0
+      def destroy(): Unit =
+        events += "destroy"
+        alive = false
+      override def isAlive: Boolean = alive
+    var running = true
+    val children = new SettingsWiring.Children(command => {
+      events += s"start ${command.mkString(" ")}"
+      new Started(running)
+    })
+    val restore = SettingsWiring.restoring(children, () => events += "restore")
+    val _ = children.start(Seq("vault", "owner"))
+    restore()
+    assertEquals(events.toVector, Vector("start vault owner", "destroy", "restore"))
+    events.clear()
+    restore()
+    assertEquals(events.toVector, Vector("restore"))
+    events.clear()
+    running = false
+    val _ = children.start(Seq("desk", "--keys"))
+    restore()
+    assertEquals(events.toVector, Vector("start desk --keys", "restore"))
   }
 
   // The workspace side

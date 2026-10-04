@@ -69,6 +69,8 @@ object KeyGroup:
     Character.LINE_SEPARATOR,
     Character.PARAGRAPH_SEPARATOR,
     Character.NON_SPACING_MARK,
+    // A space other than the space bar shows as nothing, so its label would be blank.
+    Character.SPACE_SEPARATOR,
     Character.ENCLOSING_MARK
   )
 

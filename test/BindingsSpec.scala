@@ -456,3 +456,12 @@ class BindingsSpec extends TempDirectorySuite:
       Right(Bindings.defaults.map)
     )
   }
+
+  test("invisible space characters are not keys, and the space bar keeps its name") {
+    def typed(text: String): KeyGroup = KeyGroup(text.getBytes("UTF-8").toVector.map(_ & 0xff))
+    // Option Space on Apple Terminal, a figure space, and the two-column ideographic space.
+    for text <- Vector("\u00a0", "\u2007", "\u3000") do
+      assertEquals(KeyGroup.refused(typed(text)), Some("That is not one key"), text)
+    assertEquals(KeyGroup.refused(KeyGroup(Vector(32))), None)
+    assertEquals(KeyGroup.name(KeyGroup(Vector(32))), "Space")
+  }

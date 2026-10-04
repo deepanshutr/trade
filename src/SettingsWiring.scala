@@ -2,7 +2,7 @@ package desk
 
 import java.io.{InputStream, PrintStream}
 import java.nio.charset.StandardCharsets.UTF_8
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 
 // How the running Desk wires settings in. WorkspaceApp.run calls these with the real terminal,
@@ -129,7 +129,7 @@ object SettingsWiring:
       ownerRead: () => Either[String, OwnerStatus],
       reading: SettingsScreen.ReadGate,
       handOff: Seq[String] => Either[String, Int],
-      keyChild: Seq[String],
+      keyChild: Either[String, Seq[String]],
       env: Map[String, String],
       copy: String => Either[String, Unit],
       livePending: () => Boolean,
@@ -158,7 +158,7 @@ object SettingsWiring:
       keyRow = keyRow,
       ownerStatus = () => reads.status,
       refreshOwner = () => reads.refresh(),
-      runKeyScreen = () => handOff(keyChild),
+      runKeyScreen = () => keyChild.flatMap(handOff),
       runOwner = words => Child.vault(env, words).flatMap(handOff),
       copyAddress = address => copy(address),
       reload = reload,
@@ -175,3 +175,28 @@ object SettingsWiring:
   // The clipboard copy of a public address.
   def copyAddress(address: String): Either[String, Unit] =
     Clipboard.copySecret(address.getBytes(UTF_8), ProcessRun.system)
+
+  // The key child is Desk's own jar run again. Under a development run the class path is a list
+  // of folders and jars, and no child can start from that.
+  def keyChild(args: Main.Args, java: String, classPath: String): Either[String, Seq[String]] =
+    Either.cond(
+      classPath.endsWith(".jar") && Files.isRegularFile(Path.of(classPath)),
+      Child.keyScreen(args, java, classPath),
+      "Settings children need the installed desk.jar"
+    )
+
+  // Starts children and keeps the latest, so Desk can end it when Desk stops.
+  final class Children(launch: Seq[String] => Process):
+    private val current = new AtomicReference(Option.empty[Process])
+    def start(command: Seq[String]): Process =
+      val process = launch(command)
+      current.set(Some(process))
+      process
+    def stop(): Unit =
+      current.getAndSet(None).filter(_.isAlive).foreach(_.destroy())
+
+  // What restoring the terminal does when Desk stops: a child still on the terminal ends first,
+  // so the shell gets the terminal back with nothing else reading it.
+  def restoring(children: Children, restore: () => Unit): () => Unit = () =>
+    children.stop()
+    restore()

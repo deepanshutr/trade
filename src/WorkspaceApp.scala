@@ -420,12 +420,17 @@ object WorkspaceApp:
       }
       print(mouse(true))
       Console.flush()
+      val children =
+        new SettingsWiring.Children(words => new ProcessBuilder(words.asJava).inheritIO().start())
       val restoration = new Restoration(
         () => closeAll(),
-        () => {
-          print(mouse(false))
-          Term.restore(saved)
-        }
+        SettingsWiring.restoring(
+          children,
+          () => {
+            print(mouse(false))
+            Term.restore(saved)
+          }
+        )
       )
       def restore(): Unit = { restoration.restore(); () }
       Runtime.getRuntime.addShutdownHook(new Thread(() => restore()))
@@ -491,7 +496,8 @@ object WorkspaceApp:
           .info()
           .command()
           .orElse(System.getProperty("java.home") + "/bin/java")
-      val keyChild = Child.keyScreen(args, javaCommand, System.getProperty("java.class.path"))
+      val keyChild =
+        SettingsWiring.keyChild(args, javaCommand, System.getProperty("java.class.path"))
       def handOff(command: Seq[String]): Either[String, Int] =
         SettingsWiring.handOff(
           command,
@@ -502,7 +508,7 @@ object WorkspaceApp:
           System.in,
           System.out,
           SettingsWiring.terminal,
-          words => new ProcessBuilder(words.asJava).inheritIO().start()
+          children.start
         )
       // Runs the settings screen on the keys thread. True when it asks Desk to quit.
       def openSettings(): Boolean =
