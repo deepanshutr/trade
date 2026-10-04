@@ -450,6 +450,35 @@ class ChartSpec extends munit.FunSuite:
       assert(a.lo < 545.784, a)
   }
 
+  test("a current price with enough rows above it leaves the top of the range alone") {
+    val series = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
+    // No held price, as every frame draws today: the current price stays on row 0.
+    val bare = Chart.axis(series, Some(touch), 9).get
+    assertEqualsDouble(bare.lo, 539.695, 1e-9)
+    assertEqualsDouble(bare.hi, 546.405, 1e-9)
+    assertEquals(bare.trueRow(546.09), 0)
+    // One held price above and the current price already on row 1 of 30: room exactly met.
+    val met = Chart.axis(series, Some(touch), 30, Vector(546.10)).get
+    assertEqualsDouble(met.lo, 539.695, 1e-9)
+    assertEqualsDouble(met.hi, 546.405, 1e-9)
+    assertEquals(met.trueRow(546.09), 1)
+  }
+
+  test("a held price repeated is counted once on either side of the current price") {
+    // Two prices above, one of them twice: the top grows for two rows, not three.
+    val above = Vector(Some(Column(540.0, 540.0, 546.11, 546.11, 0)))
+    val up = Chart.axis(above, Some(touch), 9, Vector(546.10, 546.11, 546.11)).get
+    assertEqualsDouble(up.lo, 539.6945, 1e-9)
+    assertEqualsDouble(up.hi, 548.5498076923, 1e-9)
+    assertEquals(up.trueRow(546.09), 2)
+    // Two prices below, one of them twice: the bottom grows for two rows, not three.
+    val below = Vector(Some(Column(546.07, 546.07, 552.0, 552.0, 0)))
+    val down = Chart.axis(below, Some(touch), 9, Vector(546.08, 546.07, 546.07)).get
+    assertEqualsDouble(down.lo, 543.7028846154, 1e-9)
+    assertEqualsDouble(down.hi, 552.2965, 1e-9)
+    assertEquals(down.trueRow(546.09), 6)
+  }
+
   test("held prices that cannot all fit keep the five percent pad and are left off as before") {
     // Three prices above and the current price need four rows of three.
     val series = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
