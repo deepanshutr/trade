@@ -404,7 +404,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     f.pauseActive()
     assert(f.submit(buy, "XMR"))
     Wait.until("completion and fresh account snapshot missing")(!f.worker.view.pending)
-    assertEquals(f.worker.view.outcome, Some("XMR filled 1 at 100"))
+    assertEquals(f.worker.view.outcome, Some("XMR filled $20.00 at 100"))
 
   private def assertUsable(f: Fixture, expected: Option[String], cash: Boolean = false): Unit =
     val view = f.worker.view
@@ -1668,7 +1668,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.position = "7"
       assert(f.submit(buy, "XMR"))
       Wait.until("partial response not shown")(
-        f.worker.view.message.contains("filled 1 at 100")
+        f.worker.view.message.contains("filled $20.00 at 100")
       )
       Wait.until("account position was not refreshed")(f.worker.view.ready)
       assertEquals(f.worker.view.position, Some(BigDecimal("7")))
@@ -1771,7 +1771,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assert(f.accountEntered.await(3, TimeUnit.SECONDS))
       assert(f.submit(buy, "XMR"))
       Wait.until("order response was not processed")(
-        f.worker.view.message.contains("filled 1 at 100")
+        f.worker.view.message.contains("filled $20.00 at 100")
       )
       f.position = "7"
       f.accountRelease.countDown()
@@ -1898,7 +1898,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       val _ = f.recoveryEntered.await(1500, TimeUnit.MILLISECONDS)
       signingRelease.countDown()
       Wait.until("the direct order result did not complete")(
-        f.worker.view.message.contains("filled 1 at 100")
+        f.worker.view.message.contains("filled $20.00 at 100")
       )
       f.recoveryRelease.countDown()
       Wait.until("the completed submission did not settle")(
@@ -2039,7 +2039,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       release.countDown()
       Wait.until("captured press did not settle")(
         f.worker.view.message.contains("canceled before sending") ||
-          f.worker.view.message.contains("filled 1 at 100")
+          f.worker.view.message.contains("filled $20.00 at 100")
       )
       assertEquals(f.orderPosts.get(), 0)
       assert(f.worker.view.message.contains("canceled before sending"))
@@ -2246,7 +2246,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       assert(f.submit(buy, "XMR"))
-      Wait.until("fill missing")(f.worker.view.message.contains("filled 1 at 100"))
+      Wait.until("fill missing")(f.worker.view.message.contains("filled $20.00 at 100"))
       f.ready()
       f.publishActive = false
       f.clock.addAndGet(2001)
@@ -2257,13 +2257,13 @@ class TradingWorkerSpec extends TempDirectorySuite:
       val depth =
         workspaceText(f.worker.view)
       assert(depth.contains("Waiting for prices"), depth)
-      assert(f.worker.view.outcome.exists(_.contains("XMR filled 1 at 100")))
+      assert(f.worker.view.outcome.exists(_.contains("XMR filled $20.00 at 100")))
       assert(!depth.contains("Filled #1"), depth)
       f.fresh(f.worker, time = 3001)
       val account =
         workspaceText(f.worker.view)
       assert(account.contains("Account unavailable"), account)
-      assert(f.worker.view.outcome.exists(_.contains("XMR filled 1 at 100")))
+      assert(f.worker.view.outcome.exists(_.contains("XMR filled $20.00 at 100")))
       assert(!account.contains("Filled #1"), account)
       f.readFailure = true
       Wait.until("failed refresh not observed")(
@@ -2272,7 +2272,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       val failed =
         workspaceText(f.worker.view)
       assert(failed.contains("Account unavailable"), failed)
-      assert(f.worker.view.outcome.exists(_.contains("XMR filled 1 at 100")))
+      assert(f.worker.view.outcome.exists(_.contains("XMR filled $20.00 at 100")))
       assert(!failed.contains("Filled #1"), failed)
       assert(!f.worker.view.ready)
       assert(!f.submit(buy, "XMR"))
@@ -2280,7 +2280,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       val down =
         workspaceText(f.worker.view)
       assert(down.contains("Reconnecting"), down)
-      assert(f.worker.view.outcome.exists(_.contains("XMR filled 1 at 100")))
+      assert(f.worker.view.outcome.exists(_.contains("XMR filled $20.00 at 100")))
       assert(!down.contains("Filled #1"), down)
       assertEquals(f.orderPosts.get(), 1)
     finally f.close()
@@ -2293,7 +2293,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       assert(f.submit(buy, "XMR"))
-      Wait.until("fill missing")(f.worker.view.message.contains("filled 1 at 100"))
+      Wait.until("fill missing")(f.worker.view.message.contains("filled $20.00 at 100"))
       f.ready()
       assert(!f.submit(buy, "BTC"))
       assert(

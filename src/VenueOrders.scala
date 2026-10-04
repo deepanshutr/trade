@@ -7,8 +7,8 @@ import scala.util.Try
 object VenueOrders:
   private val WholeLimit = BigInt(2).pow(53) - 1
 
-  // Same list as the terminal statuses that Exchange checks for a recovered order.
-  private val terminal = Set(
+  // Every order status after which the venue holds nothing more of the order.
+  private[desk] val terminal = Set(
     "filled",
     "canceled",
     "rejected",

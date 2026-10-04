@@ -116,6 +116,9 @@ final class Diagnostics private[desk] (
   private var frameStalled = false
   private var switchStalled = false
   private var executionSeen = Option.empty[((String, String), Long, Long)]
+  // The live worker's ignored order updates and orders not found, as the last live frame saw
+  // them. A new worker starts from zero, so each rise is written once.
+  private var ordersSeen = (0L, 0L)
   private val writer = Threads.daemon("desk-diagnostics")(run())
 
   private def emit(kind: String, fields: (String, ujson.Value)*): Unit =
@@ -160,6 +163,16 @@ final class Diagnostics private[desk] (
         case BlockCode.Storage                       => "storage"
         case BlockCode.Prices | BlockCode.Connection => "prices"
         case BlockCode.Blocked                       => "blocked"
+    if kind == "live" then
+      val (ignored, missing) = ordersSeen
+      if view.ignoredOrderUpdates > ignored then
+        emit(
+          "order_updates_ignored",
+          "ignoredOrderUpdates" -> ujson.Num(view.ignoredOrderUpdates.toDouble)
+        )
+      if view.notFoundOrders > missing then
+        emit("order_not_found", "count" -> ujson.Num((view.notFoundOrders - missing).toDouble))
+      ordersSeen = (view.ignoredOrderUpdates, view.notFoundOrders)
     val key = (kind, state)
     val elapsed = monotonic()
     val changed = executionSeen.forall(_._1 != key)
