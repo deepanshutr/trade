@@ -162,6 +162,16 @@ class PropWalletRecoverySpec extends TempDirectorySuite:
     }
   }
 
+  test("a saved wallet with twenty resting orders, the cap, loads them all") {
+    withDirectory { directory =>
+      val orders = (1 to 20).map(n => restingOrder("0x%032x".format(n)))
+      LocalFiles.write(directory.resolve("wallet-mainnet.json"), walletWith(orders*))
+      val wallet = PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+      try assertEquals(wallet.account.resting.size, 20)
+      finally wallet.close()
+    }
+  }
+
   for (label, resting) <- Vector(
       "a malformed id" -> Vector(restingOrder("0x12")),
       "a repeated id" -> Vector(restingOrder(), restingOrder()),

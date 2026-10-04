@@ -48,13 +48,13 @@ class PropRestingSpec extends TempDirectorySuite:
     book()
     assert(worker.view.ready, worker.view.message)
 
-    def book(socket: Boolean = true): Unit =
+    def book(socket: Boolean = true, bid: String = "546.09", ask: String = "546.10"): Unit =
       worker.observe(
         Event.BookUpdate(
           "XMR",
           Book(
-            Vector(Level("546.09", "50", 1)),
-            Vector(Level("546.10", "50", 1)),
+            Vector(Level(bid, "50", 1)),
+            Vector(Level(ask, "50", 1)),
             bookTime.incrementAndGet()
           ),
           socket
@@ -90,10 +90,6 @@ class PropRestingSpec extends TempDirectorySuite:
       Trade(at, Side.Sell, price, "0.01", Some(number))
     def held: BigDecimal =
       ledger.account.positions.get("XMR").fold(BigDecimal(0))(_.quantity)
-    def seen: Set[(Long, Long)] =
-      val field = classOf[PropWorker].getDeclaredFields.find(_.getName.contains("seenTrades")).get
-      field.setAccessible(true)
-      field.get(worker).asInstanceOf[scala.collection.Set[(Long, Long)]].toSet
     def close(): Unit = worker.close()
 
   private def withFixture(cash: String = "10000")(run: Fixture => Unit): Unit =
@@ -186,6 +182,7 @@ class PropRestingSpec extends TempDirectorySuite:
 
   test("the cap of twenty holds and an order at a price already resting gets its own id") {
     withFixture() { f =>
+      f.fill(Side.Buy, "109.22")
       for _ <- 1 to 20 do f.place(Side.Buy, "546.00", "20")
       val resting = f.ledger.account.resting
       assertEquals(resting.size, 20)
@@ -195,6 +192,11 @@ class PropRestingSpec extends TempDirectorySuite:
       val extra = PropOrder(id(21), "XMR", Side.Buy, d("545.00"), d("0.036"), false, start)
       assertEquals(f.ledger.rest(extra, f.ledger.account.count), Left(capText))
       assertEquals(f.ledger.account.resting.size, 20)
+      assert(f.preview(Side.Buy, None, "20").isRight)
+      assertEquals(
+        f.preview(Side.Sell, None, "20", OrderKind.Close).map(_.quantity),
+        Right(d("0.2"))
+      )
     }
   }
 
@@ -254,6 +256,11 @@ class PropRestingSpec extends TempDirectorySuite:
       val order = f.place(Side.Sell, "552.00", "55.20")
       assertEquals(order.quantity, d("0.1"))
       assert(order.reduceOnly)
+      assertEquals(f.ledger.usable, f.ledger.account.cash)
+      val count = f.ledger.account.count
+      f.trades(f.trade("551.90", 3))
+      assertEquals(f.ledger.account.resting, Vector(order))
+      assertEquals(f.ledger.account.count, count)
       f.trades(f.trade("552.00", 1))
       assertEquals(f.ledger.account.resting, Vector(order))
       val at = start + 9
@@ -311,16 +318,26 @@ class PropRestingSpec extends TempDirectorySuite:
     }
   }
 
-  test("a seen trade older than the tape window leaves the set and an older trade never enters") {
+  test("two trades at one time with different ids both count") {
     withFixture() { f =>
-      val old = start - State.tapeMs + 10
-      f.trades(Trade(old, Side.Sell, "546.00", "0.01", Some(1)))
-      assertEquals(f.seen, Set((old, 1L)))
-      f.wall.addAndGet(20)
-      f.trades(Trade(f.wall.get(), Side.Sell, "546.00", "0.01", Some(2)))
-      assertEquals(f.seen, Set((f.wall.get(), 2L)))
-      f.trades(Trade(f.wall.get() - State.tapeMs - 1, Side.Sell, "546.00", "0.01", Some(3)))
-      assertEquals(f.seen, Set((f.wall.get(), 2L)))
+      f.place(Side.Buy, "546.00", "109.20")
+      f.trades(Trade(start + 5, Side.Sell, "545.90", "0.01", Some(7)))
+      assertEquals(f.ledger.account.resting, Vector.empty)
+      f.place(Side.Buy, "546.00", "109.20")
+      f.trades(Trade(start + 5, Side.Sell, "545.90", "0.01", Some(8)))
+      assertEquals(f.ledger.account.resting, Vector.empty)
+      assertEquals(f.held, d("0.4"))
+    }
+  }
+
+  test("a trade older than the tape window fills nothing") {
+    withFixture() { f =>
+      val order = f.place(Side.Buy, "546.00", "109.20")
+      f.wall.addAndGet(State.tapeMs + 10)
+      f.trades(Trade(start + 5, Side.Sell, "545.90", "0.01", Some(1)))
+      assertEquals(f.ledger.account.resting, Vector(order))
+      f.trades(f.trade("545.90", 2))
+      assertEquals(f.ledger.account.resting, Vector.empty)
     }
   }
 
@@ -495,4 +512,84 @@ class PropRestingSpec extends TempDirectorySuite:
       assertEquals(fills.size, 200)
       assertEquals(fills.map(_.time).distinct, (2 to 11).map(start + _).toVector)
     finally f.close()
+  }
+
+  test("a posted buy whose price the ask has since reached is refused at placement") {
+    withFixture() { f =>
+      val review = f.review(Side.Buy, Some("546.00"), "109.20")
+      f.book(bid = "545.90", ask = "545.95")
+      assert(f.worker.view.ready, f.worker.view.message)
+      assert(f.worker.submitReviewed(review))
+      assertEquals(
+        f.worker.view.outcome,
+        Some("Price would take liquidity. Move it below the ask")
+      )
+      assertEquals(f.ledger.account.resting, Vector.empty)
+      assertEquals(f.ledger.account.count, 0L)
+      assert(!f.worker.submitReviewed(review))
+      f.trades(f.trade("545.95", 1))
+      assertEquals(f.ledger.account.positions, Map.empty[String, PropPosition])
+    }
+  }
+
+  test("a posted sell whose price the bid has since reached is refused at placement") {
+    withFixture() { f =>
+      f.fill(Side.Buy, "109.22")
+      val review = f.review(Side.Sell, Some("546.20"), "55.20")
+      f.book(bid = "546.20", ask = "546.25")
+      assert(f.worker.submitReviewed(review))
+      assertEquals(
+        f.worker.view.outcome,
+        Some("Price would take liquidity. Move it above the bid")
+      )
+      assertEquals(f.ledger.account.resting, Vector.empty)
+    }
+  }
+
+  test("a touch move that does not reach the posted price leaves the order to rest") {
+    withFixture() { f =>
+      val review = f.review(Side.Buy, Some("546.00"), "109.20")
+      f.book(bid = "546.01", ask = "546.05")
+      assert(f.worker.submitReviewed(review))
+      assertEquals(f.worker.view.outcome, Some("XMR resting $109.20 at 546.00"))
+      assertEquals(f.ledger.account.resting.map(_.price), Vector(d("546")))
+    }
+  }
+
+  test("a trade fills only orders on its own market") {
+    withFixture() { f =>
+      val btc = PropOrder(id(1), "BTC", Side.Buy, d("60000"), d("0.001"), false, start)
+      assertEquals(
+        f.ledger.rest(btc, f.ledger.account.count),
+        Right("BTC resting $60.00 at 60000")
+      )
+      val xmr = f.place(Side.Buy, "546.00", "109.20")
+      f.trades(f.trade("546.05", 1))
+      assertEquals(f.ledger.account.resting, Vector(btc, xmr))
+      f.worker.observe(
+        Event.Trades("BTC", Vector(Trade(start + 2, Side.Sell, "100.0", "0.01", Some(2))))
+      )
+      assertEquals(f.ledger.account.resting, Vector(btc, xmr))
+      f.trades(f.trade("545.90", 3))
+      assertEquals(f.ledger.account.resting, Vector(btc))
+    }
+  }
+
+  test("a buy whose value and fee equal the usable cash rests and leaves none") {
+    withFixture("109.21638") { f =>
+      f.place(Side.Buy, "546.00", "109.20")
+      assertEquals(f.ledger.account.resting.size, 1)
+      assertEquals(f.ledger.usable, d("0"))
+    }
+  }
+
+  test("trades in one batch count in time order") {
+    withFixture() { f =>
+      f.place(Side.Buy, "546.00", "109.20")
+      f.trades(
+        Trade(start + 9, Side.Sell, "545.90", "0.01", Some(1)),
+        Trade(start + 5, Side.Sell, "545.90", "0.01", Some(2))
+      )
+      assertEquals(f.worker.view.fills.map(_.time), Vector(start + 5))
+    }
   }

@@ -317,9 +317,14 @@ final class PropWorker(
   def submitReviewed(review: OrderReview): Boolean = synchronized {
     if !matches(review) || pending.get() then false
     else if review.plan.post then
-      // A posted order rests at once. Nothing waits for its fill.
+      // A posted order rests at once. Nothing waits for its fill. A price the touch reached
+      // since the review would take liquidity, so it is refused as the venue refuses it.
       val id = "0x" + java.util.UUID.randomUUID().toString.replace("-", "")
-      val result = ledger.rest(order(review.plan, id, wall()), prepared.get.accountCount)
+      val plan = review.plan
+      val result = touch
+        .flatMap(t => Trading.crossing(plan.side, plan.limit, t.bidPrice, t.askPrice))
+        .toLeft(())
+        .flatMap(_ => ledger.rest(order(plan, id, wall()), prepared.get.accountCount))
       lastPlan = Some(review.plan)
       prepared = None
       outcome = Some(result.fold(identity, identity))
