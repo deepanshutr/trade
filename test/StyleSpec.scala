@@ -36,6 +36,11 @@ class StyleSpec extends munit.FunSuite:
     assertEquals(Vector(m.bid, m.ask, m.book, m.tape, m.bitcoin, m.gold), Vector.fill(6)(""))
   }
 
+  test("the contrast helper matches known values") {
+    assertEqualsDouble(contrast((255, 255, 255), (0, 0, 0)), 21.0, 0.01)
+    assertEqualsDouble(contrast((217, 102, 31), (0xfd, 0xf6, 0xe3)), 3.32, 0.01)
+  }
+
   test("each fixed colour reads at 3 to 1 on all four backgrounds") {
     val backgrounds = Vector((0xfd, 0xf6, 0xe3), (0x00, 0x2b, 0x36), (0xff, 0xff, 0xff), (0, 0, 0))
     val colours = Vector(
