@@ -6,6 +6,10 @@ import java.time.Duration
 import java.util.concurrent.{CompletionStage, TimeUnit}
 import scala.util.Try
 
+enum OrderEvent:
+  case Opened(at: Long)
+  case Updates(values: Vector[ujson.Value], at: Long)
+
 trait Exchange:
   def info(body: ujson.Value): Option[ujson.Value]
   def post(body: ujson.Value): Option[ujson.Value]
@@ -22,6 +26,7 @@ trait Exchange:
       clock: () => Long,
       receive: (Option[ujson.Value], Long) => Unit
   ): Unit = watch(coin, owner, generation, data => receive(data, clock()))
+  def watchOrders(receive: OrderEvent => Unit): Unit = ()
   def warm(): Unit = ()
   def close(): Unit = ()
 
@@ -106,6 +111,16 @@ private[desk] final class ActiveDataReads:
           )
         )
     }
+  // Order updates ride the account socket. They pass only while their session is current.
+  def orders(session: ActiveDataSession, message: ujson.Value, now: Long): Option[OrderEvent] =
+    synchronized {
+      if !current.contains(session) then None
+      else
+        Try {
+          require(message("channel").str == "orderUpdates")
+          OrderEvent.Updates(message("data").arr.toVector, now)
+        }.toOption
+    }
   def accept(
       session: ActiveDataSession,
       message: ujson.Value,
@@ -164,6 +179,8 @@ final class JdkExchange(
   private var pingAt = 0L
   private val streamGuard = new StreamGuard
   private val activeReads = new ActiveDataReads
+  @volatile private var orderReceiver: OrderEvent => Unit = _ => ()
+  override def watchOrders(receive: OrderEvent => Unit): Unit = orderReceiver = receive
   override def watch(
       coin: String,
       owner: String,
@@ -231,6 +248,7 @@ final class JdkExchange(
               parsed.flatMap(activeReads.accept(session, _, clock())).foreach { case (value, at) =>
                 receive(value, at)
               }
+              parsed.flatMap(activeReads.orders(session, _, clock())).foreach(orderReceiver)
             }
           socket.request(1)
           null
@@ -265,6 +283,14 @@ final class JdkExchange(
       )
       val _ =
         socket.sendText(ujson.write(message), true).get(3, TimeUnit.SECONDS)
+      val updates = ujson.Obj(
+        "method" -> "subscribe",
+        "subscription" -> ujson.Obj("type" -> "orderUpdates", "user" -> owner)
+      )
+      val _ =
+        socket.sendText(ujson.write(updates), true).get(3, TimeUnit.SECONDS)
+      // Updates sent while no socket was open are lost, so each open asks for a reconciliation.
+      val _ = streamGuard.deliver(id) { orderReceiver(OrderEvent.Opened(clock())) }
     else if now - pingAt > TimeUnit.SECONDS.toNanos(20) then
       val socket = synchronized(stream)
       socket.foreach(s => {
@@ -331,40 +357,10 @@ object Exchange:
   // Local and venue clocks are within this margin: the venue checks expiry on its clock, Desk on local time.
   // Assumes order status lookup reflects every action applied before expiry within this margin.
   // Assumes an err reply plus unknownOid after this margin means the action was not placed.
-  private val ExpiryMarginMs = 60000L
+  private[desk] val ExpiryMarginMs = 60000L
   // The local clock may step, so release also needs this much monotonic time since Desk
   // first saw the order: the five-second signed lifetime plus the margin.
   private val ReleaseWaitMs = 5000L + ExpiryMarginMs
-
-  private val terminal = Set(
-    "filled",
-    "canceled",
-    "rejected",
-    "marginCanceled",
-    "vaultWithdrawalCanceled",
-    "openInterestCapCanceled",
-    "selfTradeCanceled",
-    "reduceOnlyCanceled",
-    "siblingFilledCanceled",
-    "delistedCanceled",
-    "liquidatedCanceled",
-    "scheduledCancel",
-    "tickRejected",
-    "minTradeNtlRejected",
-    "perpMarginRejected",
-    "reduceOnlyRejected",
-    "badAloPxRejected",
-    "iocCancelRejected",
-    "badTriggerPxRejected",
-    "marketOrderNoLiquidityRejected",
-    "positionIncreaseAtOpenInterestCapRejected",
-    "positionFlipAtOpenInterestCapRejected",
-    "tooAggressiveAtOpenInterestCapRejected",
-    "openInterestIncreaseRejected",
-    "insufficientSpotBalanceRejected",
-    "oracleRejected",
-    "perpMaxPositionRejected"
-  )
 
   private[desk] def integer(value: ujson.Value): Int =
     val n = value.num
@@ -406,7 +402,7 @@ object Exchange:
         "p" -> p.limit,
         "s" -> p.quantity,
         "r" -> p.reduceOnly,
-        "t" -> ujson.Obj("limit" -> ujson.Obj("tif" -> "Ioc")),
+        "t" -> ujson.Obj("limit" -> ujson.Obj("tif" -> (if p.post then "Alo" else "Ioc"))),
         "c" -> p.id
       )
     ),
@@ -418,63 +414,55 @@ object Exchange:
 
   def isErrReply(reply: Option[ujson.Value]): Boolean = status(reply).contains("err")
 
-  def outcome(reply: Option[ujson.Value], saved: SavedOrder): Option[String] =
-    reply.flatMap(j =>
+  // The reply to a placed order. A fill must stay inside what was signed: no more than the
+  // order's size and no worse than its limit. Anything else stays unresolved for the lookup.
+  def placed(reply: Option[ujson.Value], saved: SavedOrder): Option[VenueOrders.Placed] =
+    val order = reply.exists(j => Try(j("response")("type").str == "order").getOrElse(false))
+    VenueOrders.placed(reply).filter(_ => order).filter {
+      case VenueOrders.Placed.Filled(quantity, price, _) =>
+        quantity <= BigDecimal(saved.quantity) &&
+        (if saved.side == Side.Buy then price <= BigDecimal(saved.limit)
+         else price >= BigDecimal(saved.limit))
+      case _ => true
+    }
+
+  // A status lookup describes the saved order only when its client id, market, side, original
+  // size and limit all match.
+  def sameOrder(reply: Option[ujson.Value], saved: SavedOrder): Boolean =
+    reply.exists(j =>
       Try {
-        require(j("status").str == "ok" && j("response")("type").str == "order")
-        val statuses = j("response")("data")("statuses").arr
-        require(statuses.size == 1)
-        val status = statuses.head
-        if status.obj.keySet == Set("error") then
-          val _ = status("error").str
-          saved.coin + " order rejected"
-        else
-          require(status.obj.keySet == Set("filled"))
-          val f = status("filled")
-          val quantity = BigDecimal(f("totalSz").str)
-          val price = BigDecimal(f("avgPx").str)
-          require(
-            f("oid").num.isWhole && f(
-              "oid"
-            ).num >= 0 && quantity > 0 && quantity <= BigDecimal(
-              saved.quantity
-            ) && price > 0
-          )
-          require(if saved.side == Side.Buy then price <= BigDecimal(saved.limit)
-          else price >= BigDecimal(saved.limit))
-          s"${saved.coin} filled ${Trading.display(quantity, 6)} at ${Trading.display(price, 6)}"
-      }.toOption
+        val order = j("order")("order")
+        order("cloid").str == saved.id && order("coin").str == saved.coin &&
+        order("side").str == (if saved.side == Side.Buy then "B" else "A") &&
+        BigDecimal(order("origSz").str) == BigDecimal(saved.quantity) &&
+        BigDecimal(order("limitPx").str) == BigDecimal(saved.limit)
+      }.getOrElse(false)
     )
 
-  def recovered(
-      reply: Option[ujson.Value],
+  // The text that releases a pending order the venue does not know, once its signed expiry
+  // plus the margin has passed on the wall clock and on the monotonic clock.
+  def released(
       saved: SavedOrder,
       now: Long,
       elapsedMs: Long,
       allowUnknown: Boolean,
       errReply: Boolean
   ): Option[String] =
-    if status(reply).contains("unknownOid") && elapsedMs >= ReleaseWaitMs &&
-      BigInt(now) > BigInt(saved.expiresAfter) + ExpiryMarginMs
-    then
-      if errReply then return Some(saved.coin + " order rejected")
-      if allowUnknown then return Some(saved.coin + " not placed")
+    if elapsedMs < ReleaseWaitMs || BigInt(now) <= BigInt(saved.expiresAfter) + ExpiryMarginMs
+    then None
+    else if errReply then Some(saved.coin + " order rejected")
+    else if allowUnknown then Some(saved.coin + " not placed")
+    else None
+
+  final case class OpenOrder(oid: Long, coin: String, size: BigDecimal)
+
+  // The openOrders reply. It carries no client id, so orders are matched by oid.
+  def openOrders(reply: Option[ujson.Value]): Option[Vector[OpenOrder]] =
     reply.flatMap(j =>
       Try {
-        require(j("status").str == "order")
-        val detail = j("order")
-        val order = detail("order")
-        val status = detail("status").str
-        require(terminal.contains(status) && order("cloid").str == saved.id)
-        require(
-          order("coin").str == saved.coin && order(
-            "side"
-          ).str == (if saved.side == Side.Buy then "B"
-                    else "A")
-        )
-        require(BigDecimal(order("origSz").str) == BigDecimal(saved.quantity))
-        require(BigDecimal(order("limitPx").str) == BigDecimal(saved.limit))
-        s"${saved.coin} recovered $status"
+        j.arr.toVector.map { o =>
+          OpenOrder(VenueOrders.wholeLong(o("oid")).get, o("coin").str, BigDecimal(o("sz").str))
+        }
       }.toOption
     )
 
