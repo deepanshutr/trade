@@ -166,12 +166,27 @@ object Trading:
     else if price <= bid then Some(takesLiquidity + "above the bid")
     else None
 
+  // Each stretch of price with one step is counted at its own step, so a count across a power
+  // of ten stays true. The sign says whether the price is above or below the touch.
   def ticks(price: BigDecimal, touch: BigDecimal, rules: MarketRules): Long =
-    priceStep(touch, rules)
-      .map(step =>
-        subtract(price, touch).bigDecimal.divide(step.bigDecimal, 0, RoundingMode.HALF_UP).longValue
-      )
-      .getOrElse(0L)
+    val (low, high) = if price >= touch then (touch, price) else (price, touch)
+    def count(from: BigDecimal): Long =
+      if from >= high then 0L
+      else
+        priceStep(from, rules) match
+          case None       => 0L
+          case Some(step) =>
+            val plain = from.bigDecimal.stripTrailingZeros()
+            val next = BigDecimal(
+              java.math.BigDecimal.ONE.scaleByPowerOfTen(plain.precision() - plain.scale())
+            )
+            val end = high.min(next)
+            val here = subtract(end, from).bigDecimal
+              .divide(step.bigDecimal, 0, RoundingMode.HALF_UP)
+              .longValue
+            here + count(next)
+    val total = if low <= zero then 0L else count(low)
+    if price >= touch then total else -total
 
   private def facing(position: BigDecimal, order: RestingOrder): Boolean =
     position.signum != 0 && order.side == (if position.signum > 0 then Side.Sell else Side.Buy)
@@ -179,7 +194,8 @@ object Trading:
   def effects(position: BigDecimal, resting: Vector[RestingOrder]): Vector[(RestingOrder, Effect)] =
     val (near, rest) = resting.partition(facing(position, _))
     val nearest =
-      if position.signum > 0 then near.sortBy(_.price) else near.sortBy(o => -o.price)
+      if position.signum > 0 then near.sortBy(o => (o.price, o.createdAt))
+      else near.sortBy(o => (-o.price, o.createdAt))
     val taken = nearest.scanLeft(zero)((sum, o) => add(sum, o.remaining))
     val ranked = nearest.zip(taken).map { (order, before) =>
       val free = subtract(position.abs, before)
@@ -384,8 +400,11 @@ object Trading:
       _ <- check(bids.head.price < asks.head.price, "Book sides cross")
       _ <- intent.price match
         case Some(p) =>
-          check(validPrice(p, rules), "Price does not match market precision")
-            .flatMap(_ => crossing(intent.side, p, reference, reference).toLeft(()))
+          check(intent.kind == OrderKind.Hard, "A limit order takes a sized press")
+            .flatMap(_ =>
+              check(validPrice(p, rules), "Price does not match market precision")
+                .flatMap(_ => crossing(intent.side, p, reference, reference).toLeft(()))
+            )
         case None => Right(())
       limit <- intent.price.map(Right(_)).getOrElse(limitFor(intent, reference, rules, slippage))
       // A posted order is sized and judged at its own price.
@@ -419,14 +438,13 @@ object Trading:
         intent.kind != OrderKind.Target || reachesTarget || available >= cap,
         "Target extends beyond the known exact book"
       )
-      wanted = intent.kind match
+      requested = intent.kind match
         case OrderKind.Hard => quantityFor(dollars, ref, lot)
         case OrderKind.Best =>
           available.min(cap).min(quantityFor(dollars, ref, lot, strict = true))
         case OrderKind.Target => available.min(cap)
         case OrderKind.Close  => position.abs
-      _ <- check(wanted > zero, "No visible quantity fits this order")
-      requested = if reducing then wanted.min(free) else wanted
+      _ <- check(requested > zero, "No visible quantity fits this order")
       // A reduce that would leave under ten dollars at the quote closes the whole position.
       // This also stops every reduce at flat.
       closing = reducing && multiply(subtract(free, requested), ref) < ten

@@ -832,19 +832,78 @@ class TradingSpec extends munit.FunSuite:
     assertEquals(up("547.00", xmr, "0.1"), Some(d("547.10")))
     assertEquals(up("99000", btc, "0.01"), Some(d("99001")))
     assertEquals(up("99000", btc, "0.1"), Some(d("99001")))
-    val over = up("999.99", xmr, "0.01").get
-    assert(Trading.validPrice(over, xmr) && over > d("999.99"))
+    assertEquals(up("999.99", xmr, "0.01"), Some(d("1000")))
+    assertEquals(up("999.95", xmr, "0.1"), Some(d("1000.1")))
+    assertEquals(up("547.00", xmr, "0"), Some(d("547.01")))
     assertEquals(Trading.movePrice(d("547.00"), xmr, d("0.1"), false), Some(d("546.90")))
-    assertEquals(
-      Trading.movePrice(d("547.00"), xmr, d("0.001"), false),
-      Trading.nextPrice(d("547.00"), xmr, false)
-    )
+    assertEquals(Trading.movePrice(d("547.00"), xmr, d("0.001"), false), Some(d("546.99")))
     assertEquals(Trading.movePrice(d("0"), xmr, d("0.1"), true), None)
   }
 
   test("ticks counts steps from the touch with a sign") {
     assertEquals(Trading.ticks(d("546.09"), d("546.10"), xmr), -1L)
     assertEquals(Trading.ticks(d("546.15"), d("546.10"), xmr), 5L)
+    assertEquals(Trading.ticks(d("546.10"), d("546.10"), xmr), 0L)
+    assertEquals(Trading.ticks(d("546.106"), d("546.10"), xmr), 1L)
+    assertEquals(Trading.ticks(d("546.094"), d("546.10"), xmr), -1L)
+  }
+
+  test("ticks counts real ticks across a power of ten") {
+    assertEquals(Trading.ticks(d("999.99"), d("1000.0"), xmr), -1L)
+    assertEquals(Trading.ticks(d("1000.1"), d("999.99"), xmr), 2L)
+    assertEquals(Trading.ticks(d("1000.5"), d("999.99"), xmr), 6L)
+  }
+
+  test("a posted order is sized at its own price and not at the touch") {
+    assertEquals(accepted(priced(Side.Buy, "546.09", "600.00")).quantity, d("0.183"))
+    assertEquals(accepted(priced(Side.Buy, "500.00", "546.10")).quantity, d("0.200"))
+  }
+
+  test("a priced order ignores the depth and the exact far touch given") {
+    val p = accepted(priced(Side.Buy, "546.15", "546.20"))
+    assertEquals(p.estimatedQuantity, d("0"))
+    assertEquals(p.average, None)
+    assertEquals(accepted(priced(Side.Buy, "546.15", "546.30")), p)
+  }
+
+  test("a priced reduce is capped by the reserve and closes a leftover under ten dollars") {
+    val capped = accepted(priced(Side.Sell, "546.20", "546.00", "20", 5, "0.2", "0.1"))
+    assertEquals(capped.quantity, d("0.1"))
+    assertEquals(capped.kind, OrderKind.Close)
+    assert(capped.post)
+    assert(capped.reduceOnly)
+    assertEquals(
+      priced(Side.Sell, "546.20", "546.00", "20", 5, "0.2", "0.2").swap.toOption,
+      Some("Resting orders already reduce the whole position")
+    )
+  }
+
+  test("a priced reduce values its leftover at the price") {
+    // Leftover 0.018 is worth 10.008 at 556 and 9.828 at the touch of 546.
+    val kept = accepted(priced(Side.Sell, "556.00", "546.00", "45.592", 1, "0.2", "0.1"))
+    assertEquals(kept.kind, OrderKind.Hard)
+    assertEquals(kept.quantity, d("0.082"))
+    assertEquals(accepted(priced(Side.Sell, "556.00", "545.00", "45.592", 1, "0.2", "0.1")), kept)
+  }
+
+  test("a limit order takes only a sized press") {
+    Vector(OrderKind.Best, OrderKind.Target, OrderKind.Close).foreach { kind =>
+      assertEquals(
+        priced(Side.Sell, "546.20", "546.00", "20", 5, "0.2", "0", kind).swap.toOption,
+        Some("A limit order takes a sized press"),
+        kind.toString
+      )
+    }
+  }
+
+  test("orders at one price are ranked by their time") {
+    val older = rest("old", Side.Sell, "552", "0.15").copy(createdAt = 1L)
+    val newer = rest("new", Side.Sell, "552", "0.15").copy(createdAt = 2L)
+    val seen = Trading.effects(d("0.2"), Vector(newer, older))
+    assertEquals(seen.map(_._1.id), Vector("old", "new"))
+    assertEquals(seen.map(_._2), Vector(Effect.Reduces, Effect.Flips))
+    val same = Trading.effects(d("0.2"), Vector(newer.copy(createdAt = 1L), older))
+    assertEquals(same.map(_._1.id), Vector("new", "old"))
   }
 
   test("money, dollars and priceText") {
@@ -854,11 +913,9 @@ class TradingSpec extends munit.FunSuite:
     assertEquals(Trading.money(d("0.2"), d("546.00"), None), None)
     assertEquals(Trading.dollars(None, 7), "     --")
     assertEquals(Trading.dollars(Some(d("21.84")), 7), " $21.84")
-    assertEquals(
-      Trading.dollars(Some(d("1234567.89")), 7).trim,
-      "$" + Trading.display(d("1234567.89"), 6)
-    )
-    assert(Trading.dollars(Some(d("1234567.89")), 7).length == 7)
+    assertEquals(Trading.dollars(Some(d("1234567.89")), 7), "$~1.2e6")
+    assertEquals(Trading.dollars(Some(d("100.00")), 7), "$100.00")
+    assertEquals(Trading.money(d("0.1"), d("0.25"), Some(1)), Some(d("0.03")))
     assertEquals(Trading.priceText(d("546.09"), xmr), "546.09")
     assertEquals(Trading.priceText(d("546.1"), xmr), "546.10")
     assertEquals(Trading.priceText(d("99000"), btc), "99000")
@@ -905,7 +962,6 @@ class TradingSpec extends munit.FunSuite:
 
   test("a fill and the new view fields exist with defaults") {
     val fill = Fill("XMR", Side.Buy, 5L, d("546.09"), d("0.1"))
-    assertEquals(fill.quantity, d("0.1"))
     val view = TradingView("XMR", message = "")
     assertEquals(view.resting, Vector.empty[RestingOrder])
     assertEquals(view.fills, Vector.empty[Fill])
