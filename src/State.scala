@@ -54,6 +54,7 @@ enum Command:
   case SelectTarget(side: Side)
   case Confirm, Cancel, ToggleCandles
   case Close, Settings
+  case OrderType, Orders, Place
 
 enum Event:
   case BookUpdate(coin: String, book: Book, fromSocket: Boolean)
@@ -306,7 +307,8 @@ object State:
   private def key(s: Snapshot, cmd: Command, now: Long): Snapshot = cmd match
     case Command.PlaceOrder(_) | Command.SelectTarget(_) | Command.Confirm | Command.Cancel |
         Command.Pointer(_, _, _) | Command.PointerPress(_, _, _) | Command.ToggleMute |
-        Command.Mode(_) | Command.Close | Command.Settings =>
+        Command.Mode(_) | Command.Close | Command.Settings | Command.OrderType | Command.Orders |
+        Command.Place =>
       s
     case Command.Quit              => s.copy(quit = true)
     case Command.StartMarketPrompt => s.copy(prompt = Some(""))

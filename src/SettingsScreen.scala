@@ -631,7 +631,7 @@ object SettingsScreen:
                 OwnerStatus.fundingText(reply, now / 1000) +
                   (if reply.owner.nonEmpty then ". Enter copies the address." else "")
               )
-            case Row.Action(action) => context.bindings().map.get(action).fold("")(_.name)
+            case Row.Action(action) => context.bindings().map.get(action).fold("unbound")(_.name)
         }((_, text) => text + "_")
 
     private def page(width: Int, height: Int): Vector[String] =

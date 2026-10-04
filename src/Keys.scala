@@ -173,9 +173,10 @@ object Keys:
       (Vector.empty, None)
     else (pending, None)
 
-  // Enter and the arrows, when no binding took the group.
+  // Enter, a and the arrows, when no binding took the group.
   private def fixed(group: KeyGroup): Option[Command] = sevenBit(group.bytes) match
     case Vector(13) | Vector(10) => Some(Command.Confirm)
+    case Vector(97)              => Some(Command.Place)
     case Vector(27, 91, last)    => arrow(last)
     case Vector(27, 79, last)    => arrow(last)
     case _                       => None
