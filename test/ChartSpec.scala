@@ -421,7 +421,7 @@ class ChartSpec extends munit.FunSuite:
     val series = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
     val held = Vector(546.09, 546.10)
     for rows <- Vector(9, 20) do
-      val a = Chart.axis(series, Some(touch), rows, held).get
+      val a = Chart.axis(series, Some(touch), rows, held, above = 1).get
       assertEquals(a.trueRow(546.09), 1, a)
       assert(placed(a, 546.09, held).forall(r => r >= 0 && r < rows), (a, placed(a, 546.09, held)))
       assertEqualsDouble(a.lo, 539.695, 1e-9)
@@ -432,7 +432,7 @@ class ChartSpec extends munit.FunSuite:
     // At 50 rows the five percent pad leaves the current price on row 2, two rows for three.
     val series = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
     val three = Vector(546.09, 546.10, 546.11, 546.12)
-    val wide = Chart.axis(series, Some(touch), 50, three).get
+    val wide = Chart.axis(series, Some(touch), 50, three, above = 3).get
     assertEquals(wide.trueRow(546.09), 3, wide)
     assertEquals(placed(wide, 546.09, three).sorted, Vector(0, 1, 2))
     assertEqualsDouble(wide.lo, 539.694, 1e-9)
@@ -443,7 +443,7 @@ class ChartSpec extends munit.FunSuite:
     val series = Vector(Some(Column(546.09, 546.09, 552.0, 552.0, 0)))
     val held = Vector(546.09, 546.08)
     for rows <- Vector(9, 20) do
-      val a = Chart.axis(series, Some(touch), rows, held).get
+      val a = Chart.axis(series, Some(touch), rows, held, below = 1).get
       assertEquals(a.trueRow(546.09), rows - 2, a)
       assert(placed(a, 546.09, held).forall(r => r >= 0 && r < rows), (a, placed(a, 546.09, held)))
       assertEqualsDouble(a.hi, 552.296, 1e-9)
@@ -458,32 +458,45 @@ class ChartSpec extends munit.FunSuite:
     assertEqualsDouble(bare.hi, 546.405, 1e-9)
     assertEquals(bare.trueRow(546.09), 0)
     // One held price above and the current price already on row 1 of 30: room exactly met.
-    val met = Chart.axis(series, Some(touch), 30, Vector(546.10)).get
+    val met = Chart.axis(series, Some(touch), 30, Vector(546.10), above = 1).get
     assertEqualsDouble(met.lo, 539.695, 1e-9)
     assertEqualsDouble(met.hi, 546.405, 1e-9)
     assertEquals(met.trueRow(546.09), 1)
   }
 
-  test("a held price repeated is counted once on either side of the current price") {
-    // Two prices above, one of them twice: the top grows for two rows, not three.
-    val above = Vector(Some(Column(540.0, 540.0, 546.11, 546.11, 0)))
-    val up = Chart.axis(above, Some(touch), 9, Vector(546.10, 546.11, 546.11)).get
+  test("the room grows for the marks counted on each side, not for the held prices") {
+    // Two marks above, whatever the held prices repeat: the top grows for two rows, not three.
+    val upper = Vector(Some(Column(540.0, 540.0, 546.11, 546.11, 0)))
+    val up = Chart.axis(upper, Some(touch), 9, Vector(546.10, 546.11, 546.11), above = 2).get
     assertEqualsDouble(up.lo, 539.6945, 1e-9)
     assertEqualsDouble(up.hi, 548.5498076923, 1e-9)
     assertEquals(up.trueRow(546.09), 2)
-    // Two prices below, one of them twice: the bottom grows for two rows, not three.
-    val below = Vector(Some(Column(546.07, 546.07, 552.0, 552.0, 0)))
-    val down = Chart.axis(below, Some(touch), 9, Vector(546.08, 546.07, 546.07)).get
+    // Two marks below: the bottom grows for two rows, not three.
+    val lower = Vector(Some(Column(546.07, 546.07, 552.0, 552.0, 0)))
+    val down = Chart.axis(lower, Some(touch), 9, Vector(546.08, 546.07, 546.07), below = 2).get
     assertEqualsDouble(down.lo, 543.7028846154, 1e-9)
     assertEqualsDouble(down.hi, 552.2965, 1e-9)
     assertEquals(down.trueRow(546.09), 6)
+  }
+
+  test("the room counts the marks as the orders axis places them, not distinct prices") {
+    // A sell resting at the current price sits above it, so the top keeps a row for it.
+    val top = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
+    val seller = Chart.axis(top, Some(touch), 9, Vector(546.09), above = 1).get
+    assertEquals(seller.trueRow(546.09), 1, seller)
+    assertEquals(Chart.axis(top, Some(touch), 9, Vector(546.09)).get.trueRow(546.09), 0)
+    // The entry and a buy at one price under it are two marks, so the bottom keeps two rows.
+    val bottom = Vector(Some(Column(546.09, 546.09, 552.0, 552.0, 0)))
+    val both = Chart.axis(bottom, Some(touch), 9, Vector(546.08, 546.08), below = 2).get
+    assertEquals(both.trueRow(546.09), 6, both)
+    assertEqualsDouble(both.lo, 543.7030769231, 1e-9)
   }
 
   test("held prices that cannot all fit keep the five percent pad and are left off as before") {
     // Three prices above and the current price need four rows of three.
     val series = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
     val held = Vector(546.09, 546.10, 546.11, 546.12)
-    val a = Chart.axis(series, Some(touch), 3, held).get
+    val a = Chart.axis(series, Some(touch), 3, held, above = 3).get
     assertEqualsDouble(a.lo, 539.694, 1e-9)
     assertEqualsDouble(a.hi, 546.426, 1e-9)
     assert(placed(a, 546.09, held).exists(_ < 0), placed(a, 546.09, held))
@@ -495,7 +508,7 @@ class ChartSpec extends munit.FunSuite:
     val book = Book(Vector(lvl("546.09")), Vector(lvl("546.10")), 1L)
     val held = Vector(552.0, 546.10, 546.095, 546.0, 544.0)
     for (rows, row) <- Vector((9, 6), (19, 13)) do
-      val a = Chart.axis(series, Some(book), rows, held).get
+      val a = Chart.axis(series, Some(book), rows, held, above = 2, below = 2).get
       assertEqualsDouble(a.lo, 543.60, 1e-9)
       assertEqualsDouble(a.hi, 552.40, 1e-9)
       assertEquals(a.trueRow(546.095), row)

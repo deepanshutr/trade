@@ -353,6 +353,21 @@ class ScreenSpec extends munit.FunSuite:
     assert(chart(pinned, 100, 30, Style.mono).axis.exists(_.lo > 543.0))
   }
 
+  test("the decor's mark counts give the chart's axis its room") {
+    // The series ends at the current price 546.09. A sell resting there sits above it, and its
+    // count keeps the top row free for it.
+    val sec = pinNow / 1000
+    val top = pinned.copy(
+      book = Some(Book(Vector(lv("546.08", "1")), Vector(lv("546.10", "1")), pinNow)),
+      samples = Vector((sec - 40, 540.0), (sec - 1, 546.09))
+    )
+    val decor = AxisDecor.plain.copy(held = Vector(546.09))
+    val bare = chart(top, 100, 30, Style.mono, decor).axis.get
+    assertEquals(bare.trueRow(546.09), 0, bare)
+    val counted = chart(top, 100, 30, Style.mono, decor.copy(above = 1)).axis.get
+    assertEquals(counted.trueRow(546.09), 1, counted)
+  }
+
   test("the workspace draws the chart block above the fifteen row band in every mode") {
     for
       (cols, rows) <- Vector((100, 30), (120, 40))
