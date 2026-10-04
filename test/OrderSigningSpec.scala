@@ -321,6 +321,25 @@ class OrderSigningSpec extends munit.FunSuite:
     intercept[IllegalArgumentException](sign(resting))
   }
 
+  test("exactly Alo and Ioc pass the time in force check") {
+    val others: Vector[ujson.Value] = Vector(
+      "Gtc",
+      "FrontendMarket",
+      "LiquidationMarket",
+      "alo",
+      "ioc",
+      "ALO",
+      " Ioc",
+      "Alo ",
+      ""
+    ).map(ujson.Str(_)) ++ Vector(ujson.Num(1), ujson.Null, ujson.Bool(true))
+    others.foreach { tif =>
+      val action = sample
+      action("orders")(0)("t")("limit")("tif") = tif
+      intercept[IllegalArgumentException](sign(action))
+    }
+  }
+
   test("a cancel by client id matches the recorded reference bytes") {
     val fixture = fixtures("vectors").arr.find(_("name").str == "cancelByCloidExpiryMain").get
     val action = fixture("action")
@@ -364,6 +383,11 @@ class OrderSigningSpec extends munit.FunSuite:
       cancel(cloid = ujson.Str("0x0123")),
       cancel(cloid = ujson.Str("0123456789abcdef0123456789abcdef")),
       cancel(cloid = ujson.Num(5)),
+      cancel(cloid = ujson.Str(deskCloid + "0")),
+      cancel(cloid = ujson.Str("0x" + "a" * 33)),
+      cancel(cloid = ujson.Str(" " + deskCloid)),
+      cancel(cloid = ujson.Str(deskCloid + " ")),
+      ujson.Obj("type" -> "cancel", "cancels" -> cancel()("cancels")),
       ujson.Obj("type" -> "cancel", "cancels" -> ujson.Arr(ujson.Obj("a" -> 1, "o" -> 77738308))),
       ujson.Obj("type" -> "modify", "oid" -> 1, "order" -> sample("orders")(0)),
       ujson.Obj("type" -> "batchModify", "modifies" -> ujson.Arr()),

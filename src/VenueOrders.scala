@@ -5,7 +5,7 @@ import scala.util.Try
 // Reads of venue replies about resting orders and the one cancel action Desk signs.
 // Each reader returns None for a shape it does not know, so the caller never guesses.
 object VenueOrders:
-  private val WholeLimit = BigInt(2).pow(53)
+  private val WholeLimit = BigInt(2).pow(53) - 1
 
   // Same list as the terminal statuses that Exchange checks for a recovered order.
   private val terminal = Set(
@@ -45,6 +45,7 @@ object VenueOrders:
     )
 
   // Order ids exceed Int.MaxValue, so they never go through Exchange.integer.
+  // A value of 2^53 or more is refused, because JSON 2^53 + 1 reads as 2^53.
   def wholeLong(value: ujson.Value): Option[Long] = value match
     case ujson.Num(number)
         if java.lang.Double.isFinite(number) && number >= 0 && number == math.floor(number) &&

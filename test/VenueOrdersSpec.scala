@@ -33,6 +33,18 @@ class VenueOrdersSpec extends munit.FunSuite:
     assertEquals(placed(reply("""{"resting":{"oid":-1}}""")), None)
     assertEquals(placed(reply("""{"resting":{"oid":1}},{"resting":{"oid":2}}""")), None)
     assertEquals(placed(None), None)
+    assertEquals(placed(reply("""{"filled":{"totalSz":"0","avgPx":"546.09","oid":1}}""")), None)
+    assertEquals(placed(reply("""{"filled":{"totalSz":"0.183","avgPx":"0","oid":1}}""")), None)
+    assertEquals(
+      placed(
+        Some(
+          ujson.read(
+            """{"status":"err","response":{"type":"order","data":{"statuses":[{"resting":{"oid":1}}]}}}"""
+          )
+        )
+      ),
+      None
+    )
     assertEquals(placed(Some(ujson.read("""{"status":"err","response":"x"}"""))), None)
   }
 
@@ -45,6 +57,16 @@ class VenueOrdersSpec extends munit.FunSuite:
     assertEquals(cancelOutcome(reply("""{"resting":{"oid":1}}""")), None)
     assertEquals(cancelOutcome(reply("\"success\",\"success\"")), None)
     assertEquals(cancelOutcome(None), None)
+    assertEquals(
+      cancelOutcome(
+        Some(
+          ujson.read(
+            """{"status":"err","response":{"type":"cancel","data":{"statuses":["success"]}}}"""
+          )
+        )
+      ),
+      None
+    )
   }
 
   test("a pushed order update parses and one without a client id does not") {
@@ -89,10 +111,28 @@ class VenueOrdersSpec extends munit.FunSuite:
       "canceled",
       "rejected",
       "marginCanceled",
+      "vaultWithdrawalCanceled",
+      "openInterestCapCanceled",
       "selfTradeCanceled",
       "reduceOnlyCanceled",
+      "siblingFilledCanceled",
+      "delistedCanceled",
+      "liquidatedCanceled",
+      "scheduledCancel",
+      "tickRejected",
+      "minTradeNtlRejected",
+      "perpMarginRejected",
+      "reduceOnlyRejected",
       "badAloPxRejected",
       "iocCancelRejected",
+      "badTriggerPxRejected",
+      "marketOrderNoLiquidityRejected",
+      "positionIncreaseAtOpenInterestCapRejected",
+      "positionFlipAtOpenInterestCapRejected",
+      "tooAggressiveAtOpenInterestCapRejected",
+      "openInterestIncreaseRejected",
+      "insufficientSpotBalanceRejected",
+      "oracleRejected",
       "perpMaxPositionRejected"
     ).foreach { status =>
       assertEquals(lookup(lookupReply(status)), Some(Lookup.Settled(status, None)), status)
@@ -102,11 +142,13 @@ class VenueOrdersSpec extends munit.FunSuite:
     assertEquals(lookup(None), None)
   }
 
-  test("a whole number is accepted up to two to the 53rd power") {
+  test("a whole number is accepted below two to the 53rd power") {
     assertEquals(wholeLong(ujson.Num(4294967296.0)), Some(4294967296L))
     assertEquals(wholeLong(ujson.Str("77738308")), Some(77738308L))
-    assertEquals(wholeLong(ujson.Num(9007199254740992.0)), Some(9007199254740992L))
-    assertEquals(wholeLong(ujson.Str("9007199254740992")), Some(9007199254740992L))
+    assertEquals(wholeLong(ujson.Num(9007199254740991.0)), Some(9007199254740991L))
+    assertEquals(wholeLong(ujson.Str("9007199254740991")), Some(9007199254740991L))
+    assertEquals(wholeLong(ujson.Num(9007199254740992.0)), None)
+    assertEquals(wholeLong(ujson.Str("9007199254740992")), None)
     assertEquals(wholeLong(ujson.Num(9007199254740994.0)), None)
     assertEquals(wholeLong(ujson.Str("9007199254740993")), None)
     assertEquals(wholeLong(ujson.Num(1.5)), None)

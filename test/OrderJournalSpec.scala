@@ -293,3 +293,146 @@ class OrderJournalSpec extends TempDirectorySuite:
       assertEquals(second.nextNonce(0L), 1002L)
     finally second.close()
   }
+
+  private def restingPair(dir: java.nio.file.Path): (OrderJournal, SavedOrder, SavedOrder) =
+    val journal = OrderJournal.open(dir, identity)
+    val a = journal.reserve(plan, owner, 1000L)
+    journal.rest(a.id, 11L)
+    val b = journal.reserve(plan, owner, 1001L)
+    journal.rest(b.id, 4294967296L)
+    (journal, journal.resting(0), journal.resting(1))
+
+  test("finish keeps the resting orders in memory and on disk") {
+    val dir = tempDirectory("desk-finish-rest")
+    val journal = OrderJournal.open(dir, identity)
+    val a = journal.reserve(plan, owner, 1000L)
+    val rested = journal.rest(a.id, 11L)
+    val b = journal.reserve(plan, owner, 1001L)
+    journal.finish(b.id)
+    assertEquals(journal.resting, Vector(rested))
+    journal.close()
+    val reopened = OrderJournal.open(dir, identity)
+    try assertEquals(reopened.resting, Vector(rested))
+    finally reopened.close()
+  }
+
+  test("settle and remaining act only on the named order") {
+    val dir = tempDirectory("desk-two-resting")
+    val (journal, a, b) = restingPair(dir)
+    journal.remaining(b.id, "0.15")
+    assertEquals(journal.resting, Vector(a, b.copy(remaining = Some("0.15"))))
+    journal.settle(a.id)
+    assertEquals(journal.resting, Vector(b.copy(remaining = Some("0.15"))))
+    journal.close()
+    val reopened = OrderJournal.open(dir, identity)
+    try
+      assertEquals(reopened.resting, Vector(b.copy(remaining = Some("0.15"))))
+      reopened.remaining(b.id, "0.1")
+      assertEquals(reopened.resting.map(_.remaining), Vector(Some("0.1")))
+    finally reopened.close()
+    val third = tempDirectory("desk-two-resting-first")
+    val (other, c, d) = restingPair(third)
+    try
+      other.remaining(c.id, "0.2")
+      assertEquals(other.resting, Vector(c.copy(remaining = Some("0.2")), d))
+      other.settle(d.id)
+      assertEquals(other.resting, Vector(c.copy(remaining = Some("0.2"))))
+    finally other.close()
+  }
+
+  test("a write that would pass 32 KiB is refused and the file still opens") {
+    val dir = tempDirectory("desk-cap")
+    val journal = OrderJournal.open(dir, identity)
+    var rested = 0
+    var refused = false
+    try
+      while !refused && rested < 400 do
+        try
+          val saved = journal.reserve(plan, owner, 1000L + rested)
+          journal.rest(saved.id, rested.toLong)
+          rested += 1
+        catch
+          case error: IllegalArgumentException =>
+            assert(error.getMessage.contains("saved state is too large"), error.getMessage)
+            refused = true
+    finally journal.close()
+    assert(refused && rested > 10)
+    val reopened = OrderJournal.open(dir, identity)
+    try assertEquals(reopened.resting.size, rested)
+    finally reopened.close()
+  }
+
+  test("a saved file over 32 KiB is refused at open") {
+    val dir = tempDirectory("desk-read-cap")
+    val first = OrderJournal.open(dir, identity)
+    first.nextNonce(1000L)
+    first.close()
+    val file = dir.resolve(identity + ".json")
+    val text = Files.readString(file)
+    Files.writeString(file, text + " " * (32768 - text.length))
+    OrderJournal.open(dir, identity).close()
+    Files.writeString(file, text + " " * (32769 - text.length))
+    val error = intercept[IllegalArgumentException](OrderJournal.open(dir, identity))
+    assert(error.getMessage.contains("too large"), error.getMessage)
+  }
+
+  test("a version 2 file with a bad resting list cannot load") {
+    val edits: Vector[(String, ujson.Value => Unit)] = Vector(
+      "empty list" -> (j => j("resting") = ujson.Arr()),
+      "duplicate id" -> (j => j("resting").arr.append(j("resting")(0))),
+      "missing oid" -> (j => j("resting")(0).obj.remove("oid")),
+      "missing remaining" -> (j => j("resting")(0).obj.remove("remaining")),
+      "negative oid" -> (j => j("resting")(0)("oid") = "-1"),
+      "oid beyond the nonce" -> (j => j("resting")(0)("nonce") = "999999")
+    )
+    edits.foreach { case (name, edit) =>
+      val dir = tempDirectory("desk-bad-resting")
+      val first = OrderJournal.open(dir, identity)
+      val saved = first.reserve(plan, owner, 1000L)
+      first.rest(saved.id, 11L)
+      first.close()
+      val file = dir.resolve(identity + ".json")
+      val data = ujson.read(Files.readString(file))
+      edit(data)
+      Files.writeString(file, ujson.write(data))
+      intercept[Exception](OrderJournal.open(dir, identity))
+      assert(true, name)
+    }
+    val dir = tempDirectory("desk-negative-oid")
+    val journal = OrderJournal.open(dir, identity)
+    try
+      val saved = journal.reserve(plan, owner, 1000L)
+      intercept[IllegalArgumentException](journal.rest(saved.id, -1L))
+      assertEquals(journal.pending, Some(saved))
+    finally journal.close()
+  }
+
+  test("the post flag survives a restart and a rewrite for pending and resting orders") {
+    val dir = tempDirectory("desk-post")
+    val first = OrderJournal.open(dir, identity)
+    val a = first.reserve(plan, owner, 1000L)
+    first.rest(a.id, 11L)
+    val b = first.reserve(plan, owner, 1001L)
+    first.close()
+    val file = dir.resolve(identity + ".json")
+    val data = ujson.read(Files.readString(file))
+    data("pending")("post") = true
+    data("resting")(0)("post") = true
+    Files.writeString(file, ujson.write(data))
+    val reopened = OrderJournal.open(dir, identity)
+    try
+      assertEquals(reopened.pending.map(_.post), Some(true))
+      assertEquals(reopened.resting.map(_.post), Vector(true))
+      reopened.remaining(a.id, "0.5")
+      assertEquals(reopened.pending.map(_.post), Some(true))
+    finally reopened.close()
+    val again = OrderJournal.open(dir, identity)
+    try
+      assertEquals(again.pending.map(_.post), Some(true))
+      assertEquals(again.resting.map(_.post), Vector(true))
+      assertEquals(again.rest(b.id, 12L).post, true)
+      assertEquals(again.resting.map(_.post), Vector(true, true))
+    finally again.close()
+    val text = ujson.read(Files.readString(file))
+    assertEquals(text("resting")(1)("post"), ujson.Bool(true))
+  }
