@@ -143,10 +143,11 @@ confirmation. During market entry `s` is text. Esc leaves settings. Control C qu
 Desk, as everywhere.
 
 The page has three sections: Trading, Keys and Key bindings. Up and Down move the
-cursor. Enter edits or acts on the row under it. `r` reads the settings, the key and
-the owner again. The last line shows the latest result or refusal and clears on the
-next key. On a terminal smaller than 100 by 30, lines are cut at the width and the
-page scrolls to keep the cursor visible.
+cursor. Enter edits or acts on the row under it. `r` reads the settings, the key and the
+owner again. While a live order is pending, `r` reads only the owner and says "Wait for
+the pending order". The last line shows the latest result or refusal and clears on the
+next key. On a terminal smaller than 100 by 30, lines are cut at the width and the page
+scrolls to keep the cursor visible.
 
 Enter on Small amount, Big amount or Slippage opens a field. It takes digits and one
 dot. Enter saves and Esc cancels. Slippage is shown and typed in percent. A refused
@@ -176,9 +177,9 @@ a second press. Desk refuses their accents and the accented letters they make, w
 
 Desk refuses Enter and Control J, Escape, Tab, the arrows, Delete and Control H,
 Control C, Control D, Control Q, Control S, Control Z, Control backslash, Control
-Space, the paste markers and mouse reports, and anything that is not one key. A binding equal to another is
-refused, and so is a key that starts another action's two-key sequence. Two sequences
-may share their first key.
+Space, the paste markers and mouse reports, and anything that is not one key. A binding
+equal to another is refused, and so is a key that starts another action's two-key
+sequence. Two sequences may share their first key.
 
 A row shows each binding by name: the key itself, `Space`, `Control K`, an Option
 character with its US Option key such as `∫ Option B`, `F1` to `F12`, or the bytes in

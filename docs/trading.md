@@ -73,9 +73,9 @@ describes the page, the amounts and the key bindings. Desk writes only `small`, 
 and `slippage` in the settings file and keeps every other field. The first write
 renders the whole file again with two-space indentation, so comments and hand
 formatting are lost. Each write is checked against the start-up rules, replaces the
-whole file at once with mode `600`, so no reader sees half a file, and is refused with "Settings changed on disk.
-Leave and open settings again" when another program changed the file after settings
-read it. When no settings file exists, the first write creates
+whole file at once with mode `600`, so no reader sees half a file, and is refused with
+"Settings changed on disk. Leave and open settings again" when another program changed
+the file after settings read it. When no settings file exists, the first write creates
 `~/.config/desk/config.json`. When Desk was started with `--config PATH`, it writes that
 file. A write needs the file's folder to be private. Otherwise it is refused with "local
 storage must be private" and the folder's full path. Run `chmod 700` on that folder.
@@ -92,9 +92,10 @@ that has one stops every start until the field is removed. The message says to r
 value out of the settings, the command line, files and chat.
 
 Live without a usable key or an owner shows "Live setup required. Press s for settings"
-and refuses orders. The sentence names the key bound to settings, `s` by default. A usable key has an active choice for the selected network, a name
-on that network, and a Keychain item for its address. The check reads the item's
-attributes only. It never reads the key.
+and refuses orders. The sentence names the key bound to settings, `s` by default. A
+usable key has an active choice for the selected network, a name on that network, and a
+Keychain item for its address. The check reads the item's attributes only. It never
+reads the key.
 
 The Keys section of settings has four rows:
 
@@ -204,11 +205,11 @@ closes. A denied or timed-out read leaves Desk running without a key. Live then 
 its blocking reason. Desk verifies that the loaded key matches the active key and that
 the venue reports delegation to the owner.
 
-After settings change the active key or the owner, Desk reads the new key the same
-way, with the same prompt line. When the read is denied, the Trading key row says "The
-key was not read. Press r to ask again", and each `r` asks again. Each read leaves one
-more copy of the key in Desk's memory until Desk exits, so do not press `r` without a
-reason. An unchanged key is not read again.
+After settings change the active key, or set the owner while no key is held, Desk reads
+the key the same way, with the same prompt line. When the read is denied, the Trading
+key row says "The key was not read. Press r to ask again", and each `r` asks again. Each
+read leaves one more copy of the key in Desk's memory until Desk exits, so do not press
+`r` without a reason. An unchanged key is not read again.
 
 Making a key does not register a trading account. The wallet that owns the account must
 approve the key's address at the venue as a named API key. Approve it under the approval
