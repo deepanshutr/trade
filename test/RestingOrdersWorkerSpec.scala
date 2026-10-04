@@ -634,6 +634,91 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     }
   }
 
+  test("a non-fill update never completes a lost order as filled") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(
+        f.worker.view.message == "XMR waiting for order result"
+      )
+      val pending = f.journal.pending.get
+      f.push(
+        ws(pending.id, Side.Buy, "546.09", "0.183", 4242L, "open", "0.183", venueTime),
+        ws(pending.id, Side.Buy, "546.09", "0.183", 4242L, "canceled", "0.183", venueTime + 1)
+      )
+      f.refreshes()
+      assertEquals(f.journal.pending.map(_.id), Some(pending.id))
+      assertEquals(f.worker.view.outcome, None)
+      assertEquals(f.worker.view.fills, Vector.empty)
+      f.statuses.put(pending.id, lookupReply(pending.copy(oid = Some(4242L)), "open", "0.183"))
+      Wait.until("held cancel not applied once the order rested")(
+        f.worker.view.outcome.contains("XMR canceled $19.99 at 546.09")
+      )
+      assertEquals(f.journal.pending, None)
+      assertEquals(f.resting, Vector.empty)
+      assertEquals(f.worker.view.fills, Vector.empty)
+    }
+  }
+
+  test("a lost reply fill of a reducing order starts the pause") {
+    using(new Fixture()) { f =>
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Sell, "546.20")))
+      Wait.until("lost reply not kept")(
+        f.worker.view.message == "XMR waiting for order result"
+      )
+      val pending = f.journal.pending.get
+      f.push(ws(pending.id, Side.Sell, "546.2", "0.2", 4242L, "filled", "0", venueTime))
+      Wait.until("lost reply fill not applied")(f.journal.pending.isEmpty)
+      assertEquals(f.worker.view.outcome, Some("XMR filled $21.85 at 546.2"))
+      assertEquals(
+        f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms),
+        Left(TradingWorker.openingPausedMessage)
+      )
+    }
+  }
+
+  test("the cap counts resting orders on every market") {
+    val seeds = (0 until 20).toVector.map(i =>
+      Seed(Side.Buy, "0.001", (90000 + i).toString, 100L + i, coin = "BTC")
+    )
+    using(new Fixture(seeds)) { f =>
+      f.ready()
+      assertEquals(
+        f.worker.preview(f.priced(Side.Buy, "546.08"), f.terms),
+        Left("Cancel a resting order first. Desk holds at most 20")
+      )
+      assert(!f.press(f.priced(Side.Buy, "546.08")))
+      assertEquals(f.orderPosts, Vector.empty)
+    }
+  }
+
+  test("orders on another market neither reserve this position nor take its sign") {
+    val seeds = Vector(
+      Seed(Side.Sell, "0.2", "99000", 5L, coin = "BTC"),
+      Seed(Side.Buy, "0.001", "90000", 6L, coin = "BTC")
+    )
+    using(new Fixture(seeds)) { f =>
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      assertEquals(
+        f.worker.preview(OrderIntent(Side.Sell, OrderKind.Hard), f.terms).map(_.quantity),
+        Right(BigDecimal("0.2"))
+      )
+      f.push(ws(f.seeded(1), "filled", "0", venueTime))
+      Wait.until("BTC fill not settled")(f.resting.size == 1)
+      assertEquals(
+        f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms),
+        Left(TradingWorker.openingPausedMessage)
+      )
+    }
+  }
+
   test("view stale follows the active data age") {
     using(new Fixture()) { f =>
       f.ready()
@@ -744,6 +829,59 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       Wait.until("foreign update not counted")(f.worker.view.ignoredOrderUpdates == 1L)
       f.push(ujson.Obj("order" -> ujson.Obj("coin" -> "XMR"), "status" -> "open"))
       Wait.until("unreadable update not counted")(f.worker.view.ignoredOrderUpdates == 2L)
+    }
+  }
+
+  test("an update or a lookup for another order never changes a resting one") {
+    using(new Fixture(Vector(Seed(Side.Buy, "0.2", "546.09", 5L)), firstReadHeld = true)) { f =>
+      val order = f.seeded.head
+      f.statuses.put(order.id, lookupReply(order.copy(quantity = "0.3"), "filled", "0"))
+      f.firstHold.open()
+      Wait.until("start lookup missing")(f.lookups.size == 1)
+      f.ready()
+      f.push(
+        ws(order.copy(oid = Some(6L)), "canceled", "0.2", venueTime),
+        ws(order.copy(coin = "BTC"), "canceled", "0.2", venueTime)
+      )
+      Wait.until("mismatched updates not counted")(f.worker.view.ignoredOrderUpdates == 2L)
+      f.refreshes()
+      assertEquals(f.resting.map(o => (o.id, o.remaining)), Vector((order.id, Some("0.2"))))
+      assertEquals(f.worker.view.outcome, None)
+    }
+  }
+
+  test("a full update queue asks for an open orders read") {
+    using(new Fixture(Vector(Seed(Side.Buy, "0.2", "546.09", 5L)))) { f =>
+      f.ready()
+      f.refreshes()
+      assertEquals(f.openReads.get(), 0)
+      val order = f.seeded.head
+      f.push((1 to 257).map(i => ws(order, "open", "0.2", venueTime + i))*)
+      Wait.until("no open orders read after the queue filled")(f.openReads.get() == 1)
+      assertEquals(f.resting.head.remaining, Some("0.2"))
+      assertEquals(f.worker.view.ignoredOrderUpdates, 0L)
+    }
+  }
+
+  test("a full held list asks for an open orders read") {
+    using(new Fixture(Vector(Seed(Side.Buy, "0.2", "540", 5L)))) { f =>
+      f.ready()
+      f.refreshes()
+      assertEquals(f.openReads.get(), 0)
+      val hold = new Hold
+      f.postHold.set(hold)
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      hold.await()
+      val cloid = f.orderPosts.head("action")("orders")(0)("c").str
+      def update(i: Int): ujson.Value =
+        ws(cloid, Side.Buy, "546.09", "0.183", 77738308L, "open", "0.183", venueTime + i)
+      f.push((1 to 256).map(update)*)
+      f.refreshes()
+      assertEquals(f.openReads.get(), 0)
+      f.push(update(257))
+      Wait.until("no open orders read after the held list filled")(f.openReads.get() == 1)
+      hold.open()
+      Wait.until("order did not rest")(f.resting.size == 2)
     }
   }
 
@@ -1125,7 +1263,7 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       assert(sent.forall(_("cancels").arr.size == 1))
       assertEquals(f.postedInGate, Vector(true, true, true))
       assertEquals(f.gateEntries.get() - entries, 3)
-      assertEquals(f.lookups.drop(3), Vector(b.id))
+      assertEquals(f.lookups.drop(3), Vector(b.id, c.id))
       assertEquals(f.resting.map(_.id), Vector(c.id))
       assertEquals(f.worker.view.resting.filter(_.cancelling), Vector.empty)
     }
@@ -1146,6 +1284,49 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       Wait.until("cancel request never finished")(!f.worker.view.pending)
       assertEquals(f.cancelPosts.map(_("action")("cancels")(0)("cloid").str), Vector(a.id))
       assertEquals(f.resting, Vector.empty)
+    }
+  }
+
+  test("cancels out of journal order carry each order's own cloid and asset") {
+    val seeds = Vector(
+      Seed(Side.Buy, "0.2", "540", 5L),
+      Seed(Side.Buy, "0.2", "541", 6L),
+      Seed(Side.Buy, "0.001", "90000", 7L, coin = "BTC")
+    )
+    using(new Fixture(seeds)) { f =>
+      val Vector(a, b, c) = f.seeded
+      f.ready()
+      assert(f.worker.cancel(Vector(c.id, b.id)))
+      Wait.until("cancel request never finished")(!f.worker.view.pending)
+      assertEquals(
+        f.cancelPosts
+          .map(_("action")("cancels")(0))
+          .map(o => (o("cloid").str, o("asset").num.toInt)),
+        Vector((c.id, 1), (b.id, 0))
+      )
+      assertEquals(f.resting.map(_.id), Vector(a.id))
+    }
+  }
+
+  test("any cancel error settles only from the order's looked up status") {
+    val seeds = Vector(Seed(Side.Buy, "0.2", "540", 5L), Seed(Side.Buy, "0.15", "541", 6L))
+    using(new Fixture(seeds)) { f =>
+      val Vector(a, b) = f.seeded
+      Wait.until("start lookups missing")(f.lookups.size == 2)
+      f.ready()
+      f.cancels = _ => Some(cancelReply(ujson.Obj("error" -> "Something the docs never named")))
+      f.statuses.put(a.id, lookupReply(a, "canceled", "0.2"))
+      f.statuses.put(b.id, lookupReply(b, "open", "0.15"))
+      assert(f.worker.cancel(Vector(a.id)))
+      Wait.until("cancel request never finished")(!f.worker.view.pending)
+      assertEquals(f.lookups.drop(2), Vector(a.id))
+      assertEquals(f.resting.map(_.id), Vector(b.id))
+      assertEquals(f.worker.view.outcome, Some("XMR canceled $21.60 at 540"))
+      assert(f.worker.cancel(Vector(b.id)))
+      Wait.until("cancel request never finished")(!f.worker.view.pending)
+      assertEquals(f.lookups.drop(2), Vector(a.id, b.id))
+      assertEquals(f.resting.map(_.id), Vector(b.id))
+      assertEquals(f.worker.view.outcome, Some("XMR cancel rejected"))
     }
   }
 

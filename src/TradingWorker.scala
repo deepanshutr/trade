@@ -714,6 +714,10 @@ final class TradingWorker private[desk] (
             pause = Some(facing(item.sign, p.side))
           )
         case Route.Apply(r) =>
+          // Assumption A1: an open update's sz is the size still resting, and a partial fill
+          // sends one with a smaller sz. The venue docs list the field without saying so. If it
+          // were not, only the shown remaining size would be wrong, because shrink never raises
+          // a size and sends nothing. The owner checks it on the first live partial fill.
           if u.status == "open" then shrink(r, u.remaining, Some(u.at))
           else if VenueOrders.terminal.contains(u.status) then
             settle(r, Gone.Venue(u.status), Some(u.at), facing(item.sign, r.side))
@@ -921,19 +925,22 @@ final class TradingWorker private[desk] (
         signed(VenueOrders.cancelAction(r.asset, r.id), nonce, Some(Math.addExact(wall(), 5000L)))
       ).toOption
       val reply = request.flatMap(body => Try(exchange.post(body)).toOption.flatten)
-      VenueOrders.cancelOutcome(reply) match
-        case Some(Right(())) => settle(r, Gone.Venue("canceled"), None, reduced = false)
-        // The order is already gone. One lookup settles it by its real status.
-        case Some(Left(text)) if text.contains("never placed") =>
-          looked(r, lookup(r), wall(), counting = false)
-        case Some(Left(_)) =>
-          synchronized { announce(r.coin + " cancel rejected") }
-        // With no reply the order stays for the next reconciliation.
-        case None =>
-          synchronized {
-            announce(r.coin + (if request.isEmpty then " cancel not sent"
-                               else " cancel result unknown"))
-          }
+      if request.isEmpty then synchronized { announce(r.coin + " cancel not sent") }
+      else if VenueOrders.cancelOutcome(reply).contains(Right(())) then
+        settle(r, Gone.Venue("canceled"), None, reduced = false)
+      else
+        // The venue documents no error text for a cancel by cloid, so any error or unclear
+        // reply is settled only from one status lookup. An order still open was not canceled,
+        // and an order the lookup cannot place stays for the next reconciliation.
+        val status = lookup(r)
+        looked(r, status, wall(), counting = false)
+        val open = VenueOrders.lookup(status) match
+          case Some(VenueOrders.Lookup.Open(_, _)) => Exchange.sameOrder(status, r)
+          case _                                   => false
+        synchronized {
+          if restingOrders.exists(_.id == r.id) then
+            announce(r.coin + (if open then " cancel rejected" else " cancel result unknown"))
+        }
     }
 
   private def initializeSigning(): Unit =
