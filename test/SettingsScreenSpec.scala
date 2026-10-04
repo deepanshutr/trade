@@ -669,6 +669,44 @@ class SettingsScreenSpec extends munit.FunSuite:
     finally release.countDown()
   }
 
+  test("a read handed on keeps the gate shut, so an ask made during it waits for it") {
+    val gate = new SettingsScreen.ReadGate
+    val ends = Vector.fill(3)(new CountDownLatch(1))
+    val reads = new AtomicInteger()
+    val running = new AtomicInteger()
+    val most = new AtomicInteger()
+    val reader = new SettingsScreen.OwnerReads(
+      () => {
+        val n = reads.incrementAndGet()
+        most.accumulateAndGet(running.incrementAndGet(), (a, b) => a.max(b))
+        val _ = ends((n - 1).min(2)).await(5L, java.util.concurrent.TimeUnit.SECONDS)
+        running.decrementAndGet()
+        Right(status(message = s"read $n"))
+      },
+      () => start,
+      task => Threads.daemon("owner-status-test")(task.run()).start(),
+      gate
+    )
+    try
+      reader.refresh()
+      Wait.until("the first read never started")(reads.get() == 1)
+      reader.refresh()
+      ends(0).countDown()
+      Wait.until("the waiting read never started")(reads.get() == 2)
+      // Asked while the handed-on read runs.
+      reader.refresh()
+      Thread.sleep(100L)
+      assertEquals((reads.get(), most.get()), (2, 1))
+      ends(1).countDown()
+      Wait.until("the third ask never ran")(reads.get() == 3)
+      ends(2).countDown()
+      Wait.until("the third read never ended")(
+        reader.status.exists(_._1.exists(_.message == "read 3"))
+      )
+      assertEquals(most.get(), 1)
+    finally ends.foreach(_.countDown())
+  }
+
   test("a screen waiting on a slow status read asks for it once") {
     val release = new CountDownLatch(1)
     val reads = new AtomicInteger()
@@ -907,6 +945,47 @@ class SettingsScreenSpec extends munit.FunSuite:
     frames.reset()
     terminal.write(Vector("chart", "buttons"), (100, 30))
     assert(frames.size() > 0, "the first frame after settings was not a full repaint")
+  }
+
+  test("settings wait for a frame being written before they pause and draw") {
+    val paused = new AtomicBoolean(false)
+    val lock = new Object
+    val writing = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val render = Threads.daemon("render-test") {
+      SettingsWiring.renderPass(paused, () => true, lock, _ => ())(() => ())((_, _) => {
+        writing.countDown()
+        val _ = release.await(5L, java.util.concurrent.TimeUnit.SECONDS)
+      })
+    }
+    val shown = new ByteArrayOutputStream()
+    val started = new AtomicBoolean(false)
+    val opening = Threads.daemon("settings-test") {
+      val _ = SettingsWiring.show(
+        paused,
+        lock,
+        new Term.Writer(new PrintStream(OutputStream.nullOutputStream())),
+        () => (),
+        new PrintStream(shown, true, UTF_8)
+      ) {
+        started.set(true)
+        false
+      }
+    }
+    try
+      render.start()
+      assert(writing.await(5L, java.util.concurrent.TimeUnit.SECONDS))
+      opening.start()
+      Thread.sleep(200L)
+      // The frame is still being written, so nothing of settings may reach the terminal yet.
+      assert(!started.get(), "settings drew while a workspace frame was being written")
+      assertEquals(shown.size(), 0)
+      release.countDown()
+      Wait.until("settings never opened")(started.get())
+    finally
+      release.countDown()
+      render.join(5000L)
+      opening.join(5000L)
   }
 
   test("the render pass waits while settings are open and drops a frame built as they opened") {

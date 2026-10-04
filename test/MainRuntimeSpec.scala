@@ -161,7 +161,8 @@ class MainRuntimeSpec extends TempDirectorySuite:
           created += ((c, enabled, coin, directory))
           throw new Reached
         },
-        keys = hooks
+        // The home is named at the call, as the guard test below requires.
+        keys = hooks.copy(home = home)
       )
 
   private def withOwner(network: String = "testnet"): String =
@@ -414,11 +415,18 @@ class MainRuntimeSpec extends TempDirectorySuite:
   test("recording never reaches the key step") {
     val s = new Startup(withOwner())
     s.makeUsable()
-    val config = TradingConfig(owner = Some(ownerAddress))
+    // The config and the usable key are on the same network, so only the record rule stops it.
+    val config = TradingConfig.load(Some(s.config)).toOption.get
+    assertEquals(config.network, "testnet")
     val prepared = KeyStartup.prepare(s.args(record = true), config, s.state, s.hooks)
     assertEquals(prepared.config, config)
     assertEquals(prepared.session.isEmpty, true)
     assertEquals(s.securityCalls.size + s.screens.size + s.reads.size, 0)
+    // The positive control: the same start without recording checks the key and reads it.
+    val viewing = KeyStartup.prepare(s.args(), config, s.state, s.hooks)
+    assertEquals(viewing.config.agent, Some(keyAddress))
+    assert(s.securityCalls.nonEmpty)
+    assertEquals(s.reads.size, 1)
   }
 
   test("closing the workspace closes the session key after the workers") {
@@ -773,7 +781,8 @@ class MainRuntimeSpec extends TempDirectorySuite:
           end += 1
         (file.getFileName.toString, text.slice(start, end))
     assert(calls.size >= 6, calls)
-    assertEquals(calls.filterNot(_._2.contains("keys =")).map(_._1), Vector.empty[String])
+    val unnamed = calls.filterNot((_, call) => call.contains("keys =") && call.contains("home ="))
+    assertEquals(unnamed.map(_._1), Vector.empty[String])
   }
 
   test("a reload with nothing changed replaces nothing when --trade has a key and no owner") {
