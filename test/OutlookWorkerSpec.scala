@@ -197,7 +197,7 @@ class OutlookWorkerSpec extends munit.FunSuite:
     val controller = new DeskController(
       PanelView(),
       () => now,
-      _ => Left("disabled"),
+      (_, _) => Left("disabled"),
       _ => fail("unexpected order"),
       _ => Left("disabled")
     )

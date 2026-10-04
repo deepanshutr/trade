@@ -127,6 +127,7 @@ object CompactDisplayFixtures:
         quantity,
         false
       ),
+      TradeTerms(TradeSizes(), Trading.defaultSlippage),
       now,
       now + 30000L
     )

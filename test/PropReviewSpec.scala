@@ -3,6 +3,7 @@ package desk
 import java.util.concurrent.TimeUnit
 
 class PropReviewSpec extends TempDirectorySuite:
+  private val terms = TradeTerms(TradeSizes(), Trading.defaultSlippage)
   test("prop review lifetime is bounded without timestamp overflow") {
     val now = 1800000000000L
     val rest = new Rest:
@@ -30,7 +31,8 @@ class PropReviewSpec extends TempDirectorySuite:
       while !worker.view.ready && System.nanoTime() < until do Thread.sleep(5)
       assert(worker.view.ready)
       val intent = OrderIntent(Side.Buy, OrderKind.Hard)
-      val review = OrderReview(intent, worker.preview(intent).toOption.get, now, now + 30000)
+      val review =
+        OrderReview(intent, worker.preview(intent, terms).toOption.get, terms, now, now + 30000)
       assert(!worker.submitReviewed(review.copy(expiresAt = now + 30001)))
       assert(
         !worker.submitReviewed(

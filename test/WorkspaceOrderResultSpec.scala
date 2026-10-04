@@ -16,7 +16,7 @@ class WorkspaceOrderResultSpec extends TempDirectorySuite:
     val controller = new DeskController(
       PanelView(mode = "PROP"),
       () => 123L,
-      _ => Left("unused"),
+      (_, _) => Left("unused"),
       _ => false,
       _ => Left("unused")
     )
@@ -64,7 +64,7 @@ class WorkspaceOrderResultSpec extends TempDirectorySuite:
     val controller = new DeskController(
       PanelView(mode = "PROP"),
       () => 123L,
-      _ => Left("unused"),
+      (_, _) => Left("unused"),
       _ => false,
       _ => Left("unused")
     )

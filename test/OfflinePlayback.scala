@@ -285,5 +285,6 @@ object OfflinePlayback:
           warmSigning = () => deny("signing warmup")
         )
       ,
-      queue
+      queue,
+      keys = KeyStartup.Hooks(home = Path.of(args(2)).toAbsolutePath.getParent)
     )

@@ -2,9 +2,9 @@
 
 Run `desk XMR --prop` for prop trading on Monero, `desk XMR` for viewing, or
 `desk XMR --trade` for the configured real account. Prop trading simulates fills
-in a local wallet. Run `desk --keys` to make, restore, rename or choose the
-trading key. It opens a key screen before any workspace and exits when you leave
-it. See [live trading settings](trading.md).
+in a local wallet. Press `s` for settings: sizes, slippage, the trading key, the
+owner and its approval, funding and key bindings. No command-line flag is needed
+after install. See [Settings](#settings) and [live trading settings](trading.md).
 Read the mode and full market name above the trade buttons. The minimum size is 100
 columns by 30 rows. Use 120 by 40 for more chart space.
 
@@ -72,7 +72,11 @@ nothing. See [live trading settings](trading.md) for amounts and the price allow
 | c | Switch line and candle charts |
 | Arrows | Zoom or move through chart history |
 | v | Mute or resume price sounds |
+| s | Open settings, except s remains text during market entry |
 | q or Control with c | Quit, except q remains text during market entry |
+
+These are the default keys. Each one except Enter, Escape, the arrows and Control C
+can be rebound in settings. Buttons and labels show the current key.
 
 The graph retains its three price-aligned columns. From left to right they show
 Short, Mid and Long levels. Book, tape, bitcoin and gold comparisons use equal
@@ -129,6 +133,75 @@ Logging uses a bounded background queue. `!logs` marks unavailable diagnostic
 storage. See [logging details](diagnostics.md).
 
 Restart an already running Desk after installation to load the new build.
+
+## Settings
+
+Press `s` to open settings. The workspace stops drawing while settings are open, but
+the market feed, the workers, alerts and sounds keep running. An order already sent
+completes, and its outcome shows when you leave. Settings close any open mode
+confirmation. During market entry `s` is text. Esc leaves settings. Control C quits
+Desk, as everywhere.
+
+The page has three sections: Trading, Keys and Key bindings. Up and Down move the
+cursor. Enter edits or acts on the row under it. `r` reads the settings, the key and the
+owner again. While a live order is pending, `r` reads only the owner and says "Wait for
+the pending order". The last line shows the latest result or refusal and clears on the
+next key. On a terminal smaller than 100 by 30, lines are cut at the width and the page
+scrolls to keep the cursor visible. Enter, Esc, the arrows and `r` are fixed inside
+settings, whatever the workspace binds them to.
+
+Enter on Small amount, Big amount or Slippage opens a field. It takes digits and one
+dot. Enter saves and Esc cancels. Slippage is shown and typed in percent. A refused
+value stays in the field with the reason. A saved value is written to the settings
+file at once and applies to the next order. An order already reviewed still sends
+what it showed. The Keys section is described in [live trading settings](trading.md).
+
+Enter on a key binding row records a new key:
+
+1. Press the key, or the first of two keys. Esc cancels.
+2. Press a second key to make a two-key sequence, or Enter to keep one key.
+3. Press the same again to confirm. A mismatch starts again.
+
+Desk then checks the binding, writes it and applies it at once. A refusal shows the
+reason and starts again. A binding is one key or two keys pressed one after the other.
+The second key must follow within one second. Otherwise the first is dropped and the
+second acts on its own. Shift needs no rule: a capital letter or a shifted symbol is
+its own key. Control combinations work. Command combinations do not.
+
+Option combinations work with the Apple Terminal defaults, where Option types a
+character such as `∫` for Option B. Desk stores the character's bytes. Option
+characters depend on the keyboard layout, so a layout change can break an Option
+binding. With "Use Option as Meta key" turned on, an Option key is not a key for
+Desk. On the US layout Option E, I, N, U and the backtick are dead keys that wait for
+a second press. Desk refuses their accents and the accented letters they make, with
+"That key needs a second press on this layout".
+
+Desk refuses Enter and Control J, Escape, Tab, the arrows, Delete and Control H,
+Control C, Control D, Control Q, Control S, Control Z, Control backslash, Control
+Space, the paste markers and mouse reports, and anything that is not one key. A binding
+equal to another is refused, and so is a key that starts another action's two-key
+sequence. Two sequences may share their first key.
+
+A row shows each binding by name: the key itself, `Space`, `Control K`, an Option
+character with its US Option key such as `∫ Option B`, `F1` to `F12`, or the bytes in
+hexadecimal. A two-key binding shows as `g then m`. Buttons use a short form, such as
+`^K` or `g m`.
+
+Bindings live in `~/.config/desk/bindings.json`, mode `600`, at most 16 KiB:
+
+```json
+{"version":1,"bindings":{"quit":["q"],"market":["g","m"],"close":["∫"]}}
+```
+
+Each key is the exact bytes the terminal sends, as a JSON string. An action that is
+missing keeps its default. A hand edit that breaks any rule stops Desk at start with
+"invalid key bindings: REASON (bindings.json)". Settings check every binding before
+writing, so only a hand edit can cause that.
+
+Settings and bindings writes need the folder `~/.config/desk` to be private. A folder
+that the group or others can read, such as one made by hand with mode 755, refuses
+every write with "local storage must be private"
+and the folder's path, and nothing changes on disk. Run `chmod 700` on that folder once.
 
 ## Development
 

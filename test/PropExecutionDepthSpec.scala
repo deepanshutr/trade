@@ -13,6 +13,7 @@ class PropExecutionDepthSpec extends munit.FunSuite:
       config: TradingConfig = TradingConfig()
   ):
     val clock = new AtomicLong(epoch)
+    val terms = TradeTerms(config.sizes, config.slippage)
     val writes = new AtomicInteger()
     val closedLeases = new AtomicInteger()
     val ledger = new PropLedger(
@@ -74,9 +75,9 @@ class PropExecutionDepthSpec extends munit.FunSuite:
       assert(worker.view.ready)
     def review(side: Side = Side.Buy): OrderReview =
       val intent = OrderIntent(side, OrderKind.Hard)
-      val plan = worker.preview(intent)
+      val plan = worker.preview(intent, terms)
       assert(plan.isRight, plan.toString)
-      OrderReview(intent, plan.toOption.get, clock.get(), clock.get() + 30000)
+      OrderReview(intent, plan.toOption.get, terms, clock.get(), clock.get() + 30000)
     def settled(): Unit =
       Wait.until("order did not settle")(!worker.view.pending && worker.view.outcome.nonEmpty)
     def close(): Unit = worker.close()
@@ -85,8 +86,26 @@ class PropExecutionDepthSpec extends munit.FunSuite:
     val f = new Fixture(config = TradingConfig(slippage = BigDecimal("0.005")))
     try
       f.open()
-      val plan = f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard))
+      val plan = f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms)
       assertEquals(plan.map(_.limit), Right(BigDecimal("100.5")))
+    finally f.close()
+  }
+
+  test("prop plans with the given terms and sends only a review whose terms match its preview") {
+    val f = new Fixture()
+    try
+      f.open()
+      val intent = OrderIntent(Side.Buy, OrderKind.Hard)
+      val chosen = TradeTerms(TradeSizes(BigDecimal(20), BigDecimal(100)), BigDecimal("0.005"))
+      val start = f.worker.preview(intent, f.terms).fold(reason => fail(reason), identity)
+      assertEquals((start.quantity, start.limit), (BigDecimal(5), BigDecimal("100.1")))
+      val plan = f.worker.preview(intent, chosen).fold(reason => fail(reason), identity)
+      assertEquals((plan.quantity, plan.limit), (BigDecimal("0.2"), BigDecimal("100.5")))
+      val review = OrderReview(intent, plan, chosen, f.clock.get(), f.clock.get() + 30000)
+      assert(!f.worker.submitReviewed(review.copy(terms = f.terms)))
+      assert(f.worker.submitReviewed(review))
+      f.settled()
+      assertEquals(f.ledger.account.positions("XMR").quantity, BigDecimal("0.2"))
     finally f.close()
   }
 
@@ -99,7 +118,7 @@ class PropExecutionDepthSpec extends munit.FunSuite:
         assert(f.worker.view.ready)
         f.clock.addAndGet(1001L)
         assert(!f.worker.view.ready)
-        assert(f.worker.preview(Trading.action(0)).isLeft)
+        assert(f.worker.preview(Trading.action(0), f.terms).isLeft)
         f.publish(f.clock.get() + offset)
         assert(f.worker.view.ready)
         assertEquals(f.ledger.account.count, 0L)
@@ -245,7 +264,7 @@ class PropExecutionDepthSpec extends munit.FunSuite:
       f.clock.addAndGet(1001L)
       f.quote("0.01", epoch + 500L)
       assert(!f.worker.view.ready)
-      assert(f.worker.preview(Trading.action(0)).isLeft)
+      assert(f.worker.preview(Trading.action(0), f.terms).isLeft)
       assertEquals(f.ledger.account.count, 0L)
     finally f.close()
   }
@@ -318,7 +337,7 @@ class PropExecutionDepthSpec extends munit.FunSuite:
           assertEquals(f.ledger.account.positions.keySet, Set("XMR"))
           assertEquals(f.ledger.account.cash, BigDecimal("9499.5"))
           assert(f.worker.view.outcome.exists(_.contains("XMR buy")))
-          assert(f.worker.preview(Trading.action(0)).isLeft)
+          assert(f.worker.preview(Trading.action(0), f.terms).isLeft)
       finally
         release.countDown()
         f.close()

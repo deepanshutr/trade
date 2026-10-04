@@ -119,7 +119,7 @@ object TradingConfig:
         val j = ujson.read(text)
         require(
           !j.obj.contains("agent"),
-          "remove agent from the settings. The trading key is now chosen with desk --keys"
+          "remove agent from the settings. The trading key is now chosen in Desk settings"
         )
         require(j.obj.keySet.forall(fields.contains), "unknown setting")
         def stringFields(names: String*): Boolean =

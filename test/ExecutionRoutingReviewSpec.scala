@@ -24,6 +24,7 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
     val agent = OrderSigning.address(key)
     val owner = "0x" + "2" * 40
     val config = TradingConfig(owner = Some(owner), agent = Some(agent))
+    val terms = TradeTerms(config.sizes, config.slippage)
     val clock = new AtomicLong(10000L)
     val loads = new AtomicInteger()
     val journalOpens = new AtomicInteger()
@@ -198,7 +199,8 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
       val current = worker.view
       OrderReview(
         intent,
-        worker.preview(intent).toOption.get,
+        worker.preview(intent, terms).toOption.get,
+        terms,
         clock.get(),
         clock.get() + lifetime,
         current.leverage,
@@ -257,6 +259,21 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
       f.close()
   }
 
+  test("live routing previews with the terms it is given") {
+    val f = new Fixture()
+    val route = router(f)
+    try
+      f.ready()
+      val chosen = TradeTerms(TradeSizes(BigDecimal(20), BigDecimal(100)), BigDecimal("0.005"))
+      val plan = route.preview(buy, chosen)
+      assert(plan.isRight, plan)
+      assertEquals(plan, f.worker.preview(buy, chosen))
+      assertNotEquals(plan, f.worker.preview(buy, f.terms))
+    finally
+      route.close()
+      f.close()
+  }
+
   test("view routing rejects review submission even when the injected worker is ready") {
     val f = new Fixture()
     val route = router(f, "VIEW")
@@ -268,6 +285,276 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
     finally
       route.close()
       f.close()
+  }
+
+  // A router whose live factory counts the workers it makes.
+  private def making(
+      f: Fixture,
+      mode: String,
+      made: AtomicInteger,
+      config: TradingConfig = null
+  ): ExecutionRouter =
+    new ExecutionRouter(
+      Option(config).getOrElse(f.config),
+      mode,
+      "XMR",
+      f.worker,
+      _ =>
+        made.incrementAndGet()
+        f.create()
+      ,
+      new Rest { def post(body: String): Option[String] = fail("unexpected prop market request") },
+      f.directory,
+      () => f.clock.get(),
+      () => f.clock.get()
+    )
+
+  private def journalFree(f: Fixture): Boolean =
+    scala.util.Try(OrderJournal.open(f.directory, f.config.identity)).map(_.close()).isSuccess
+
+  test("suspending live retires the worker and frees its journal, and nothing restarts it") {
+    val f = new Fixture()
+    val made = new AtomicInteger()
+    val route = making(f, "LIVE", made)
+    try
+      Wait.until("the live worker never opened its journal")(f.journalOpens.get() == 1)
+      assert(!journalFree(f), "the running worker should hold the journal lock")
+      assertEquals(route.suspendLive(), Right(()))
+      assert(f.worker.isRetired)
+      assert(journalFree(f), "a suspended live worker still holds the journal lock")
+      assertEquals(route.switchMode("LIVE"), Left("Settings are open"))
+      Thread.sleep(200L)
+      assertEquals(made.get(), 0)
+      route.resumeLive()
+      assertEquals(made.get(), 1)
+      assertEquals(route.switchMode("LIVE"), Right(()))
+    finally
+      route.close()
+      f.close()
+  }
+
+  test("a retirement that does not finish refuses the child and resume makes no second worker") {
+    val released = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val f = new Fixture(warmSigning =
+      () =>
+        while !released.get() do
+          try Thread.sleep(5L)
+          catch case _: InterruptedException => ()
+    )
+    val made = new AtomicInteger()
+    val route = making(f, "LIVE", made)
+    try
+      Wait.until("the live worker never started")(f.warmCalls.get() == 1)
+      assertEquals(route.suspendLive(100L), Left("Trading did not stop. Restart Desk"))
+      route.resumeLive()
+      Thread.sleep(200L)
+      assertEquals(made.get(), 0)
+      assert(!f.worker.isRetired)
+    finally
+      released.set(true)
+      route.close()
+      f.close()
+  }
+
+  test("a router without an owner enters live after replaceLive with an approved config") {
+    val f = new Fixture()
+    val made = new AtomicInteger()
+    val route = new ExecutionRouter(
+      TradingConfig(),
+      "VIEW",
+      "XMR",
+      f.worker,
+      _ => fail("the first factory made a worker"),
+      new Rest { def post(body: String): Option[String] = fail("unexpected prop market request") },
+      f.directory,
+      () => f.clock.get(),
+      () => f.clock.get()
+    )
+    try
+      route.start()
+      assertEquals(route.switchMode("LIVE"), Left(TradingWorker.setupMessage))
+      route.replaceLive(
+        f.config,
+        _ =>
+          made.incrementAndGet()
+          f.create()
+      )
+      assert(f.worker.isRetired)
+      assertEquals(made.get(), 0)
+      assertEquals(route.switchMode("LIVE"), Right(()))
+      assertEquals(made.get(), 1)
+    finally
+      route.close()
+      f.close()
+  }
+
+  test("replaceLive in live mode retires the old worker before the new factory starts one") {
+    val f = new Fixture()
+    val first = new AtomicInteger()
+    val second = new AtomicInteger()
+    val route = making(f, "LIVE", first)
+    try
+      Wait.until("the live worker never opened its journal")(f.journalOpens.get() == 1)
+      route.replaceLive(
+        f.config.copy(quoteAgeMs = 1500L),
+        _ =>
+          assert(f.worker.isRetired, "a new worker started before the old one retired")
+          second.incrementAndGet()
+          f.create()
+      )
+      assert(f.worker.isRetired)
+      Wait.until("the new live worker never opened its journal")(f.journalOpens.get() == 2)
+      assertEquals((first.get(), second.get()), (0, 1))
+    finally
+      route.close()
+      f.close()
+  }
+
+  // The settings hand-off as Desk wires it, on a real router.
+
+  // Reads the JVM's current SIGINT handler by swapping a probe in and the handler straight back.
+  private def currentInt(): sun.misc.SignalHandler =
+    val signal = new sun.misc.Signal("INT")
+    val probe: sun.misc.SignalHandler = _ => ()
+    val found = sun.misc.Signal.handle(signal, probe)
+    val _ = sun.misc.Signal.handle(signal, found)
+    found
+
+  // Keys waiting in the terminal, and keys that come only when something blocks to read them.
+  private final class Typed(waiting: String, later: String) extends java.io.InputStream:
+    val queue = scala.collection.mutable.Queue.from(waiting.getBytes("UTF-8").map(_ & 0xff))
+    val after = scala.collection.mutable.Queue.from(later.getBytes("UTF-8").map(_ & 0xff))
+    def typed(text: String): Unit = queue ++= text.getBytes("UTF-8").map(_ & 0xff)
+    override def available(): Int = queue.size
+    override def read(): Int =
+      if queue.nonEmpty then queue.dequeue()
+      else if after.nonEmpty then after.dequeue()
+      else -1
+
+  private final class Exited(code: Int, onWait: () => Unit) extends Process:
+    def getOutputStream: java.io.OutputStream = java.io.OutputStream.nullOutputStream()
+    def getInputStream: java.io.InputStream = java.io.InputStream.nullInputStream()
+    def getErrorStream: java.io.InputStream = java.io.InputStream.nullInputStream()
+    def waitFor(): Int =
+      onWait()
+      code
+    def exitValue(): Int = code
+    def destroy(): Unit = ()
+    override def isAlive: Boolean = false
+
+  private final class Handing(
+      started: Boolean = false,
+      startFails: Boolean = false,
+      waitFails: Boolean = false
+  ):
+    val f = new Fixture()
+    val made = new AtomicInteger()
+    val route = making(f, "LIVE", made)
+    val events = scala.collection.mutable.ArrayBuffer.empty[String]
+    // n was pressed while live stopped. The Enter for "Press Enter" comes after the child.
+    val input = new Typed("n", "\n")
+    val output = new java.io.ByteArrayOutputStream()
+    val restoration = new WorkspaceApp.Restoration(() => (), () => ())
+    if started then
+      val _ = restoration.restore()
+    private val signal = new sun.misc.Signal("INT")
+    val desk: sun.misc.SignalHandler = _ => ()
+    private val jvm = sun.misc.Signal.handle(signal, desk)
+    def guarded: Boolean = !(currentInt() eq desk)
+    def run(): Either[String, Int] =
+      Wait.until("the live worker never opened its journal")(f.journalOpens.get() == 1)
+      SettingsWiring.handOff(
+        Seq("desk", "--keys"),
+        route,
+        () => {
+          events += "reload"
+          Right(())
+        },
+        restoration,
+        "saved",
+        input,
+        new java.io.PrintStream(output, true, "UTF-8"),
+        SettingsWiring.TermOps(
+          saved => events += s"restore $saved guarded=$guarded",
+          () => events += s"enter raw guarded=$guarded"
+        ),
+        command => {
+          events += s"start ${command.mkString(" ")} journal free=${journalFree(f)} " +
+            s"guarded=$guarded waiting=${input.available()} made=${made.get()}"
+          if startFails then throw new java.io.IOException("missing program")
+          new Exited(
+            0,
+            () => {
+              events += "child"
+              // A line typed while the child ran that the child never read.
+              input.typed("y\n")
+              if waitFails then throw new IllegalStateException("the wait failed")
+            }
+          )
+        }
+      )
+    def close(): Unit =
+      val _ = sun.misc.Signal.handle(signal, jvm)
+      route.close()
+      f.close()
+
+  test("the settings hand-off frees the journal, guards Control C and restarts live after") {
+    val h = new Handing()
+    try
+      assertEquals(h.run(), Right(0))
+      assertEquals(
+        h.events.toVector,
+        Vector(
+          "restore saved guarded=true",
+          "start desk --keys journal free=true guarded=true waiting=0 made=0",
+          "child",
+          "enter raw guarded=true",
+          "reload"
+        )
+      )
+      assert(!h.guarded, "Desk's SIGINT handler was not put back")
+      assertEquals(h.made.get(), 1)
+      // The stale line was drained, so the pause read the Enter typed after it.
+      assertEquals((h.input.queue.size, h.input.after.size), (0, 0))
+      assert(h.output.toString("UTF-8").contains("Press Enter to return to Desk."))
+    finally h.close()
+  }
+
+  test("a child that cannot start still gets the terminal back inside the guard and live back") {
+    val h = new Handing(startFails = true)
+    try
+      assertEquals(h.run(), Left("The step did not start: missing program"))
+      assertEquals(
+        h.events.toVector,
+        Vector(
+          "restore saved guarded=true",
+          "start desk --keys journal free=true guarded=true waiting=0 made=0",
+          "enter raw guarded=true"
+        )
+      )
+      assert(!h.guarded)
+      assertEquals(h.made.get(), 1)
+    finally h.close()
+  }
+
+  test("a wait that throws still takes the terminal back inside the guard and resumes live") {
+    val h = new Handing(waitFails = true)
+    try
+      intercept[IllegalStateException](h.run())
+      assertEquals(h.events.last, "enter raw guarded=true")
+      assert(!h.events.contains("reload"))
+      assert(!h.guarded)
+      assertEquals(h.made.get(), 1)
+    finally h.close()
+  }
+
+  test("while Desk restores the terminal itself the hand-off leaves raw mode to it") {
+    val h = new Handing(started = true)
+    try
+      assertEquals(h.run(), Right(0))
+      assert(!h.events.exists(_.startsWith("enter raw")), h.events)
+      assert(h.events.contains("reload"))
+    finally h.close()
   }
 
   test("recorder startup reaches public storage without constructing an account worker") {
@@ -303,7 +590,8 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
         publicSources,
         (_, _, _, _) => {
           factories.incrementAndGet(); throw new IllegalStateException("account factory called")
-        }
+        },
+        keys = KeyStartup.Hooks(home = directory)
       )
     )
     assert(result.isFailure)

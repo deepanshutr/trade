@@ -16,6 +16,7 @@ final class PropWorker(
   private final case class Prepared(
       intent: OrderIntent,
       plan: OrderPlan,
+      terms: TradeTerms,
       rules: MarketRules,
       accountCount: Long,
       at: Long
@@ -172,7 +173,7 @@ final class PropWorker(
         yield (capped, receivedAt)
       case _ => ()
   }
-  def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized {
+  def preview(intent: OrderIntent, terms: TradeTerms): Either[String, OrderPlan] = synchronized {
     if closed.get() then Left("Prop worker is closed")
     else if pending.get() then Left("Wait for the pending prop order")
     else
@@ -190,9 +191,9 @@ final class PropWorker(
               touch.get.quote(intent.side),
               position,
               intent,
-              config.sizes,
+              terms.sizes,
               1,
-              config.slippage
+              terms.slippage
             )
             .map(plan =>
               if intent.side == Side.Sell then plan.copy(quantity = plan.quantity.min(position))
@@ -209,7 +210,7 @@ final class PropWorker(
             )
             .flatMap(plan => ledger.check(plan, account).map(_ => plan))
       prepared =
-        result.toOption.map(plan => Prepared(intent, plan, rules.get, account.count, wall()))
+        result.toOption.map(plan => Prepared(intent, plan, terms, rules.get, account.count, wall()))
       result
   }
   private def matches(review: OrderReview): Boolean =
@@ -218,7 +219,8 @@ final class PropWorker(
         BigInt(review.expiresAt) - BigInt(review.createdAt) <= 30000L &&
         review.leverage.isEmpty && review.marginMode.isEmpty
     def samePreparation: Boolean = prepared.exists(p =>
-      p.intent == review.intent && p.plan == review.plan && rules.contains(p.rules) &&
+      p.intent == review.intent && p.plan == review.plan && p.terms == review.terms &&
+        rules.contains(p.rules) &&
         ledger.account.count == p.accountCount && p.at <= review.createdAt &&
         BigInt(wall()) - p.at <= TradingWorker.maximumReviewLifetimeMs
     )

@@ -4,16 +4,19 @@ import java.nio.file.Path
 import scala.util.Try
 
 final class ExecutionRouter(
-    config: TradingConfig,
+    initialConfig: TradingConfig,
     initialMode: String,
     initialCoin: String,
     initialLive: TradingWorker,
-    createLive: String => TradingWorker,
+    initialFactory: String => TradingWorker,
     rest: Rest,
     directory: Path,
     wall: () => Long,
     monotonic: () => Long
 ) extends AutoCloseable:
+  // A reload replaces the config and the live factory. A worker already made keeps its own.
+  private var config = initialConfig
+  private var createLive = initialFactory
   private var selected = initialMode
   private var coin = initialCoin
   private var live = initialLive
@@ -23,6 +26,8 @@ final class ExecutionRouter(
   private var retirement = Option.empty[Thread]
   private var retirementFailed = false
   private var closed = false
+  // While settings run a child, no live worker exists, so none holds the journal lock or a key.
+  private var suspended = false
   private def transitionReason: String =
     if retirementFailed then "Trading did not stop. Restart to retry"
     else "Changing mode"
@@ -45,7 +50,7 @@ final class ExecutionRouter(
           synchronized {
             retirement = None
             retirementFailed = result.isFailure || !previous.isRetired
-            if !closed && selected == "LIVE" && !retirementFailed then startLive()
+            if !closed && !suspended && selected == "LIVE" && !retirementFailed then startLive()
           }
         },
         "execution-retirement"
@@ -116,6 +121,7 @@ final class ExecutionRouter(
         retireLive()
         ()
       }.toEither.left.map(_ => "Prop storage cannot be opened. Its saved balance was preserved")
+    else if next == "LIVE" && suspended then Left("Settings are open")
     else if next == "LIVE" && !config.configured then Left(TradingWorker.setupMessage)
     else if next == "LIVE" && retirementFailed then Left(transitionReason)
     else if next == "LIVE" then
@@ -125,15 +131,53 @@ final class ExecutionRouter(
       Right(())
     else Left("Unknown trading mode")
   }
-  def preview(intent: OrderIntent): Either[String, OrderPlan] = synchronized {
-    if selected == "PROP" then propWorker().preview(intent)
+  def preview(intent: OrderIntent, terms: TradeTerms): Either[String, OrderPlan] = synchronized {
+    if selected == "PROP" then propWorker().preview(intent, terms)
     else if selected == "LIVE" && !liveEnabled then Left(transitionReason)
-    else live.preview(intent)
+    else live.preview(intent, terms)
   }
   def submitReviewed(review: OrderReview): Boolean = synchronized {
     if selected == "PROP" then propWorker().submitReviewed(review)
     else selected == "LIVE" && liveEnabled && live.submitReviewed(review)
   }
+  def livePending: Boolean = synchronized(live.view.pending)
+  // Stops the live worker for a child and waits for it, as close does. A worker that has not
+  // retired in time may still hold the journal lock, so no child may start.
+  def suspendLive(waitMs: Long = 12000L): Either[String, Unit] =
+    val stopping = synchronized {
+      suspended = true
+      retireLive()
+      retirement
+    }
+    stopping.foreach(_.join(waitMs))
+    synchronized {
+      Either.cond(
+        retirement.isEmpty && !retirementFailed && live.isRetired,
+        (),
+        "Trading did not stop. Restart Desk"
+      )
+    }
+  // Ends a suspension whatever the child did. A retirement still running or failed keeps the old
+  // worker's journal lock, so live starts only through the next switch to it.
+  def resumeLive(): Unit = synchronized {
+    suspended = false
+    if !closed && selected == "LIVE" && retirement.isEmpty && !retirementFailed && live.isRetired
+    then startLive()
+  }
+  // Takes the reloaded settings and factory, retires the current live worker and waits for it.
+  // The retirement starts a new worker only when live is selected and settings run no child.
+  def replaceLive(
+      next: TradingConfig,
+      factory: String => TradingWorker,
+      waitMs: Long = 12000L
+  ): Unit =
+    val stopping = synchronized {
+      config = next
+      createLive = factory
+      retireLive()
+      retirement
+    }
+    stopping.foreach(_.join(waitMs))
   def close(): Unit =
     val (current, simulation, stopping) = synchronized {
       closed = true

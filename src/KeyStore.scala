@@ -17,7 +17,8 @@ object KeyStore:
   private val missing = "key store helper is not installed. Run make install"
   private val digits = "0123456789abcdef".getBytes(UTF_8)
 
-  private def absolute(env: Map[String, String], name: String): Option[String] =
+  // The one rule for a helper path taken from the environment: set and absolute.
+  private[desk] def absolute(env: Map[String, String], name: String): Option[String] =
     env.get(name).filter(value => Try(Path.of(value).isAbsolute).getOrElse(false))
 
   private def hexLine(key: Array[Byte]): Array[Byte] =

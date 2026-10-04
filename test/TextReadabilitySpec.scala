@@ -9,7 +9,7 @@ class TextReadabilitySpec extends munit.FunSuite:
     val controller = new DeskController(
       PanelView(),
       () => 1L,
-      _ => Left("unused"),
+      (_, _) => Left("unused"),
       _ => false,
       _ => Left("unused")
     )

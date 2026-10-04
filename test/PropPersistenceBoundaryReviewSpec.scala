@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.{AtomicLong, AtomicReference}
 import scala.util.control.NonFatal
 
 class PropPersistenceBoundaryReviewSpec extends TempDirectorySuite:
+  private val terms = TradeTerms(TradeSizes(), Trading.defaultSlippage)
 
   private class Fixture(persist: PropAccount => Unit):
     val clock = new AtomicLong(1800000000000L)
@@ -81,7 +82,13 @@ class PropPersistenceBoundaryReviewSpec extends TempDirectorySuite:
       Wait.until("prop did not become ready")(router.view.ready)
     def review(): OrderReview =
       val intent = Trading.action(0)
-      OrderReview(intent, router.preview(intent).toOption.get, clock.get(), clock.get() + 30000)
+      OrderReview(
+        intent,
+        router.preview(intent, terms).toOption.get,
+        terms,
+        clock.get(),
+        clock.get() + 30000
+      )
     def quick[T](label: String)(operation: => T): T =
       val done = new CountDownLatch(1)
       val result = new AtomicReference[Either[Throwable, T]]()
@@ -158,7 +165,7 @@ class PropPersistenceBoundaryReviewSpec extends TempDirectorySuite:
       val switched = f.quick("mode selection")(f.router.switchMode("LIVE"))
       assert(switched.left.toOption.exists(_.contains("pending order")))
       assert(!f.quick("duplicate submission")(f.router.submitReviewed(review)))
-      assert(f.quick("new preview")(f.router.preview(Trading.action(3))).isLeft)
+      assert(f.quick("new preview")(f.router.preview(Trading.action(3), terms)).isLeft)
       release.countDown()
       f.complete()
       assertEquals(f.ledger.account.count, 1L)

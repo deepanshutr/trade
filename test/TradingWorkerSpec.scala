@@ -9,7 +9,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     val controller = new DeskController(
       PanelView(mode = "LIVE"),
       () => 1000L,
-      _ => Left("unused"),
+      (_, _) => Left("unused"),
       _ => false,
       _ => Left("unused")
     )
@@ -338,15 +338,56 @@ class TradingWorkerSpec extends TempDirectorySuite:
     if autoStart then worker.start()
     fresh(worker)
     def ready(): Unit = Wait.until("worker never became ready")(worker.view.ready)
-    def review(intent: OrderIntent = buy, lifetime: Long = 1000L): OrderReview =
+    val terms = TradeTerms(sizes, slippage)
+    def review(
+        intent: OrderIntent = buy,
+        lifetime: Long = 1000L,
+        chosen: TradeTerms = terms
+    ): OrderReview =
       val current = worker.view
       OrderReview(
         intent,
-        worker.preview(intent).toOption.get,
+        worker.preview(intent, chosen).toOption.get,
+        chosen,
         clock.get(),
         clock.get() + lifetime,
         current.leverage,
         current.marginMode
+      )
+    // A press as the controller makes it, a fresh review of what the worker previews now. A
+    // refused preview still goes in with an empty plan, so the worker gives its own reason.
+    def submit(intent: OrderIntent, coin: String, target: TradingWorker = worker): Boolean =
+      val current = target.view
+      val at = clock.get() + wallStep.get()
+      val zero = BigDecimal(0)
+      val plan = target
+        .preview(intent, terms)
+        .getOrElse(
+          OrderPlan(
+            coin,
+            0,
+            intent.side,
+            intent.kind,
+            zero,
+            zero,
+            zero,
+            zero,
+            zero,
+            None,
+            zero,
+            false
+          )
+        )
+      target.submitReviewed(
+        OrderReview(
+          intent,
+          plan.copy(coin = coin),
+          terms,
+          at,
+          at + TradingWorker.maximumReviewLifetimeMs,
+          current.leverage,
+          current.marginMode
+        )
       )
     def close(): Unit =
       release.countDown()
@@ -361,7 +402,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
   private def completeWithoutActive(f: Fixture): Unit =
     f.ready()
     f.pauseActive()
-    assert(f.worker.submit(buy, "XMR"))
+    assert(f.submit(buy, "XMR"))
     Wait.until("completion and fresh account snapshot missing")(!f.worker.view.pending)
     assertEquals(f.worker.view.outcome, Some("XMR filled 1 at 100"))
 
@@ -472,7 +513,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assert(f.worker.view.ready)
       f.available = Vector("0", "0")
       f.sendActive()
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("display margin blocked the order")(f.orderPosts.get() == 1)
     finally f.close()
   }
@@ -515,10 +556,10 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.maximums = Vector("0", "100")
       f.sendActive()
       f.ready()
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.worker.view.message, "Requested quantity exceeds confirmed account capacity")
       assertEquals(f.orderPosts.get(), 1)
-      assert(f.worker.submit(buy.copy(side = Side.Sell), "XMR"))
+      assert(f.submit(buy.copy(side = Side.Sell), "XMR"))
       Wait.until("renewed sell capacity was not used")(f.orderPosts.get() == 2)
     finally f.close()
   }
@@ -534,14 +575,14 @@ class TradingWorkerSpec extends TempDirectorySuite:
       completeWithoutActive(f)
       receive(preFill, requestStartedAt)
       assert(!f.worker.view.ready)
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.orderPosts.get(), 1)
       f.maximums = Vector("0", "100")
       receive(f.activePayload, f.clock.incrementAndGet())
       f.ready()
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.worker.view.message, "Requested quantity exceeds confirmed account capacity")
-      assert(f.worker.submit(buy.copy(side = Side.Sell), "XMR"))
+      assert(f.submit(buy.copy(side = Side.Sell), "XMR"))
       Wait.until("post-fill sell capacity was not used")(f.orderPosts.get() == 2)
     finally f.close()
   }
@@ -554,7 +595,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.pauseActive()
       f.reject = true
       f.holdRecovery = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       assert(f.recoveryEntered.await(3, TimeUnit.SECONDS), "err status lookup missing")
       f.clock.set(f.lastPost.get()("expiresAfter").num.toLong + 60001L)
       f.fresh(f.worker, time = 2000L)
@@ -566,7 +607,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assertEquals(f.worker.view.position, Some(BigDecimal(0)))
       f.sendActive()
       f.ready()
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("order after rejection did not reach the exchange")(f.orderPosts.get() == 2)
     finally f.close()
   }
@@ -596,7 +637,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.lose = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("lost result was not saved")(
         f.worker.view.message == "XMR waiting for order result"
       )
@@ -621,7 +662,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assert(f.worker.view.pending)
       val before = writes.get()
       val ready = f.worker.view.ready
-      val accepted = f.worker.submit(buy, "XMR")
+      val accepted = f.submit(buy, "XMR")
       assert(!ready, "saved order became ready after owner recovery")
       assert(!accepted, "new submit was accepted with an order still saved")
       assertEquals(writes.get(), before)
@@ -707,7 +748,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         )
         assertEquals(f.openedJournal.pending.map(_.id), Some(saved.id))
         assert(f.worker.view.pending)
-        assert(!f.worker.submit(buy, "XMR"))
+        assert(!f.submit(buy, "XMR"))
         assertEquals(f.posts.get(), 0)
         assertEquals(f.worker.view.outcome, None)
         if owner.nonEmpty then
@@ -737,7 +778,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assertEquals(f.openedJournal.pending.map(_.id), Some(saved.id))
       assertEquals(f.openedJournal.pending.flatMap(_.owner), None)
       assert(f.worker.view.pending)
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
     finally f.close()
   }
 
@@ -865,8 +906,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       val f = new Fixture(missing = missing)
       try
         Wait.until("configure message missing")(
-          f.worker.view.message ==
-            "Live setup required: owner in settings and an active key (desk --keys). See docs/trading.md"
+          f.worker.view.message == "Live setup required. Press s for settings"
         )
         assertEquals(f.journalOpens.get(), 0)
         assertEquals(f.posts.get(), 0)
@@ -909,7 +949,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         assertEquals(f.openedJournal.pending, None)
         assert(f.worker.view.pending)
         assert(!f.worker.view.ready)
-        assert(!f.worker.submit(buy, "XMR"))
+        assert(!f.submit(buy, "XMR"))
         assertEquals(f.coreReads.get(), 0)
         if failure == "userRole" then assertEquals(f.loads.get(), 0)
         f.failedRead = ""
@@ -1031,7 +1071,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       Wait.until("account refresh did not finish")(f.worker.view.position.nonEmpty)
       assert(!f.worker.view.ready)
       assert(f.worker.view.block.exists(_.contains("Wallet change")))
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.loads.get(), 0)
       assertEquals(f.posts.get(), 0)
     finally f.close()
@@ -1051,7 +1091,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         workspaceText(current)
           .contains("Account unavailable")
       )
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.posts.get(), 0)
       assertEquals(f.loads.get(), 1)
       paused.set(false)
@@ -1078,7 +1118,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     )
     try
       f.ready()
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       assert(entered.await(3, TimeUnit.SECONDS))
       Files.writeString(
         root.resolve("mainnet-" + owner.drop(2) + ".paused"),
@@ -1115,7 +1155,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.hold = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       assert(f.entered.await(3, TimeUnit.SECONDS))
       assertEquals(f.orderPosts.get(), 1)
       assertEquals(probe(), 73)
@@ -1133,7 +1173,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     })
     try
       f.ready()
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("account lock was not checked")(attempts.get() == 1)
       Wait.until("pause was not shown")(
         f.worker.view.message.contains("Wallet change")
@@ -1150,8 +1190,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
         f.worker.view.rules.nonEmpty && f.worker.view.leverage.nonEmpty &&
           f.worker.view.position.nonEmpty
       )
-      assert(f.worker.preview(buy).isRight)
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(f.worker.preview(buy, f.terms).isRight)
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.loads.get(), 0)
       assertEquals(f.warmCalls.get(), 0)
       assertEquals(f.journalOpens.get(), 0)
@@ -1194,7 +1234,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assert(!f.worker.view.ready)
       assertEquals(f.worker.view.block, Some("selected depth stale"))
       assertEquals(f.worker.view.blockCode, BlockCode.Prices)
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.posts.get(), 0)
     finally f.close()
   }
@@ -1230,7 +1270,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       )
       // Five times $500 at $100 asks for 25. Only the fuller book shows 21 of it.
       assertEquals(
-        f.worker.preview(buy).toOption.get.estimatedQuantity,
+        f.worker.preview(buy, f.terms).toOption.get.estimatedQuantity,
         BigDecimal("21")
       )
     finally f.close()
@@ -1256,9 +1296,9 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.hold = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       assert(f.entered.await(3, TimeUnit.SECONDS))
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       f.worker.select("BTC")
       queue.put(Event.Resize(120, 40))
       queue.put(Event.Key(Command.Quit))
@@ -1281,11 +1321,11 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.lose = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("lost reply did not become unresolved")(
         f.worker.view.message.contains("waiting")
       )
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       f.worker.close()
       val again = f.create()
       restarted = Some(again)
@@ -1293,7 +1333,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.fresh(again)
       Wait.until("saved order not restored")(again.view.pending)
       Thread.sleep(600)
-      assert(!again.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR", again))
       assertEquals(f.posts.get(), 1)
     finally
       restarted.foreach(_.close())
@@ -1306,7 +1346,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.ready()
       f.reject = true
       f.recoverFilled = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("err reply did not recover filled order")(
         f.worker.view.outcome.contains("XMR recovered filled")
       )
@@ -1321,7 +1361,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.reject = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("err post missing")(f.orderPosts.get() == 1)
       val expiresAfter = f.lastPost.get()("expiresAfter").num.toLong
       Wait.until("err status lookup missing")(f.recoveryReads.get() > 0)
@@ -1353,7 +1393,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.ready()
       f.reject = true
       f.recoverFilled = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("err order did not settle as filled")(
         f.worker.view.outcome.contains("XMR recovered filled")
       )
@@ -1363,7 +1403,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.lose = true
       f.sendActive()
       f.ready()
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("second post missing")(f.orderPosts.get() == 2)
       val reads = f.recoveryReads.get()
       Wait.until("second lookup missing")(f.recoveryReads.get() > reads)
@@ -1391,7 +1431,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.ready()
       f.reject = true
       f.holdRecovery = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       assert(f.recoveryEntered.await(3, TimeUnit.SECONDS), "err status lookup missing")
       val held = f.recoveryReads.get()
       val expiresAfter = f.lastPost.get()("expiresAfter").num.toLong
@@ -1412,7 +1452,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.lose = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("lookup missing")(f.recoveryReads.get() > 0)
       val saved = f.openedJournal.pending.get
       // Monotonic time covers the wait, and wall time sits on the margin.
@@ -1442,7 +1482,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.ready()
       f.reject = true
       f.lookupFailure = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("err status lookup missing")(f.recoveryReads.get() > 0)
       f.clock.set(f.lastPost.get()("expiresAfter").num.toLong + 60001L)
       val reads = f.recoveryReads.get()
@@ -1462,7 +1502,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.lose = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("lookup missing")(f.recoveryReads.get() > 0)
       val saved = f.openedJournal.pending.get
       f.clock.set(saved.expiresAfter + 60000L)
@@ -1484,7 +1524,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.lose = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("lookup missing")(f.recoveryReads.get() > 0)
       val saved = f.openedJournal.pending.get
       val roles = f.roleReads.get()
@@ -1547,7 +1587,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         f.clock.addAndGet(1000L)
         f.ready()
         if errReply then f.reject = true else f.lose = true
-        assert(f.worker.submit(buy, "XMR"))
+        assert(f.submit(buy, "XMR"))
         Wait.until("lookup missing")(f.recoveryReads.get() > 0)
         val saved = f.openedJournal.pending.get
         assertEquals(saved.createdAt, loadedAt + 1000L)
@@ -1580,7 +1620,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.lose = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("lookup missing")(f.recoveryReads.get() > 0)
       f.worker.close()
       f.clock.set(f.openedJournal.pending.get.expiresAfter + 60001L)
@@ -1607,7 +1647,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.ready()
       f.lose = true
       f.lookupFailure = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("lookup missing")(f.recoveryReads.get() > 0)
       val saved = f.openedJournal.pending.get
       f.clock.set(saved.expiresAfter + 60001L)
@@ -1626,7 +1666,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.position = "7"
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("partial response not shown")(
         f.worker.view.message.contains("filled 1 at 100")
       )
@@ -1648,7 +1688,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     )
     try
       f.ready()
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       assert(entered.await(3, TimeUnit.SECONDS))
       f.worker.select("BTC")
       release.countDown()
@@ -1667,13 +1707,13 @@ class TradingWorkerSpec extends TempDirectorySuite:
     val f = new Fixture(beforeReplace = () => throw new java.io.IOException())
     try
       f.ready()
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("storage failure was not latched")(
         f.worker.view.message.contains("Restart to recover")
       )
       Thread.sleep(1200)
       assert(!f.worker.view.ready)
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.posts.get(), 0)
     finally f.close()
   }
@@ -1682,7 +1722,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     val f = new Fixture(afterReplace = () => throw new java.io.IOException())
     try
       f.ready()
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("post-reservation failure was not latched")(
         f.worker.view.message.contains("Restart to recover")
       )
@@ -1703,13 +1743,13 @@ class TradingWorkerSpec extends TempDirectorySuite:
     )
     try
       f.ready()
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("completion failure was not latched")(
         f.worker.view.message.contains("Restart to recover")
       )
       Thread.sleep(1200)
       assert(!f.worker.view.ready)
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.posts.get(), 1)
     finally f.close()
   }
@@ -1729,7 +1769,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.ready()
       f.holdAccount = true
       assert(f.accountEntered.await(3, TimeUnit.SECONDS))
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("order response was not processed")(
         f.worker.view.message.contains("filled 1 at 100")
       )
@@ -1761,7 +1801,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     )
     try
       f.ready()
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       assert(entered.await(3, TimeUnit.SECONDS))
       f.leverage = 3
       f.sendActive()
@@ -1853,7 +1893,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.ready()
       f.holdRecovery = true
       f.recoverFilled = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       assert(signingEntered.await(3, TimeUnit.SECONDS))
       val _ = f.recoveryEntered.await(1500, TimeUnit.MILLISECONDS)
       signingRelease.countDown()
@@ -1896,7 +1936,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       returned.countDown()
     )
     val answers = new LinkedBlockingQueue[(TradingView, Boolean)]()
-    val reader = new Thread(() => answers.put((f.worker.view, f.worker.submit(buy, "XMR"))))
+    val reader = new Thread(() => answers.put((f.worker.view, f.submit(buy, "XMR"))))
     caller.setDaemon(true)
     reader.setDaemon(true)
     try
@@ -1939,7 +1979,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.ready()
       assertEquals(f.warmCalls.get(), 1)
       assertEquals(f.posts.get(), 0)
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       assert(f.entered.await(3, TimeUnit.SECONDS))
       assertEquals(f.posts.get(), 1)
       assertEquals(f.orderPosts.get(), 1)
@@ -1969,7 +2009,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         "account thread continued after signing preparation failed"
       )
       assert(!f.worker.view.ready)
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       f.worker.start()
       f.worker.select("BTC")
       f.fresh(f.worker, coin = "BTC", time = 2000)
@@ -1993,7 +2033,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       prepare(f)
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       assert(entered.await(3, TimeUnit.SECONDS))
       changed(f)
       release.countDown()
@@ -2036,7 +2076,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.clock.addAndGet(1001)
       f.fresh(f.worker, time = 1001)
       assert(!f.worker.view.ready)
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.orderPosts.get(), 0)
     finally f.close()
   }
@@ -2055,7 +2095,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         )
       )
       assert(!f.worker.view.ready)
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.orderPosts.get(), 0)
     finally f.close()
   }
@@ -2109,7 +2149,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.sendActive()
       f.fresh(f.worker, time = 3001)
       assert(!f.worker.view.ready)
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.orderPosts.get(), 0)
     finally f.close()
   }
@@ -2158,7 +2198,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.recoverFilled = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("completion failure was not latched")(
         f.worker.view.message.contains("Restart to recover")
       )
@@ -2189,7 +2229,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       f.ready()
       f.hold = true
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       assert(entered.await(3, TimeUnit.SECONDS))
       assert(!f.entered.await(1500, TimeUnit.MILLISECONDS))
       assertEquals(f.orderPosts.get(), 0)
@@ -2205,7 +2245,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     val f = new Fixture()
     try
       f.ready()
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("fill missing")(f.worker.view.message.contains("filled 1 at 100"))
       f.ready()
       f.publishActive = false
@@ -2235,7 +2275,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assert(f.worker.view.outcome.exists(_.contains("XMR filled 1 at 100")))
       assert(!failed.contains("Filled #1"), failed)
       assert(!f.worker.view.ready)
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       f.worker.observe(Event.SocketDown)
       val down =
         workspaceText(f.worker.view)
@@ -2252,10 +2292,10 @@ class TradingWorkerSpec extends TempDirectorySuite:
     val f = new Fixture()
     try
       f.ready()
-      assert(f.worker.submit(buy, "XMR"))
+      assert(f.submit(buy, "XMR"))
       Wait.until("fill missing")(f.worker.view.message.contains("filled 1 at 100"))
       f.ready()
-      assert(!f.worker.submit(buy, "BTC"))
+      assert(!f.submit(buy, "BTC"))
       assert(
         workspaceText(f.worker.view)
           .contains("Filled #1")
@@ -2272,7 +2312,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         )
       )
       assert(f.worker.view.ready)
-      assert(!f.worker.submit(buy, "XMR"))
+      assert(!f.submit(buy, "XMR"))
       assertEquals(f.worker.view.message, "No visible quantity fits this order")
       assertEquals(f.worker.view.outcome, None)
       val controller = new DeskController(
@@ -2362,7 +2402,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assert(!view.ready)
       assertEquals(view.block, Some("Set BTC leverage to 5x"))
       assertEquals(view.blockCode, BlockCode.Leverage)
-      assert(!f.worker.submit(buy, "BTC"))
+      assert(!f.submit(buy, "BTC"))
       assertEquals(f.orderPosts.get(), 0)
     finally f.close()
   }
@@ -2371,12 +2411,12 @@ class TradingWorkerSpec extends TempDirectorySuite:
     val f = new Fixture(slippage = BigDecimal("0.005"))
     try
       f.ready()
-      val long = f.worker.preview(buy).fold(reason => fail(reason), identity)
+      val long = f.worker.preview(buy, f.terms).fold(reason => fail(reason), identity)
       assertEquals(long.quantity, BigDecimal(25))
       assertEquals(long.limit, BigDecimal("100.5"))
       assertEquals(long.reduceOnly, false)
       val short =
-        f.worker.preview(buy.copy(side = Side.Sell)).fold(reason => fail(reason), identity)
+        f.worker.preview(buy.copy(side = Side.Sell), f.terms).fold(reason => fail(reason), identity)
       assertEquals(short.quantity, BigDecimal("25.002"))
       assertEquals(short.limit, BigDecimal("99.491"))
       val review = f.review()
@@ -2387,6 +2427,55 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assertEquals(order("s").str, "25")
       assertEquals(order("p").str, "100.5")
     finally f.close()
+  }
+
+  test("live plans, checks and sends with the review's terms, never its start sizes") {
+    val f = new Fixture()
+    try
+      f.ready()
+      val chosen = TradeTerms(TradeSizes(BigDecimal(20), BigDecimal(100)), BigDecimal("0.005"))
+      val start = f.worker.preview(buy, f.terms).fold(reason => fail(reason), identity)
+      assertEquals((start.quantity, start.limit), (BigDecimal(25), BigDecimal("100.1")))
+      val review = f.review(chosen = chosen)
+      assertEquals((review.plan.quantity, review.plan.limit), (BigDecimal(1), BigDecimal("100.5")))
+      assert(!f.worker.submitReviewed(review.copy(terms = f.terms)))
+      assertEquals(
+        f.worker.view.message,
+        "Order review changed or expired. Review again before sending"
+      )
+      assert(f.worker.submitReviewed(review))
+      Wait.until("reviewed order was neither posted nor canceled") {
+        f.orderPosts.get() != 0 || f.worker.view.message.contains("canceled before sending")
+      }
+      assertEquals(f.orderPosts.get(), 1, f.worker.view.message)
+      val order = f.lastPost.get()("action")("orders")(0)
+      assertEquals(order("s").str, "1")
+      assertEquals(order("p").str, "100.5")
+    finally f.close()
+  }
+
+  test("a reviewed order held before sending keeps its size when the next preview has new terms") {
+    val entered = new CountDownLatch(1)
+    val release = new CountDownLatch(1)
+    val f = new Fixture(orderPermission = run => { entered.countDown(); release.await(); run() })
+    try
+      f.ready()
+      val review = f.review()
+      assertEquals((review.plan.quantity, review.plan.limit), (BigDecimal(25), BigDecimal("100.1")))
+      assert(f.worker.submitReviewed(review))
+      assert(entered.await(3, TimeUnit.SECONDS))
+      val chosen = TradeTerms(TradeSizes(BigDecimal(20), BigDecimal(100)), BigDecimal("0.005"))
+      assert(f.worker.preview(buy, chosen).isRight)
+      release.countDown()
+      Wait.until("held order was neither posted nor canceled") {
+        f.orderPosts.get() != 0 || f.worker.view.message.contains("canceled before sending")
+      }
+      assertEquals(f.orderPosts.get(), 1, f.worker.view.message)
+      val order = f.lastPost.get()("action")("orders")(0)
+      assertEquals((order("s").str, order("p").str), ("25", "100.1"))
+    finally
+      release.countDown()
+      f.close()
   }
 
   test("every plan is refused while the account position is unknown") {
@@ -2401,8 +2490,8 @@ class TradingWorkerSpec extends TempDirectorySuite:
           OrderIntent(Side.Sell, OrderKind.Close),
           OrderIntent(Side.Buy, OrderKind.Close)
         )
-      do assertEquals(f.worker.preview(intent), Left("Position unknown"), intent)
-      assert(!f.worker.submit(OrderIntent(Side.Sell, OrderKind.Hard), "XMR"))
+      do assertEquals(f.worker.preview(intent, f.terms), Left("Position unknown"), intent)
+      assert(!f.submit(OrderIntent(Side.Sell, OrderKind.Hard), "XMR"))
       assertEquals(f.posts.get(), 0)
     finally
       gate.countDown()
@@ -2418,9 +2507,9 @@ class TradingWorkerSpec extends TempDirectorySuite:
         assertEquals(f.worker.view.block, Some("Set XMR leverage to 5x"))
         assertEquals(f.worker.view.blockCode, BlockCode.Leverage)
         assertEquals(f.worker.view.leverage, Some(leverage))
-        assert(!f.worker.submit(buy, "XMR"))
+        assert(!f.submit(buy, "XMR"))
         assertEquals(f.posts.get(), 0)
-        assert(f.worker.preview(buy).isRight)
+        assert(f.worker.preview(buy, f.terms).isRight)
       finally f.close()
     }
 
@@ -2572,7 +2661,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       )
       assert(f.worker.view.ready)
       assertEquals(
-        f.worker.preview(buy).toOption.get.quantity,
+        f.worker.preview(buy, f.terms).toOption.get.quantity,
         review.plan.quantity
       )
       assert(!f.worker.submitReviewed(review))
@@ -2718,12 +2807,12 @@ class TradingWorkerSpec extends TempDirectorySuite:
   ) {
     heldReview(
       f => {
-        val before = f.worker.preview(buy).toOption.get
+        val before = f.worker.preview(buy, f.terms).toOption.get
         f.position = "7"
         Wait.until("new position was not observed during signing") {
           f.worker.view.position.contains(BigDecimal(7))
         }
-        val after = f.worker.preview(buy).toOption.get
+        val after = f.worker.preview(buy, f.terms).toOption.get
         assertEquals(after.quantity, before.quantity)
         assertEquals(after.limit, before.limit)
         assert(after.positionAfter != before.positionAfter)
@@ -2736,12 +2825,12 @@ class TradingWorkerSpec extends TempDirectorySuite:
     val sell = OrderIntent(Side.Sell, OrderKind.Hard)
     heldReview(
       f => {
-        val before = f.worker.preview(sell).toOption.get
+        val before = f.worker.preview(sell, f.terms).toOption.get
         f.position = "30"
         Wait.until("smaller position was not observed during signing") {
           f.worker.view.position.contains(BigDecimal(30))
         }
-        val after = f.worker.preview(sell).toOption.get
+        val after = f.worker.preview(sell, f.terms).toOption.get
         assert(before.reduceOnly && after.reduceOnly)
         assertEquals(after.kind, before.kind)
         assertEquals(after.quantity, before.quantity)
@@ -2772,29 +2861,6 @@ class TradingWorkerSpec extends TempDirectorySuite:
 
   test("unchanged reviewed inputs survive an asynchronous signing delay") {
     heldReview(_ => (), cancel = false)
-  }
-
-  test("legacy capture also cancels when margin mode changes during signing") {
-    val entered = new CountDownLatch(1)
-    val release = new CountDownLatch(1)
-    val f = new Fixture(beforeOrderSign = () => {
-      entered.countDown(); release.await()
-    })
-    try
-      f.ready()
-      assert(f.worker.submit(buy, "XMR"))
-      assert(entered.await(3, TimeUnit.SECONDS))
-      f.activeMode = "isolated"
-      f.sendActive()
-      release.countDown()
-      Wait.until("held legacy order neither posted nor canceled") {
-        f.orderPosts.get() != 0 || f.worker.view.message
-          .contains("canceled before sending")
-      }
-      assertEquals(f.orderPosts.get(), 0)
-    finally
-      release.countDown()
-      f.close()
   }
 
   private val sell = OrderIntent(Side.Sell, OrderKind.Hard)
@@ -2832,10 +2898,10 @@ class TradingWorkerSpec extends TempDirectorySuite:
       reduceToFlat(f)
       val view = f.worker.view
       assert(view.ready)
-      assertEquals(f.worker.preview(sell), Left(TradingWorker.openingPausedMessage))
-      assert(!f.worker.submit(sell, "XMR"))
+      assertEquals(f.worker.preview(sell, f.terms), Left(TradingWorker.openingPausedMessage))
+      assert(!f.submit(sell, "XMR"))
       val controller = new DeskController(
-        PanelView(mode = "LIVE", sizes = twenty),
+        PanelView(mode = "LIVE", terms = f.terms),
         () => f.clock.get(),
         f.worker.preview,
         f.worker.submitReviewed,
@@ -2877,7 +2943,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     try
       reduceToFlat(f)
       advance(f, 1999L, 2000L)
-      assertEquals(f.worker.preview(sell), Left(TradingWorker.openingPausedMessage))
+      assertEquals(f.worker.preview(sell, f.terms), Left(TradingWorker.openingPausedMessage))
       advance(f, 1L, 3000L)
       val short = press(f, sell, 3, "-1")
       assert(!short.reduceOnly, short)
@@ -2891,7 +2957,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       f.ready()
       holding(f, "3")
       press(f, sell, 1, "2")
-      assertEquals(f.worker.preview(buy), Left(TradingWorker.openingPausedMessage))
+      assertEquals(f.worker.preview(buy, f.terms), Left(TradingWorker.openingPausedMessage))
       val reduce = press(f, sell, 2, "1")
       assert(reduce.reduceOnly && reduce.kind == OrderKind.Hard, reduce)
       val close = press(f, OrderIntent(Side.Sell, OrderKind.Close), 3, "0")
@@ -2904,7 +2970,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     val f = new Fixture(sizes = twenty)
     try
       reduceToFlat(f)
-      assertEquals(f.worker.preview(buy), Left(TradingWorker.openingPausedMessage))
+      assertEquals(f.worker.preview(buy, f.terms), Left(TradingWorker.openingPausedMessage))
       advance(f, 2000L, 2000L)
       press(f, buy, 3, "1")
       val again = press(f, buy, 4, "2")

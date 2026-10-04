@@ -179,7 +179,8 @@ class PropFlowReviewSpec extends TempDirectorySuite:
       )
       OrderReview(
         intent,
-        route.preview(intent).toOption.get,
+        route.preview(intent, controller.panel.terms).toOption.get,
+        controller.panel.terms,
         clock.get(),
         clock.get() + 30000L
       )
@@ -234,6 +235,29 @@ class PropFlowReviewSpec extends TempDirectorySuite:
           )
         finally f.close()
       }
+
+  test("new terms reach the next prop press through the router with no restart") {
+    val f = new Fixture()
+    try
+      f.open()
+      val first = f.prepare(Trading.action(0))
+      f.send()
+      Wait.until("first prop order did not finish")(f.route.view.outcome.nonEmpty)
+      assertEquals(f.route.view.position, Some(first.plan.positionAfter))
+      val chosen = TradeTerms(TradeSizes(BigDecimal(20), BigDecimal(100)), BigDecimal("0.005"))
+      f.controller.setTerms(chosen)
+      val second = f.prepare(Trading.action(0))
+      assertEquals(second.terms, chosen)
+      assertEquals(
+        (second.plan.quantity, second.plan.limit),
+        (BigDecimal("0.2"), BigDecimal("100.5"))
+      )
+      f.send()
+      Wait.until("second prop order did not finish")(f.route.view.outcome.nonEmpty)
+      assertEquals(f.saved("count").num.toLong, 2L, f.route.view.outcome.toString)
+      assertEquals(f.route.view.position, Some(second.plan.positionAfter))
+    finally f.close()
+  }
 
   test(
     "view-to-prop selection needs no enabled live worker and accepts a fresh subsequent quote"

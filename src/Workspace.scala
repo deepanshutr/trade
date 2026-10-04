@@ -11,6 +11,7 @@ enum DeskAction:
 final case class OrderReview(
     intent: OrderIntent,
     plan: OrderPlan,
+    terms: TradeTerms,
     createdAt: Long,
     expiresAt: Long,
     leverage: Option[Int] = None,
@@ -18,13 +19,15 @@ final case class OrderReview(
 )
 final case class PanelView(
     mode: String = "VIEW",
-    sizes: TradeSizes = TradeSizes(),
+    terms: TradeTerms = TradeTerms(TradeSizes(), Trading.defaultSlippage),
     modeReview: Option[String] = None,
     outlook: OutlookView = Outlook.empty(""),
     muted: Boolean = false,
     actionNotice: Option[String] = None,
     actionNumber: Long = 0L,
-    bigOrder: Boolean = false
+    bigOrder: Boolean = false,
+    // Labels show the key that presses each control.
+    bindings: Bindings = Bindings.defaults
 )
 final case class DeskButton(
     label: String,
@@ -172,6 +175,7 @@ object Workspace:
           case _ if lower.contains("result")          => "Confirming result"
           case _ if raw == s"${view.coin} submitting" => "Sending"
           case _                                      => mappedOrderStatus(raw, panel, unsaved)
+      else if raw == TradingWorker.setupMessage then raw
       else mappedOrderStatus(raw, panel, unsaved)
     if text.nonEmpty && panel.actionNumber > 0 && !view.pending && !unsaved
     then s"$text #${panel.actionNumber}"
@@ -269,6 +273,7 @@ object Workspace:
         .rows(outlook, Layout.outlookWidth, marketFrame.axis, marketFrame.priceRows, s.chartMode)
         .zipWithIndex
         .foreach((text, i) => line(i, text))
+      def key(action: Bind): String = panel.bindings.map.get(action).fold("")(_.short)
       val live = panel.mode == "LIVE"
       val leverage = if live then view.leverage.fold("")(n => s" ${n}x") else ""
       val heading = panel.mode + " " + s.coin + leverage
@@ -296,11 +301,18 @@ object Workspace:
         ("Open P&L " + amount(view.portfolio.openProfit, half - 10)).padTo(half, ' ') +
           "Net P&L " + amount(view.portfolio.net, rightWidth - half - 8)
       )
-      line(tradeTop + 4, orderStatus(view, panel))
+      val status = orderStatus(view, panel)
+      line(tradeTop + 4, status)
+      // The setup sentence names the key bound to settings the way the buttons name theirs, so
+      // the text filter does not blank an Option character.
+      if status.startsWith(TradingWorker.setupMessage) then
+        right(tradeTop + 4) = TradingWorker.setupFor(key(Bind.Settings)) +
+          safeText(status.drop(TradingWorker.setupMessage.length))
       val choosing =
         !view.pending && s.prompt.isEmpty && s.marketPending.isEmpty && panel.modeReview.isEmpty
-      val small = "$" + Trading.format(panel.sizes.small) + (if !panel.bigOrder then " *" else "")
-      val big = "$" + Trading.format(panel.sizes.big) + (if panel.bigOrder then " *" else "")
+      val small =
+        "$" + Trading.format(panel.terms.sizes.small) + (if !panel.bigOrder then " *" else "")
+      val big = "$" + Trading.format(panel.terms.sizes.big) + (if panel.bigOrder then " *" else "")
       button(tradeTop + 5, 0, small, DeskAction.OrderSize(false), choosing)
       button(tradeTop + 5, small.length + 3, big, DeskAction.OrderSize(true), choosing)
       val canTrade = choosing && view.ready && panel.mode != "VIEW" &&
@@ -313,25 +325,35 @@ object Workspace:
       val closeLabel = close
         .fold(Vector.empty[String]) { p =>
           val quantity = Trading.format(p.abs)
-          Vector(s"x Close $quantity ${s.coin}", s"x Close $quantity")
+          Vector(
+            s"${key(Bind.Close)} Close $quantity ${s.coin}",
+            s"${key(Bind.Close)} Close $quantity"
+          )
         }
         .find(fits(closeColumn, _))
-        .getOrElse("x Close")
+        .getOrElse(key(Bind.Close) + " Close")
       button(tradeTop + 5, closeColumn, closeLabel, DeskAction.Close, close.nonEmpty)
       val times = if live then view.leverage.fold("")(n => s" x$n") else ""
       Vector(Side.Buy, Side.Sell).zipWithIndex.foreach { (side, i) =>
         val intent = OrderIntent(side, OrderKind.Hard, big = panel.bigOrder)
-        val key = (if side == Side.Buy then 1 else 3) + (if panel.bigOrder then 1 else 0)
-        val size = if panel.bigOrder then panel.sizes.big else panel.sizes.small
+        val shortcut = (side, panel.bigOrder) match
+          case (Side.Buy, false) => key(Bind.LongSmall)
+          case (Side.Buy, true)  => key(Bind.LongBig)
+          case (_, false)        => key(Bind.ShortSmall)
+          case (_, true)         => key(Bind.ShortBig)
+        val size = if panel.bigOrder then panel.terms.sizes.big else panel.terms.sizes.small
         val reduces = held.exists(p => p.signum == (if side == Side.Buy then -1 else 1))
         val label = if !live then side.toString.toUpperCase
         else if reduces then "REDUCE"
         else if side == Side.Buy then "LONG"
         else "SHORT"
+        val width = if i == 0 then half - 1 else rightWidth - half
+        // A long key name gives way before the button does.
+        val text = s"$label $$${Trading.format(size)}$times"
         tile(
           i * half,
-          if i == 0 then half - 1 else rightWidth - half,
-          s"$key $label $$${Trading.format(size)}$times",
+          width,
+          Vector(shortcut + " " + text, text).find(_.length <= width - 2).getOrElse(text),
           DeskAction.Prepare(intent),
           canTrade
         )
@@ -345,11 +367,14 @@ object Workspace:
           button(tradeTop + 13, 0, "Enter " + name, DeskAction.ConfirmMode(name), !view.pending)
           button(tradeTop + 13, 17, "Esc Cancel", DeskAction.Cancel)
         case None => ()
-      button(rows - 1, 0, "p Prop", DeskAction.Mode("PROP"), choosing)
-      button(rows - 1, 10, "l Live", DeskAction.Mode("LIVE"), choosing)
-      right(rows - 1) =
-        right(rows - 1).padTo(20, ' ') + "m Market c Chart v " + (if panel.muted then "Muted"
-                                                                  else "Sound")
+      val prop = key(Bind.Prop) + " Prop"
+      val liveLabel = key(Bind.Live) + " Live"
+      val liveColumn = (prop.length + 4).max(10)
+      button(rows - 1, 0, prop, DeskAction.Mode("PROP"), choosing)
+      button(rows - 1, liveColumn, liveLabel, DeskAction.Mode("LIVE"), choosing)
+      right(rows - 1) = right(rows - 1).padTo((liveColumn + liveLabel.length + 4).max(20), ' ') +
+        s"${key(Bind.Market)} Market ${key(Bind.Chart)} Chart ${key(Bind.Sound)} " +
+        (if panel.muted then "Muted" else "Sound")
       val active = buttons.result()
       val inactive = disabled.result()
       val lines = market.zipWithIndex.map { (left, i) =>
