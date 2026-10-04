@@ -67,6 +67,8 @@ object Trading:
   val defaultSlippage: BigDecimal = BigDecimal("0.001")
   val baseMakerFee: BigDecimal = BigDecimal("0.00015")
   val restingCap: Int = 20
+  // Live and prop refuse a resting order past the cap with this text.
+  val restingCapText: String = s"$restingCap orders rest. Cancel one first"
   private val zero = BigDecimal("0")
   private val one = BigDecimal("1")
   private val ten = BigDecimal("10")
@@ -159,7 +161,7 @@ object Trading:
         case None      => tick
     }
 
-  private val takesLiquidity = "Price would take liquidity. Move it "
+  private val takesLiquidity = "Takes liquidity. Move "
 
   def crossing(side: Side, price: BigDecimal, bid: BigDecimal, ask: BigDecimal): Option[String] =
     if side == Side.Buy then if price >= ask then Some(takesLiquidity + "below the ask") else None

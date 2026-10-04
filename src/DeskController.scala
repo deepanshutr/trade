@@ -157,6 +157,18 @@ final class DeskController(
   private val small = BigDecimal("0.01")
   private val large = BigDecimal("0.1")
 
+  // A ticket at a price holds the preview of its priced press: the plan it would send, or the
+  // refusal in its place. The panel draws the size from that plan alone.
+  private def priced(ticket: Ticket, price: BigDecimal): Ticket =
+    val intent = ticket.intent.copy(price = Some(price))
+    val previewed = preview(intent, current.terms)
+    ticket.copy(
+      intent = intent,
+      price = price,
+      plan = previewed.toOption,
+      notice = previewed.left.toOption
+    )
+
   // A ticket holds a sized press at a chosen price. Its step starts as the move Up would make.
   private def open(coin: String, intent: OrderIntent, price: BigDecimal, view: TradingView): Unit =
     val step = view.rules
@@ -164,7 +176,7 @@ final class DeskController(
       .map(_ - price)
       .getOrElse(small)
     current = current.copy(
-      ticket = Some(Ticket(coin, intent.copy(price = Some(price)), price, step, None, None))
+      ticket = Some(priced(Ticket(coin, intent, price, step, None, None), price))
     )
     point(Vector.empty, None)
     // The ticket changes which controls the panel offers, so the frame without it is dropped.
@@ -227,12 +239,7 @@ final class DeskController(
     def move(ticket: Ticket, delta: BigDecimal, up: Boolean): Unit =
       axis.rules.flatMap(Trading.movePrice(ticket.price, _, delta, up)) match
         case Some(price) =>
-          val next = ticket.copy(
-            intent = ticket.intent.copy(price = Some(price)),
-            price = price,
-            step = (price - ticket.price).abs,
-            notice = None
-          )
+          val next = priced(ticket, price).copy(step = (price - ticket.price).abs)
           current = current.copy(ticket = Some(next))
         case None => addMessage("order", "no further step")
     def act(action: DeskAction, shortcut: Boolean = false): Unit =

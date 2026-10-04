@@ -34,8 +34,6 @@ object PropLedger:
   private[desk] val noStables =
     "Prop limit: not enough stables including fees. Lower order sizes in settings. " +
       "The change applies to the next order."
-  private[desk] val capText =
-    s"Cancel a resting order first. Desk holds at most ${Trading.restingCap}"
   private val changed = "Prop canceled: account changed after review"
   private val unavailable = "Prop storage unavailable. Restart to recover"
   private val missing = "Prop order not found"
@@ -220,7 +218,7 @@ final class PropLedger private[desk] (
   def rest(order: PropOrder, expectedCount: Long): Either[String, String] = synchronized {
     if !available then Left(PropLedger.unavailable)
     else if expectedCount != saved.count then Left(PropLedger.changed)
-    else if saved.resting.size >= Trading.restingCap then Left(PropLedger.capText)
+    else if saved.resting.size >= Trading.restingCap then Left(Trading.restingCapText)
     else if !PropLedger.valid(order) || saved.resting.exists(_.id == order.id) then
       Left("Prop rejected: invalid order")
     else

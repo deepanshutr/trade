@@ -731,7 +731,7 @@ class TradingSpec extends munit.FunSuite:
   test("a priced order that would take liquidity or miss the precision is refused") {
     assertEquals(
       priced(Side.Buy, "546.10", "546.10").swap.toOption,
-      Some("Price would take liquidity. Move it below the ask")
+      Some("Takes liquidity. Move below the ask")
     )
     val sellBook = Book(Vector(Level("546.09", "20", 1)), Vector(Level("546.20", "20", 1)), 1L)
     val sell = Trading.plan(
@@ -745,7 +745,7 @@ class TradingSpec extends munit.FunSuite:
       5,
       Trading.defaultSlippage
     )
-    assertEquals(sell.swap.toOption, Some("Price would take liquidity. Move it above the bid"))
+    assertEquals(sell.swap.toOption, Some("Takes liquidity. Move above the bid"))
     assertEquals(
       priced(Side.Buy, "546.095", "546.10").swap.toOption,
       Some("Price does not match market precision")
@@ -756,18 +756,20 @@ class TradingSpec extends munit.FunSuite:
     assertEquals(Trading.crossing(Side.Buy, d("546.09"), d("546.00"), d("546.10")), None)
     assertEquals(
       Trading.crossing(Side.Buy, d("546.11"), d("546.00"), d("546.10")),
-      Some("Price would take liquidity. Move it below the ask")
+      Some("Takes liquidity. Move below the ask")
     )
     assertEquals(Trading.crossing(Side.Sell, d("546.11"), d("546.00"), d("546.10")), None)
     assertEquals(
       Trading.crossing(Side.Sell, d("546.00"), d("546.00"), d("546.10")),
-      Some("Price would take liquidity. Move it above the bid")
+      Some("Takes liquidity. Move above the bid")
     )
   }
 
   test("the fee and the resting cap are fixed") {
     assertEquals(Trading.baseMakerFee, d("0.00015"))
     assertEquals(Trading.restingCap, 20)
+    // One cap text for live and prop, short enough for the status row while a ticket is open.
+    assertEquals(Trading.restingCapText, "20 orders rest. Cancel one first")
   }
 
   private def sellPlan(

@@ -162,10 +162,10 @@ object Workspace:
 
   // Refusals that already say what to do. The status row shows them as they are.
   private val unchanged = Vector(
-    "Price would take liquidity. Move it ",
+    "Takes liquidity. Move ",
     "Nothing to cancel at that price",
     "A limit order takes a sized press",
-    TradingWorker.restingCapMessage,
+    Trading.restingCapText,
     TradingWorker.cancelPendingMessage,
     "Read the trading key first. Press r"
   )
@@ -292,32 +292,8 @@ object Workspace:
       val ticket = panel.ticket.filter(t => trades && t.coin == s.coin)
       val current = s.book.flatMap(_.mid)
       def colour(side: Side): String = if side == Side.Buy then style.bid else style.ask
-      // The ticket's size is the plan the worker's preview makes from the same values.
-      val plan = ticket.flatMap { t =>
-        t.plan.orElse(
-          for
-            rules <- view.rules
-            book <- s.book
-            position <- view.position
-            leverage <- view.leverage
-            far <- view.reference(t.intent.side)
-            planned <- Trading
-              .plan(
-                s.coin,
-                rules,
-                book,
-                far,
-                position,
-                t.intent.copy(price = Some(t.price)),
-                panel.terms.sizes,
-                leverage,
-                panel.terms.slippage,
-                Trading.reserved(position, resting)
-              )
-              .toOption
-          yield planned
-        )
-      }
+      // The ticket's size is the plan the controller holds from its preview, and nothing else.
+      val plan = ticket.flatMap(_.plan)
       def place(lo: Double, hi: Double, count: Int): Placed =
         val ticketMark =
           ticket.map(t => (t.intent.side, t.price, plan.fold(BigDecimal(0))(_.quantity)))
@@ -572,11 +548,16 @@ object Workspace:
               .getOrElse(fields.head)
           put(8, 0, fitted(Vector(priceField) ++ ticks ++ percent, " "))
           paint(8, 6, price(t.price), colour(side) + Screen.bold)
-          val money = plan.flatMap(p => Trading.money(p.quantity, t.price, leverage))
-          val sizeField = "Size " + cash(money) +
-            (if reduce then s" of ${cash(putUp)} held" else "")
-          val fee = plan.map(p => "fee " + cash(Some(p.quantity * t.price * Trading.baseMakerFee)))
-          put(9, 0, fitted(Vector(sizeField) ++ fee, "  "))
+          // Row 10 is the plan's money, or the refusal its preview gave in place of a size.
+          val refusal = t.notice.map(text => safeText(text).takeWhile(_ != '\n'))
+          val sizeRow = plan.fold(refusal.getOrElse("Size --")) { p =>
+            val money = Trading.money(p.quantity, t.price, leverage)
+            val sizeField = "Size " + cash(money) +
+              (if reduce then s" of ${cash(putUp)} held" else "")
+            val fee = "fee " + cash(Some(p.quantity * t.price * Trading.baseMakerFee))
+            fitted(Vector(sizeField, fee), "  ")
+          }
+          put(9, 0, sizeRow)
           button(10, 0, "Enter Place", DeskAction.Place, choosing && view.ready)
           button(10, 14, "Esc Cancel", DeskAction.Cancel, enabled = true)
           put(10, 27, "step " + Trading.format(t.step))

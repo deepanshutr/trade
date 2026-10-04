@@ -258,7 +258,7 @@ final class PropWorker(
         case Some(reason)                                      => Left(reason)
         case None if intent.side == Side.Sell && position <= 0 => Left("No " + coin + " to sell")
         case None if intent.price.nonEmpty && account.resting.size >= Trading.restingCap =>
-          Left(PropLedger.capText)
+          Left(Trading.restingCapText)
         case None =>
           Trading
             .plan(

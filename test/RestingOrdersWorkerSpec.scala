@@ -522,7 +522,7 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       Wait.until("worker never became ready")(f.worker.view.ready)
       assertEquals(
         f.worker.preview(f.priced(Side.Buy, "546.08"), f.terms),
-        Left("Cancel a resting order first. Desk holds at most 20")
+        Left("20 orders rest. Cancel one first")
       )
       assert(!f.press(f.priced(Side.Buy, "546.08")))
       assertEquals(f.orderPosts.size, 1)
@@ -690,7 +690,7 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       f.ready()
       assertEquals(
         f.worker.preview(f.priced(Side.Buy, "546.08"), f.terms),
-        Left("Cancel a resting order first. Desk holds at most 20")
+        Left("20 orders rest. Cancel one first")
       )
       assert(!f.press(f.priced(Side.Buy, "546.08")))
       assertEquals(f.orderPosts, Vector.empty)

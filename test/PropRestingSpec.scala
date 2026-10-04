@@ -11,7 +11,7 @@ class PropRestingSpec extends TempDirectorySuite:
   private val noStables =
     "Prop limit: not enough stables including fees. Lower order sizes in settings. " +
       "The change applies to the next order."
-  private val capText = "Cancel a resting order first. Desk holds at most 20"
+  private val capText = "20 orders rest. Cancel one first"
   private def d(text: String): BigDecimal = BigDecimal(text)
   private def terms(dollars: String): TradeTerms =
     TradeTerms(TradeSizes(d(dollars), d(dollars), d(dollars)), Trading.defaultSlippage)
@@ -139,12 +139,12 @@ class PropRestingSpec extends TempDirectorySuite:
     withFixture() { f =>
       assertEquals(
         f.preview(Side.Buy, Some("546.10"), "109.20"),
-        Left("Price would take liquidity. Move it below the ask")
+        Left("Takes liquidity. Move below the ask")
       )
       f.fill(Side.Buy, "109.22")
       assertEquals(
         f.preview(Side.Sell, Some("546.09"), "55.20"),
-        Left("Price would take liquidity. Move it above the bid")
+        Left("Takes liquidity. Move above the bid")
       )
       assert(f.preview(Side.Sell, Some("546.10"), "55.20").isRight)
     }
@@ -522,7 +522,7 @@ class PropRestingSpec extends TempDirectorySuite:
       assert(f.worker.submitReviewed(review))
       assertEquals(
         f.worker.view.outcome,
-        Some("Price would take liquidity. Move it below the ask")
+        Some("Takes liquidity. Move below the ask")
       )
       assertEquals(f.ledger.account.resting, Vector.empty)
       assertEquals(f.ledger.account.count, 0L)
@@ -540,7 +540,7 @@ class PropRestingSpec extends TempDirectorySuite:
       assert(f.worker.submitReviewed(review))
       assertEquals(
         f.worker.view.outcome,
-        Some("Price would take liquidity. Move it above the bid")
+        Some("Takes liquidity. Move above the bid")
       )
       assertEquals(f.ledger.account.resting, Vector.empty)
     }

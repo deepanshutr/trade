@@ -70,20 +70,19 @@ class LimitPanelSpec extends munit.FunSuite:
     assert(!shown.contains("$0.05"), shown)
   }
 
-  test("refusals from the ticket, the axis and the worker pass through unchanged") {
+  test("refusals from the ticket, the axis and the worker pass through whole on the status row") {
     for raw <- Vector(
-        "Price would take liquidity. Move it below the ask",
-        "Price would take liquidity. Move it above the bid",
+        "Takes liquidity. Move below the ask",
+        "Takes liquidity. Move above the bid",
         "Nothing to cancel at that price",
         "A limit order takes a sized press",
-        TradingWorker.restingCapMessage,
+        "20 orders rest. Cancel one first",
         "Read the trading key first. Press r"
       )
     do
-      val shown = notice(raw, 4L)
-      assert(shown.contains(raw.take(30)), s"$raw\n$shown")
-      for wrong <- Vector("Waiting for prices", "Not sent", "Sending")
-      do assert(!shown.contains(wrong), s"$raw\n$shown")
+      // Each fits the 38 column status row with its number, so a ticket hides none of it.
+      val f = drawn(ready, PanelView(mode = "LIVE", actionNotice = Some(raw), actionNumber = 4))
+      assertEquals(f.lines(30 - 12 + 3).take(38).trim, s"$raw #4")
   }
 
   test("a cancel refused while an order is pending says to wait, not Sending") {
@@ -186,23 +185,29 @@ class LimitPanelSpec extends munit.FunSuite:
       TradeSizes(BigDecimal(20), BigDecimal(100), BigDecimal(100)),
       Trading.defaultSlippage
     )
-  private def ticketAt(price: String, side: Side = Side.Sell, coin: String = "XMR"): Ticket =
+  // A ticket as the controller opens one. Its plan is the preview the controller holds, a posted
+  // order of the given quantity, and None when no quantity is given.
+  private def ticketAt(
+      price: String,
+      side: Side = Side.Sell,
+      coin: String = "XMR",
+      quantity: Option[String] = None,
+      reduce: Boolean = false
+  ): Ticket =
     val at = BigDecimal(price)
-    Ticket(
-      coin,
-      OrderIntent(side, OrderKind.Hard, price = Some(at)),
-      at,
-      BigDecimal("0.01"),
-      None,
-      None
+    val plan = quantity.map(q =>
+      val size = BigDecimal(q)
+      OrderPlan(coin, 0, side, OrderKind.Hard, size, at, at, 0, 0, None, 0, reduce, post = true)
     )
+    val step = BigDecimal("0.01")
+    Ticket(coin, OrderIntent(side, OrderKind.Hard, price = Some(at)), at, step, plan, None)
   private val limit = PanelView(
     mode = "LIVE",
     terms = terms,
     actionNotice = Some("XMR filled $21.84 at 546.00"),
     actionNumber = 7,
     orderMode = OrderMode.Limit,
-    ticket = Some(ticketAt("546.10"))
+    ticket = Some(ticketAt("546.10", quantity = Some("0.1"), reduce = true))
   )
   private def frame(
       view: TradingView = live,
@@ -441,7 +446,8 @@ class LimitPanelSpec extends munit.FunSuite:
         bid: String,
         ask: String,
         price: String,
-        big: Boolean
+        big: Boolean,
+        quantity: String
     ): Vector[String] =
       val s = Snapshot
         .initial(coin, now)
@@ -456,23 +462,26 @@ class LimitPanelSpec extends munit.FunSuite:
         ask = Some(BigDecimal(ask)),
         leverage = Some(5)
       )
-      val t = ticketAt(price, coin = coin)
+      val t = ticketAt(price, coin = coin, quantity = Some(quantity))
       val panel = limit.copy(
         ticket = Some(t.copy(intent = t.intent.copy(big = big))),
         bigOrder = big
       )
       band(frame(view, panel, s = s)).slice(7, 11).map(_.trim)
-    val small = sized("XMR", xmr, "546.09", "546.10", "549.00", big = false)
+    // The plans are what Trading.plan gives these presses: $100 or $500 at 5x at the price,
+    // rounded down to the lot.
+    val small = sized("XMR", xmr, "546.09", "546.10", "549.00", big = false, "0.182")
     assertEquals(small(1), "Price 549.00  ask 546.10 +290t +0.53%")
     assertEquals(small(1).length, 37)
     assertEquals(small(2), "Size $19.98  fee $0.01")
-    val large = sized("XMR", xmr, "546.09", "546.10", "549.00", big = true)
+    val large = sized("XMR", xmr, "546.09", "546.10", "549.00", big = true, "0.910")
     assertEquals(large(1), "Price 549.00  ask 546.10 +290t +0.53%")
     assertEquals(large(2), "Size $99.92  fee $0.07")
-    val btc = sized("BTC", MarketRules(0, 5, 5), "98990", "99040", "99000", big = false)
+    val btc = sized("BTC", MarketRules(0, 5, 5), "98990", "99040", "99000", big = false, "0.00101")
     assertEquals(btc(1), "Price 99000  ask 99040 -40t -0.04%")
     assertEquals(btc(1).length, 34)
-    val tiny = sized("TINY", MarketRules(0, 0, 5), "0.01234", "0.012346", "0.012345", big = false)
+    val tiny =
+      sized("TINY", MarketRules(0, 0, 5), "0.01234", "0.012346", "0.012345", big = false, "8100")
     assertEquals(tiny(1), "Price 0.012345  ask 0.012346 -1t")
     assertEquals(tiny(1).length, 32)
     for rows <- Vector(small, large, btc, tiny); text <- rows do assert(text.length <= 38, text)
@@ -652,8 +661,12 @@ class LimitPanelSpec extends munit.FunSuite:
     key(Command.Orders)
     draw()
     key(Command.PlaceOrder(OrderIntent(Side.Buy, OrderKind.Hard)))
-    assert(controller.panel.ticket.nonEmpty)
+    // The ticket holds the preview it opened with, and the frame draws exactly that size.
+    assertEquals(controller.panel.ticket.flatMap(_.plan), Some(plan))
     draw()
+    val shown = frame(panel = controller.panel)
+    assertEquals(row(shown, 10), "Size $19.99  fee $0.01")
+    assertEquals(shown.ticket.flatMap(_.plan), Some(plan))
     key(Command.Confirm)
     assertEquals(sent.map(_.intent.price), Vector(Some(BigDecimal("546.09"))))
   }
@@ -683,7 +696,27 @@ class LimitPanelSpec extends munit.FunSuite:
     assertEquals(row(free, 4), "Signer does not match the configured")
     assertEquals(row(free, 8), "owner")
     // A ticket keeps its rows, so the status shows its first line alone.
-    val held = frame(live.copy(block = Some("Price would take liquidity. Move it below the ask")))
-    assertEquals(row(held, 4), "Price would take liquidity. Move it")
+    val held = frame(live.copy(block = Some("Resting orders already reduce the whole position")))
+    assertEquals(row(held, 4), "Resting orders already reduce the")
     assertEquals(row(held, 8), "SELL LIMIT XMR reduce only")
+  }
+
+  test("the ticket shows the size of the plan it holds, or the refusal its preview gave") {
+    val held = limit.copy(ticket = Some(ticketAt("546.10", quantity = Some("0.07"), reduce = true)))
+    val f = frame(panel = held)
+    assertEquals(row(f, 10), "Size $7.65 of $21.84 held  fee $0.01")
+    // The ticket's axis row names the same money.
+    assert(Chart.plain(f.lines(6)).startsWith("  $7.65   546.10'"), f.lines(6))
+    val refused = ticketAt("546.10").copy(notice = Some(TradingWorker.openingPausedMessage))
+    val g = frame(panel = limit.copy(ticket = Some(refused)))
+    assertEquals(row(g, 10), TradingWorker.openingPausedMessage)
+    assert(Chart.plain(g.lines(6)).startsWith("     --   546.10'"), g.lines(6))
+    // A refusal is shown as text alone, its first line and no control bytes.
+    val hostile = ticketAt("546.10").copy(notice = Some("Refused " + 27.toChar + "[2J\nsecond"))
+    val h = frame(panel = limit.copy(ticket = Some(hostile)))
+    assertEquals(row(h, 10), "Refused")
+    assert(!h.lines.exists(_.contains(27.toChar)))
+    // A ticket with neither a plan nor a refusal draws no size of its own.
+    val bare = frame(panel = limit.copy(ticket = Some(ticketAt("546.10"))))
+    assertEquals(row(bare, 10), "Size --")
   }
