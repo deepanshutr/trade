@@ -669,3 +669,245 @@ class TradingSpec extends munit.FunSuite:
         assertEquals(BigDecimal(exact), target.get._2)
         assert(!exact.contains("~"))
   }
+
+  private val xmr = MarketRules(7, 3, 5)
+  private val btc = MarketRules(1, 5, 40)
+  private val micro = MarketRules(9, 0, 5)
+  private val limitBook =
+    Book(Vector(Level("546.00", "20", 1)), Vector(Level("546.10", "20", 1)), 1L)
+  private def priced(
+      side: Side,
+      price: String,
+      reference: String,
+      amount: String = "20",
+      leverage: Int = 5,
+      position: String = "0",
+      reserved: String = "0",
+      kind: OrderKind = OrderKind.Hard
+  ): Either[String, OrderPlan] =
+    Trading.plan(
+      "XMR",
+      xmr,
+      limitBook,
+      d(reference),
+      d(position),
+      OrderIntent(side, kind, price = Some(d(price))),
+      TradeSizes(d(amount), d(amount), d(amount)),
+      leverage,
+      Trading.defaultSlippage,
+      d(reserved)
+    )
+  private def rest(
+      id: String,
+      side: Side,
+      price: String,
+      remaining: String,
+      reduceOnly: Boolean = false
+  ): RestingOrder =
+    RestingOrder(
+      id,
+      "XMR",
+      7,
+      side,
+      d(price),
+      d(remaining),
+      d(remaining),
+      reduceOnly,
+      1L
+    )
+
+  test("a priced buy posts at its price and is sized there") {
+    val p = accepted(priced(Side.Buy, "546.09", "546.10"))
+    assert(p.post)
+    assertEquals(p.limit, d("546.09"))
+    assertEquals(p.reference, d("546.09"))
+    assertEquals(p.quantity, d("0.183"))
+    assertEquals(p.estimatedQuantity, d("0"))
+    assertEquals(p.average, None)
+    assertEquals(p.positionAfter, d("0"))
+    assertEquals(accepted(priced(Side.Buy, "546.09", "546.20")), p)
+  }
+
+  test("a priced order that would take liquidity or miss the precision is refused") {
+    assertEquals(
+      priced(Side.Buy, "546.10", "546.10").swap.toOption,
+      Some("Price would take liquidity. Move it below the ask")
+    )
+    val sellBook = Book(Vector(Level("546.09", "20", 1)), Vector(Level("546.20", "20", 1)), 1L)
+    val sell = Trading.plan(
+      "XMR",
+      xmr,
+      sellBook,
+      d("546.09"),
+      d("0"),
+      OrderIntent(Side.Sell, OrderKind.Hard, price = Some(d("546.09"))),
+      TradeSizes(d("20"), d("20"), d("20")),
+      5,
+      Trading.defaultSlippage
+    )
+    assertEquals(sell.swap.toOption, Some("Price would take liquidity. Move it above the bid"))
+    assertEquals(
+      priced(Side.Buy, "546.095", "546.10").swap.toOption,
+      Some("Price does not match market precision")
+    )
+  }
+
+  test("crossing names the touch the price would take") {
+    assertEquals(Trading.crossing(Side.Buy, d("546.09"), d("546.00"), d("546.10")), None)
+    assertEquals(
+      Trading.crossing(Side.Buy, d("546.11"), d("546.00"), d("546.10")),
+      Some("Price would take liquidity. Move it below the ask")
+    )
+    assertEquals(Trading.crossing(Side.Sell, d("546.11"), d("546.00"), d("546.10")), None)
+    assertEquals(
+      Trading.crossing(Side.Sell, d("546.00"), d("546.00"), d("546.10")),
+      Some("Price would take liquidity. Move it above the bid")
+    )
+  }
+
+  test("the fee and the resting cap are fixed") {
+    assertEquals(Trading.baseMakerFee, d("0.00015"))
+    assertEquals(Trading.restingCap, 20)
+  }
+
+  private def sellPlan(
+      amount: String,
+      leverage: Int,
+      position: String,
+      reserved: String,
+      kind: OrderKind = OrderKind.Hard
+  ): Either[String, OrderPlan] =
+    val b = Book(Vector(Level("546.00", "20", 1)), Vector(Level("546.10", "20", 1)), 1L)
+    Trading.plan(
+      "XMR",
+      xmr,
+      b,
+      d("546.00"),
+      d(position),
+      OrderIntent(Side.Sell, kind),
+      TradeSizes(d(amount), d(amount), d(amount)),
+      leverage,
+      Trading.defaultSlippage,
+      d(reserved)
+    )
+
+  test("a reduce is capped by what resting orders leave free") {
+    val capped = accepted(sellPlan("20", 5, "0.2", "0.1"))
+    assertEquals(capped.quantity, d("0.1"))
+    assert(capped.reduceOnly)
+    assertEquals(
+      sellPlan("20", 5, "0.2", "0.2").swap.toOption,
+      Some("Resting orders already reduce the whole position")
+    )
+  }
+
+  test("a reduce keeps the ten dollar leftover rule on the free amount") {
+    // Free 0.05. A request of 0.02 leaves 0.03, worth 16.38, so it stays a reduce.
+    val kept = accepted(sellPlan("10.92", 1, "0.2", "0.15"))
+    assertEquals(kept.kind, OrderKind.Hard)
+    assertEquals(kept.quantity, d("0.02"))
+    // Free 0.015. A request of 0.02 is capped to it, which leaves nothing, so it is a Close.
+    val capped = accepted(sellPlan("10.92", 1, "0.2", "0.185"))
+    assertEquals(capped.kind, OrderKind.Close)
+    assertEquals(capped.quantity, d("0.015"))
+    // A Close from the caller is sized at the whole position.
+    val leftover = accepted(sellPlan("5.733", 1, "0.2", "0.188", OrderKind.Close))
+    assertEquals(leftover.quantity, d("0.2"))
+  }
+
+  test("a leftover under ten dollars of the free amount closes the free remainder") {
+    // Free 0.05, request 0.0495 leaves 0.0005, worth 0.27.
+    val p = accepted(sellPlan("27.0270", 1, "0.2", "0.15"))
+    assertEquals(p.kind, OrderKind.Close)
+    assertEquals(p.quantity, d("0.05"))
+  }
+
+  test("a Close ignores the resting reserve") {
+    assertEquals(accepted(sellPlan("20", 5, "0.2", "0.2", OrderKind.Close)).quantity, d("0.2"))
+  }
+
+  test("movePrice moves to the nearest valid price and never stands still") {
+    def up(v: String, r: MarketRules, delta: String) = Trading.movePrice(d(v), r, d(delta), true)
+    assertEquals(up("547.00", xmr, "0.01"), Some(d("547.01")))
+    assertEquals(up("547.00", xmr, "0.1"), Some(d("547.10")))
+    assertEquals(up("99000", btc, "0.01"), Some(d("99001")))
+    assertEquals(up("99000", btc, "0.1"), Some(d("99001")))
+    val over = up("999.99", xmr, "0.01").get
+    assert(Trading.validPrice(over, xmr) && over > d("999.99"))
+    assertEquals(Trading.movePrice(d("547.00"), xmr, d("0.1"), false), Some(d("546.90")))
+    assertEquals(
+      Trading.movePrice(d("547.00"), xmr, d("0.001"), false),
+      Trading.nextPrice(d("547.00"), xmr, false)
+    )
+    assertEquals(Trading.movePrice(d("0"), xmr, d("0.1"), true), None)
+  }
+
+  test("ticks counts steps from the touch with a sign") {
+    assertEquals(Trading.ticks(d("546.09"), d("546.10"), xmr), -1L)
+    assertEquals(Trading.ticks(d("546.15"), d("546.10"), xmr), 5L)
+  }
+
+  test("money, dollars and priceText") {
+    assertEquals(Trading.money(d("0.183"), d("546.09"), Some(5)), Some(d("19.99")))
+    assertEquals(Trading.money(d("0.2"), d("546.00"), Some(5)), Some(d("21.84")))
+    assertEquals(Trading.money(d("0.2"), d("546.00"), Some(0)), None)
+    assertEquals(Trading.money(d("0.2"), d("546.00"), None), None)
+    assertEquals(Trading.dollars(None, 7), "     --")
+    assertEquals(Trading.dollars(Some(d("21.84")), 7), " $21.84")
+    assertEquals(
+      Trading.dollars(Some(d("1234567.89")), 7).trim,
+      "$" + Trading.display(d("1234567.89"), 6)
+    )
+    assert(Trading.dollars(Some(d("1234567.89")), 7).length == 7)
+    assertEquals(Trading.priceText(d("546.09"), xmr), "546.09")
+    assertEquals(Trading.priceText(d("546.1"), xmr), "546.10")
+    assertEquals(Trading.priceText(d("99000"), btc), "99000")
+    assertEquals(Trading.priceText(d("0.012345"), micro), "0.012345")
+  }
+
+  test("effects and reserved on a flat position") {
+    val orders = Vector(rest("a", Side.Buy, "545", "0.1"), rest("b", Side.Sell, "547", "0.1"))
+    assertEquals(Trading.effects(d("0"), orders).map(_._2), Vector(Effect.Opens, Effect.Opens))
+    assertEquals(Trading.reserved(d("0"), orders), d("0"))
+  }
+
+  test("effects and reserved on a long position") {
+    val one = Vector(rest("a", Side.Sell, "552", "0.1"))
+    assertEquals(Trading.effects(d("0.2"), one).map(_._2), Vector(Effect.Reduces))
+    assertEquals(Trading.reserved(d("0.2"), one), d("0.1"))
+    val big = Vector(rest("a", Side.Sell, "552", "0.3"))
+    assertEquals(Trading.effects(d("0.2"), big).map(_._2), Vector(Effect.Flips))
+    assertEquals(Trading.reserved(d("0.2"), big), d("0.2"))
+    val two = Vector(rest("far", Side.Sell, "553", "0.15"), rest("near", Side.Sell, "552", "0.15"))
+    val seen = Trading.effects(d("0.2"), two)
+    assertEquals(seen.map(_._1.id), Vector("near", "far"))
+    assertEquals(seen.map(_._2), Vector(Effect.Reduces, Effect.Flips))
+    val flagged = Vector(rest("a", Side.Sell, "552", "0.3", reduceOnly = true))
+    assertEquals(Trading.effects(d("0.2"), flagged).map(_._2), Vector(Effect.Reduces))
+    assertEquals(Trading.reserved(d("0.2"), flagged), d("0.2"))
+    val buy = Vector(rest("a", Side.Buy, "545", "0.3"))
+    assertEquals(Trading.effects(d("0.2"), buy).map(_._2), Vector(Effect.Opens))
+  }
+
+  test("a reduce only order is void when it no longer faces the position") {
+    val flagged = Vector(rest("a", Side.Sell, "552", "0.1", reduceOnly = true))
+    assertEquals(Trading.effects(d("-0.1"), flagged).map(_._2), Vector(Effect.Void))
+    assertEquals(Trading.effects(d("0"), flagged).map(_._2), Vector(Effect.Void))
+  }
+
+  test("a short position mirrors the long rules") {
+    val orders = Vector(rest("far", Side.Buy, "540", "0.15"), rest("near", Side.Buy, "541", "0.15"))
+    val seen = Trading.effects(d("-0.2"), orders)
+    assertEquals(seen.map(_._1.id), Vector("near", "far"))
+    assertEquals(seen.map(_._2), Vector(Effect.Reduces, Effect.Flips))
+    assertEquals(Trading.reserved(d("-0.2"), orders), d("0.2"))
+  }
+
+  test("a fill and the new view fields exist with defaults") {
+    val fill = Fill("XMR", Side.Buy, 5L, d("546.09"), d("0.1"))
+    assertEquals(fill.quantity, d("0.1"))
+    val view = TradingView("XMR", message = "")
+    assertEquals(view.resting, Vector.empty[RestingOrder])
+    assertEquals(view.fills, Vector.empty[Fill])
+    assertEquals(view.stale, false)
+  }
