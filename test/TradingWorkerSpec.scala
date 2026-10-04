@@ -2258,13 +2258,13 @@ class TradingWorkerSpec extends TempDirectorySuite:
         workspaceText(f.worker.view)
       assert(depth.contains("Waiting for prices"), depth)
       assert(f.worker.view.outcome.exists(_.contains("XMR filled $20.00 at 100")))
-      assert(!depth.contains("Filled #1"), depth)
+      assert(!depth.contains("Filled $20.00 #1"), depth)
       f.fresh(f.worker, time = 3001)
       val account =
         workspaceText(f.worker.view)
       assert(account.contains("Account unavailable"), account)
       assert(f.worker.view.outcome.exists(_.contains("XMR filled $20.00 at 100")))
-      assert(!account.contains("Filled #1"), account)
+      assert(!account.contains("Filled $20.00 #1"), account)
       f.readFailure = true
       Wait.until("failed refresh not observed")(
         f.worker.view.message == "Waiting for market or account data"
@@ -2273,7 +2273,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         workspaceText(f.worker.view)
       assert(failed.contains("Account unavailable"), failed)
       assert(f.worker.view.outcome.exists(_.contains("XMR filled $20.00 at 100")))
-      assert(!failed.contains("Filled #1"), failed)
+      assert(!failed.contains("Filled $20.00 #1"), failed)
       assert(!f.worker.view.ready)
       assert(!f.submit(buy, "XMR"))
       f.worker.observe(Event.SocketDown)
@@ -2281,7 +2281,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         workspaceText(f.worker.view)
       assert(down.contains("Reconnecting"), down)
       assert(f.worker.view.outcome.exists(_.contains("XMR filled $20.00 at 100")))
-      assert(!down.contains("Filled #1"), down)
+      assert(!down.contains("Filled $20.00 #1"), down)
       assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }
@@ -2298,7 +2298,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       assert(!f.submit(buy, "BTC"))
       assert(
         workspaceText(f.worker.view)
-          .contains("Filled #1")
+          .contains("Filled $20.00 #1")
       )
       f.worker.observe(
         Event.BookUpdate(
@@ -2337,7 +2337,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       controller.handle(Command.PlaceOrder(buy), snapshot, f.worker.view, (160, 45), false)
       val text = draw().lines.mkString("\n")
       assert(text.contains("No visible quantity fits this order"), text)
-      assert(!text.contains("Filled #1"), text)
+      assert(!text.contains("Filled $20.00 #1"), text)
       assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }

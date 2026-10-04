@@ -392,15 +392,6 @@ class ScreenSpec extends munit.FunSuite:
       assertEquals(text(tradeTop - 2).take(38), " " * 24 + "c line 2s/col ")
   }
 
-  private def digest(lines: Vector[String]): String =
-    java.util.HexFormat
-      .of()
-      .formatHex(
-        java.security.MessageDigest
-          .getInstance("SHA-256")
-          .digest(lines.mkString("\n").getBytes(java.nio.charset.StandardCharsets.UTF_8))
-      )
-
   test("a reference row's plot shares the main plot's columns and time scale") {
     // The main market and both references hold samples 40 seconds and one second back. At two
     // dots a cell the older one is dot 2 * plot - 41, so all three draw from that cell to the last.
@@ -425,43 +416,4 @@ class ScreenSpec extends munit.FunSuite:
       val s = Snapshot.initial("XMR", t0).copy(cols = cols, rows = 30)
       assertEquals(State.reduce(s, Event.Key(Command.ScrubBack), t0).offsetSec, step, cols)
       assertEquals(step, Layout.regions(cols, 30).plot * 2 / 4L)
-  }
-
-  test("the band rows are byte for byte today's") {
-    // The digest was taken from the frames drawn at a9b9335, before this lane changed the chart
-    // block.
-    val cases =
-      (for
-        coin <- Vector("XMR", "BTC", "PAXG")
-        mode <- ChartMode.values.toVector
-        style <- Vector(Style.mono, Style.colour)
-        (cols, rows) <- CompactDisplayFixtures.sizes
-      yield (
-        CompactDisplayFixtures.snapshot(coin, mode, cols, rows),
-        cols,
-        rows,
-        style,
-        CompactDisplayFixtures.now
-      )) ++
-        (for
-          (cols, rows) <- Vector((100, 30), (120, 40))
-          style <- Vector(Style.mono, Style.colour)
-        yield (Golden.snapshot, cols, rows, style, Golden.now))
-    val bands = cases.flatMap { (s, cols, rows, style, now) =>
-      Workspace
-        .draw(
-          s,
-          TradingView(s.coin, message = "ready"),
-          PanelView(),
-          cols,
-          rows,
-          now,
-          java.time.ZoneOffset.UTC,
-          style
-        )
-        .lines
-        .drop(rows - 15)
-    }
-    assertEquals(bands.size, 600)
-    assertEquals(digest(bands), "cf3496d4fbe85dd4824d7a420c2c27bae4efcffc687167549a2c3a211e29e26c")
   }

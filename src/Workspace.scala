@@ -153,13 +153,35 @@ object Workspace:
       "$" + Trading.display(n.setScale(2, BigDecimal.RoundingMode.HALF_UP), width - 1)
     )
 
+  // Refusals that already say what to do. The status row shows them as they are.
+  private val unchanged = Vector(
+    "Price would take liquidity. Move it ",
+    "Nothing to cancel at that price",
+    "A limit order takes a sized press",
+    TradingWorker.restingCapMessage,
+    TradingWorker.cancelPendingMessage,
+    "Read the trading key first. Press r"
+  )
+
+  // What a fill of the orders under the axis cursor would do.
+  private def effect(text: String): Boolean =
+    Set("opens", "reduce", "void").contains(text) || text.matches("flip .* if filled")
+
   private def mappedOrderStatus(raw: String, panel: PanelView, unsaved: Boolean): String =
     val lower = raw.toLowerCase
-    if lower.contains("partial") then "Part filled"
+    // Desk's own outcomes keep the first dollar figure of their first line.
+    def word(name: String): String =
+      name + "\\$\\S+".r.findFirstIn(safeText(raw).takeWhile(_ != '\n')).fold("")(" " + _)
+    if unchanged.exists(raw.startsWith) then safeText(raw).takeWhile(_ != '\n')
+    else if (lower.contains("canceled $") || lower.contains("canceled by self-trade prevention") ||
+        lower.contains("canceled by the venue")) && !lower.contains("before sending")
+    then word("Canceled")
+    else if lower.contains("partial") || lower.contains("part filled") then word("Part filled")
     else if lower.contains(" filled ") then
       if lower.contains(" buy ") then "Bought"
       else if lower.contains(" sell ") then "Sold"
-      else "Filled"
+      else word("Filled")
+    else if lower.contains(" resting $") then word("Resting")
     else if lower.contains("no fill") then "No fill"
     else if lower.contains("not enough") || lower.contains("funds") then "Insufficient funds"
     else if lower.contains("storage") || lower.contains("save failed") then "Save failed"
@@ -174,13 +196,14 @@ object Workspace:
     then "Waiting for prices"
     else if lower.contains("pending") then "Sending"
     else if unsaved then safeText(raw)
-    else if panel.mode == "VIEW" then "View only"
+    else if panel.mode == "VIEW" then DeskController.viewOnly
     else if raw.nonEmpty then safeText(raw).takeWhile(_ != '\n')
     else ""
 
   private def orderStatus(view: TradingView, panel: PanelView): String =
     val raw =
       if view.pending then view.message else view.block.orElse(panel.actionNotice).getOrElse("")
+    if effect(raw) then return if panel.focus.nonEmpty then raw else ""
     val unsaved = raw.toLowerCase.matches("order result #[0-9]+ not saved")
     val lower = raw.toLowerCase
     val coded = if view.block.isEmpty || panel.mode == "VIEW" then None
@@ -205,7 +228,8 @@ object Workspace:
           case _                                      => mappedOrderStatus(raw, panel, unsaved)
       else if raw == TradingWorker.setupMessage then raw
       else mappedOrderStatus(raw, panel, unsaved)
-    if text.nonEmpty && panel.actionNumber > 0 && !view.pending && !unsaved
+    if text.nonEmpty && panel.actionNumber > 0 && !view.pending && !unsaved &&
+      text != DeskController.viewOnly
     then s"$text #${panel.actionNumber}"
     else text
 
