@@ -65,7 +65,17 @@ final case class WorkspaceFrame(
     mode: String = "VIEW",
     outlook: Option[OutlookView] = None,
     disabledButtons: Vector[DeskButton] = Vector.empty,
-    shortcuts: Set[DeskAction] = Set.empty
+    shortcuts: Set[DeskAction] = Set.empty,
+    // The orders axis exactly as this frame drew it. Keys on the axis act on these rows.
+    axis: Option[Placed] = None,
+    // The axis cursor this frame drew, from the panel it drew.
+    focus: Option[Int] = None,
+    // The order type, the ticket, the size and the mode review this frame drew, from the panel
+    // it drew.
+    orderMode: OrderMode = OrderMode.Market,
+    ticket: Option[Ticket] = None,
+    bigOrder: Boolean = false,
+    modeReview: Option[String] = None
 ):
   def controls: Vector[DeskButton] = buttons ++ disabledButtons
 
@@ -445,5 +455,8 @@ object Workspace:
         shortcuts = active.collect {
           case b if b.action.isInstanceOf[DeskAction.Prepare] || b.action == DeskAction.Close =>
             b.action
-        }.toSet
+        }.toSet,
+        // This frame draws the size choice and the mode review from the panel, so it records them.
+        bigOrder = panel.bigOrder,
+        modeReview = panel.modeReview
       )
