@@ -528,7 +528,8 @@ object WorkspaceApp:
           livePending = () => worker.livePending,
           size = () => Term.size(),
           now = now,
-          approve = approveConfig(args, home)
+          approve = approveConfig(args, home),
+          activeKey = () => keyReload.activeKey()
         )
         SettingsWiring.show(paused, inputLock, terminal, () => controller.invalidate(), System.out)(
           SettingsScreen.run(context, System.in, System.out)

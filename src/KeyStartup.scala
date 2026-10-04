@@ -94,6 +94,7 @@ final class KeyReload(
   private var config = started
   @volatile private var held = initial
   private var row = Option.empty[Either[String, String]]
+  private var usable = Option.empty[String]
 
   // The key the workers copy from. Closing Desk closes it after the workers.
   def session: Option[SessionKey] = held
@@ -115,10 +116,18 @@ final class KeyReload(
   // The usable-key check as the settings row shows it. The check runs once, then after a reload.
   def keyRow(): Either[String, String] = synchronized {
     row.getOrElse {
-      val shown = describe(KeyStartup.check(config, hooks))
+      val found = KeyStartup.check(config, hooks)
+      usable = found.toOption
+      val shown = describe(found)
       row = Some(shown)
       shown
     }
+  }
+
+  // The usable key's full address, from the same check as the row.
+  def activeKey(): Option[String] = synchronized {
+    val _ = keyRow()
+    usable
   }
 
   def reload(): Either[String, Unit] = synchronized {
@@ -155,6 +164,7 @@ final class KeyReload(
         // A session read here that the replace never took is closed, so its key goes with it.
         finally session.filter(key => !held.exists(_ eq key)).foreach(_.close())
         config = next
+        usable = found.toOption
         row = Some(describe(found))
         Right(())
     }

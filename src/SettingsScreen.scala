@@ -29,7 +29,9 @@ object SettingsScreen:
       now: () => Long,
       size: () => (Int, Int) = () => (100, 30),
       // The --config words the approval step takes, or why it cannot use that file.
-      approveConfig: Either[String, Seq[String]] = Right(Nil)
+      approveConfig: Either[String, Seq[String]] = Right(Nil),
+      // The usable key's full address, to check the owner tooling's status against.
+      activeKey: () => Option[String] = () => None
   )
 
   private val help = "Up and Down move. Enter edits or acts. r reads the owner again. Esc leaves."
@@ -41,6 +43,7 @@ object SettingsScreen:
     "Address copied. Fund it by a transfer to this address at the venue from an account you " +
       "control. Desk never sends money."
   private val reloadFailed = "Reload failed"
+  private val otherKeyText = "The status is for another key. Press r"
   private val statusEveryMs = 15000L
 
   // Returns true when Control C or the end of input asks Desk to quit.
@@ -113,7 +116,9 @@ object SettingsScreen:
     private[SettingsScreen] def start(): Unit =
       try
         spawn(() =>
-          try latest.set(Some((Try(read()).getOrElse(Left(OwnerStatus.unavailable)), now())))
+          // Stamped with the time the read began, so a read begun before a child counts as old.
+          val began = now()
+          try latest.set(Some((Try(read()).getOrElse(Left(OwnerStatus.unavailable)), began)))
           finally gate.done().foreach(_.start())
         )
       catch case NonFatal(_) => gate.done().foreach(_.start())
@@ -193,6 +198,14 @@ object SettingsScreen:
       if ready then take() else none
 
     def poll(): Option[Read] = Option.when(ready)(read(take()))
+
+    // Drops every key typed so far, so none acts on a screen it was not typed for. The end of
+    // input stays, so it still quits.
+    def drain(): Unit =
+      held = none
+      var byte = 0
+      while byte >= 0 && in.available() > 0 do byte = in.read()
+      if byte < 0 then held = byte
 
     private def read(first: Int): Read =
       if first < 0 || first == 3 then Read.Quit
@@ -285,7 +298,10 @@ object SettingsScreen:
   ):
     private var cursor = 0
     private var notice = ""
-    private var snapshot = context.settings()
+    private var snapshot = settings()
+    // When the last child or r ended. A status read begun before it describes the files from
+    // before, so the owner rows wait for a newer one.
+    private var settled = Long.MinValue
     private var drawn = Vector.empty[String]
     private var quit = false
     // The open amount field: its row and its text.
@@ -309,6 +325,8 @@ object SettingsScreen:
       context.refreshOwner()
 
     def loop(): Boolean =
+      // The file is the one source: its sizes and slippage apply from the moment settings open.
+      snapshot.foreach(s => context.applyTerms(TradeTerms(s.config.sizes, s.config.slippage)))
       ask()
       var leaving = false
       while !leaving && !quit do
@@ -358,10 +376,20 @@ object SettingsScreen:
       case Row.Funding                        => fund()
       case Row.Action(action)                 => capture(action)
 
+    // A file nested deep enough by another program can overflow the stack while it is read.
+    private def settings(): Either[String, SettingsSnapshot] =
+      try context.settings()
+      catch
+        case _: StackOverflowError => Left(plainRefusal)
+        case NonFatal(_)           => Left(plainRefusal)
+
     // After a child or r the files may have changed, and the screen under the child is gone.
+    // Keys typed meanwhile are dropped first, so the next Enter is a press on the redrawn screen.
     private def afterward(): Unit =
+      input.drain()
+      settled = context.now()
       ask()
-      snapshot = context.settings()
+      snapshot = settings()
       drawn = Vector.empty
 
     // A reload can replace the live worker, which an order pending in it must not see.
@@ -385,7 +413,19 @@ object SettingsScreen:
           case Right(exit)  => s"The step did not complete (exit $exit)"
         afterward()
 
-    private def status: Option[Either[String, OwnerStatus]] = context.ownerStatus().map(_._1)
+    private def status: Option[Either[String, OwnerStatus]] =
+      context.ownerStatus().filter((_, at) => at >= settled).map(_._1)
+
+    // The vault's status describes this Desk only when its owner and key are Desk's own.
+    private def ownerDiffers(reply: OwnerStatus): Boolean =
+      (reply.owner, snapshot.toOption.flatMap(_.config.owner)) match
+        case (Some(vault), Some(file)) => !vault.equalsIgnoreCase(file)
+        case _                         => false
+
+    private def otherKey(reply: OwnerStatus): Boolean =
+      (reply.key, context.activeKey()) match
+        case (Some(vault), Some(active)) => !vault.equalsIgnoreCase(active)
+        case _                           => false
 
     private def words(step: String): Seq[String] =
       Seq("owner", step, "--network", context.network)
@@ -406,7 +446,8 @@ object SettingsScreen:
       case (_, None)                          => notice = reading
       case (_, Some(Left(reason)))            => notice = reason
       case (Right(extra), Some(Right(reply))) =>
-        if !reply.phase.contains("ready") then notice = "Make the owner first"
+        if otherKey(reply) then notice = otherKeyText
+        else if !reply.phase.contains("ready") then notice = "Make the owner first"
         else if context.keyRow() == Left(KeyReload.notRead) then
           notice = "Read the trading key first. Press r"
         else if context.keyRow().isLeft then notice = "Add a trading key first"
@@ -574,9 +615,17 @@ object SettingsScreen:
             case Row.Slippage =>
               snapshot.fold(_ => "--", s => SettingsFile.percent(s.config.slippage) + "%")
             case Row.TradingKey => context.keyRow().merge
-            case Row.Owner      => vault(OwnerStatus.ownerText)
-            case Row.Approval   =>
-              context.approveConfig.left.toOption.getOrElse(vault(OwnerStatus.approvalText))
+            case Row.Owner      =>
+              vault(reply =>
+                OwnerStatus.ownerText(reply) +
+                  (if ownerDiffers(reply) then "   differs from the settings file" else "")
+              )
+            case Row.Approval =>
+              context.approveConfig.left.toOption.getOrElse(
+                vault(reply =>
+                  if otherKey(reply) then otherKeyText else OwnerStatus.approvalText(reply)
+                )
+              )
             case Row.Funding =>
               vault(reply =>
                 OwnerStatus.fundingText(reply, now / 1000) +

@@ -563,6 +563,7 @@ class MainRuntimeSpec extends TempDirectorySuite:
     assertEquals(s.reads.size, 1)
     assertEquals(r.events.toVector, Vector.empty[String])
     assertEquals(r.keys.keyRow(), Right("Main   0xaaaa...aaaa   active, in Keychain"))
+    assertEquals(r.keys.activeKey(), Some(keyAddress))
     assert(r.keys.session.exists(_ eq r.start.session.get))
   }
 

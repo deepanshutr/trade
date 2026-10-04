@@ -135,7 +135,8 @@ object SettingsWiring:
       livePending: () => Boolean,
       size: () => (Int, Int),
       now: () => Long,
-      approve: Either[String, Seq[String]]
+      approve: Either[String, Seq[String]],
+      activeKey: () => Option[String] = () => None
   ): SettingsScreen.Context =
     val reads = new SettingsScreen.OwnerReads(
       ownerRead,
@@ -164,7 +165,8 @@ object SettingsWiring:
       livePending = livePending,
       now = now,
       size = size,
-      approveConfig = approve
+      approveConfig = approve,
+      activeKey = activeKey
     )
 
   // The real terminal operations.

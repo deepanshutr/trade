@@ -81,6 +81,9 @@ class SettingsScreenSpec extends munit.FunSuite:
     val bindWrites = ArrayBuffer.empty[Bindings]
     val bound = ArrayBuffer.empty[Bindings]
     var key: Either[String, String] = Right("Main   0xaaaa...aaaa   active, in Keychain")
+    var active: Option[String] = Some("0x" + "a" * 40)
+    var onRefresh: () => Unit = () => ()
+    var readFails = false
     var owned: Option[(Either[String, OwnerStatus], Long)] = None
     var refreshes = 0
     var keyScreens = 0
@@ -98,6 +101,7 @@ class SettingsScreenSpec extends munit.FunSuite:
       network = "mainnet",
       settings = () => {
         settingsReads += 1
+        if readFails then throw new StackOverflowError()
         snapshot
       },
       writeSettings = (s, t) => {
@@ -116,7 +120,10 @@ class SettingsScreenSpec extends munit.FunSuite:
       },
       keyRow = () => key,
       ownerStatus = () => owned,
-      refreshOwner = () => { refreshes += 1; () },
+      refreshOwner = () => {
+        refreshes += 1
+        onRefresh()
+      },
       runKeyScreen = () => {
         keyScreens += 1
         events += "key screen"
@@ -138,7 +145,8 @@ class SettingsScreenSpec extends munit.FunSuite:
       livePending = () => pending,
       now = () => clock,
       size = () => size,
-      approveConfig = approve
+      approveConfig = approve,
+      activeKey = () => active
     )
     val out = new ByteArrayOutputStream()
     def run(chunks: String*): Boolean =
@@ -163,6 +171,9 @@ class SettingsScreenSpec extends munit.FunSuite:
         .getOrElse(fail(s"no $label row in\n${last.mkString("\n")}"))
 
   private def value(line: String): String = line.drop(23)
+
+  // The terms of the fixture's default settings file, which opening applies.
+  private val opened = TradeTerms(TradeSizes(), Trading.defaultSlippage)
 
   // The page
 
@@ -229,7 +240,7 @@ class SettingsScreenSpec extends munit.FunSuite:
     assert(!f.run(enter + backspace * 3 + "25" + enter, esc))
     val terms = TradeTerms(TradeSizes(BigDecimal(25)), Trading.defaultSlippage)
     assertEquals(f.written.toVector, Vector(terms))
-    assertEquals(f.applied.toVector, Vector(terms))
+    assertEquals(f.applied.toVector, Vector(opened, terms))
     assertEquals(value(f.row("Small amount")), "$25")
     assertEquals(f.notice, "Small amount saved. The next order uses it.")
   }
@@ -239,9 +250,12 @@ class SettingsScreenSpec extends munit.FunSuite:
     assert(!f.run(down + enter + backspace * 4 + "2000" + enter, esc))
     assert(!f.run(down * 2 + enter + backspace * 4 + "0.25" + enter, esc))
     val big = TradeSizes(big = BigDecimal(2000))
+    // Each opening applies the file first.
     assertEquals(
       f.applied.toVector,
       Vector(
+        opened,
+        TradeTerms(big, Trading.defaultSlippage),
         TradeTerms(big, Trading.defaultSlippage),
         TradeTerms(big, BigDecimal("0.0025"))
       )
@@ -254,7 +268,7 @@ class SettingsScreenSpec extends munit.FunSuite:
     f.write = (_, _) => Left("invalid trading settings: small exceeds big")
     assert(!f.run(enter + backspace * 3 + "5000" + enter, esc, esc))
     assertEquals(f.written.size, 1)
-    assertEquals(f.applied.size, 0)
+    assertEquals(f.applied.toVector, Vector(opened))
     val refused = f.frames.find(_.last == "invalid trading settings: small exceeds big")
     assert(refused.exists(_.exists(_.startsWith("> Small amount         5000"))), f.frames)
     assertEquals(value(f.row("Small amount")), "$500")
@@ -287,7 +301,7 @@ class SettingsScreenSpec extends munit.FunSuite:
     f.write = (_, _) => throw new StackOverflowError()
     assert(!f.run(enter + backspace + enter, esc, esc))
     assert(f.frames.exists(_.last == "The settings file could not be read or written"))
-    assertEquals(f.applied.size, 0)
+    assertEquals(f.applied.toVector, Vector(opened))
   }
 
   test("an unreadable settings file shows its reason and refuses edits") {
@@ -457,6 +471,100 @@ class SettingsScreenSpec extends munit.FunSuite:
     assertEquals(broken.notice, "Reload failed")
   }
 
+  test("keys typed while a child or a reload ran are dropped, so each child takes a fresh Enter") {
+    val key = new Fixture
+    assert(!key.run(down * 3 + enter + enter + enter, esc))
+    assertEquals(key.keyScreens, 1)
+    val approving = new Fixture
+    approving.owned = Some((Right(status()), start))
+    assert(!approving.run(down * 5 + enter + enter, esc))
+    assertEquals(approving.owners.size, 1)
+    val again = new Fixture
+    assert(!again.run("r" + "r", esc))
+    assertEquals(again.reloads, 1)
+  }
+
+  test("after a child the owner rows wait for a status read made after it, then act") {
+    val late = new Fixture
+    late.owned = Some((Right(status()), start - 1000L))
+    // The child runs, then a deliberate Enter on the redrawn screen.
+    assert(!late.run(down * 5 + enter, enter, esc))
+    assertEquals(late.owners.size, 1)
+    assertEquals(late.notice, "Reading owner status")
+    for label <- Vector("Owner", "Approval", "Funding") do
+      assertEquals(value(late.row(label)), "Reading owner status")
+    val fresh = new Fixture
+    fresh.owned = Some((Right(status()), start - 1000L))
+    fresh.onRefresh = () =>
+      if fresh.owners.nonEmpty then
+        fresh.owned = Some((Right(status(approved = Some(true))), fresh.clock))
+    assert(!fresh.run(down * 5 + enter, enter, esc))
+    assertEquals(fresh.owners.size, 1)
+    assertEquals(fresh.notice, "The trading key is already approved")
+  }
+
+  test("the owner rows say when the vault's owner or key is not Desk's") {
+    val f = new Fixture
+    f.snapshot = Right(
+      SettingsSnapshot(
+        Path.of("/nowhere/config.json"),
+        Array.emptyByteArray,
+        TradingConfig(owner = Some("0x" + "9" * 40))
+      )
+    )
+    f.owned = Some((Right(status()), start))
+    assert(!f.run(esc))
+    assertEquals(value(f.row("Owner")), "ready   0x1234...1234   differs from the settings file")
+    val same = new Fixture
+    same.snapshot = Right(
+      SettingsSnapshot(
+        Path.of("/nowhere/config.json"),
+        Array.emptyByteArray,
+        TradingConfig(owner = Some(owner))
+      )
+    )
+    same.owned = Some((Right(status()), start))
+    assert(!same.run(esc))
+    assertEquals(value(same.row("Owner")), "ready   0x1234...1234")
+    val other = new Fixture
+    other.active = Some("0x" + "B" * 40)
+    other.owned = Some((Right(status()), start))
+    assert(!other.run(down * 5 + enter, esc))
+    assertEquals(other.owners.size, 0)
+    assertEquals(value(other.row("Approval")), "The status is for another key. Press r")
+    assertEquals(other.notice, "The status is for another key. Press r")
+    // The same key in other letter case is the same key.
+    val upper = new Fixture
+    upper.active = Some("0x" + "A" * 40)
+    upper.owned = Some((Right(status()), start))
+    assert(!upper.run(down * 5 + enter, esc))
+    assertEquals(upper.owners.size, 1)
+  }
+
+  test("a settings file that overflows the stack when read gives the plain refusal") {
+    val f = new Fixture
+    f.readFails = true
+    assert(!f.run(enter, esc))
+    assert(f.last(2).contains("The settings file could not be read or written"), f.last(2))
+    assertEquals(f.notice, "The settings file could not be read or written")
+    assert(!f.run(down * 3 + enter, esc))
+    assertEquals(f.keyScreens, 1)
+  }
+
+  test("opening settings applies the file's sizes and slippage, so the file is the one source") {
+    val f = new Fixture
+    val terms = TradeTerms(TradeSizes(BigDecimal(25), BigDecimal(50)), BigDecimal("0.002"))
+    f.snapshot = Right(
+      SettingsSnapshot(
+        Path.of("/nowhere/config.json"),
+        Array.emptyByteArray,
+        TradingConfig(sizes = terms.sizes, slippage = terms.slippage)
+      )
+    )
+    assert(!f.run(esc))
+    assertEquals(f.applied.toVector, Vector(terms))
+  }
+
   // Key bindings
 
   private val quitRow = down * 7
@@ -572,16 +680,28 @@ class SettingsScreenSpec extends munit.FunSuite:
     val context =
       f.context.copy(ownerStatus = () => owner.status, refreshOwner = () => owner.refresh())
     var idles = 0
-    // Thirty-one idle seconds, then r, then the key child, then Esc.
+    // Thirty-one idle seconds, then r, then the key child, then Esc, each one idle second apart.
     val input = new InputStream:
-      private val bytes = ("r" + down * 3 + enter + esc).getBytes(UTF_8)
+      private val stages = Vector(31 -> "r", 32 -> (down * 3 + enter), 33 -> esc)
+        .map((at, text) => (at, text.getBytes(UTF_8).toVector.map(_ & 0xff)))
+      private var stage = 0
       private var at = 0
-      override def available(): Int = if idles < 31 then 0 else bytes.length - at + 1
+      private def bytes: Vector[Int] = stages(stage)._2
+      private def settle(): Unit =
+        while stage < stages.size && at >= bytes.size do
+          stage += 1
+          at = 0
+      override def available(): Int =
+        settle()
+        if stage >= stages.size then 1
+        else if idles < stages(stage)._1 then 0
+        else bytes.size - at
       override def read(): Int =
-        if at < bytes.length then
+        settle()
+        if stage >= stages.size then -1
+        else
           at += 1
-          bytes(at - 1) & 0xff
-        else -1
+          bytes(at - 1)
     assert(
       !SettingsScreen.run(
         context,
