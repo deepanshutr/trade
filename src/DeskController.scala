@@ -2,6 +2,8 @@ package desk
 
 object DeskController:
   val viewOnly: String = "View only: p Prop or l Live to trade"
+  // Enter found a size other than the one the ticket showed. The ticket now shows the new one.
+  val sizeChanged: String = "Size changed. Enter again to send"
 
 final class DeskController(
     initial: PanelView,
@@ -261,59 +263,74 @@ final class DeskController(
           addMessage("order", "Not sent: controls changed")
         else refuse()
       else if visible || fromKey then
-        def send(intent: OrderIntent, fits: OrderPlan => Boolean = _ => true): Boolean =
-          val settings = current.mode != "LIVE" || (view.leverage
-            .exists(n => n > 0 && view.rules.exists(r => n <= r.maxLeverage)) &&
-            view.marginMode.exists(m => m == "cross" || m == "isolated"))
-          if !settings then
+        // Live sends only at the leverage and margin mode the account confirmed.
+        def settled: Boolean = current.mode != "LIVE" || (view.leverage
+          .exists(n => n > 0 && view.rules.exists(r => n <= r.maxLeverage)) &&
+          view.marginMode.exists(m => m == "cross" || m == "isolated"))
+        def submitPlan(intent: OrderIntent, plan: OrderPlan): Boolean =
+          val at = wall()
+          val order = OrderReview(
+            intent,
+            plan,
+            current.terms,
+            at,
+            Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
+            view.leverage,
+            view.marginMode
+          )
+          val sent = submit(order)
+          if sent then current = current.copy(actionNotice = Some("Sending"))
+          else refuse()
+          sent
+        def send(intent: OrderIntent): Boolean =
+          if !settled then
             refuse()
             false
           else
-            val terms = current.terms
-            preview(intent, terms) match
-              case Right(plan) if plan.coin == snapshot.coin && fits(plan) =>
-                val at = wall()
-                val order = OrderReview(
-                  intent,
-                  plan,
-                  terms,
-                  at,
-                  Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
-                  view.leverage,
-                  view.marginMode
-                )
-                val sent = submit(order)
-                if sent then current = current.copy(actionNotice = Some("Sending"))
-                else refuse()
-                sent
-              case Left(reason) =>
+            preview(intent, current.terms) match
+              case Right(plan) if plan.coin == snapshot.coin => submitPlan(intent, plan)
+              case Left(reason)                              =>
                 addMessage("order", reason)
                 false
               case _ =>
                 refuse()
                 false
-        // A ticket sends one post only order at its own price, or stays open with the reason.
+        // A ticket sends one post only order at its own price, of exactly the size it showed. A
+        // fresh preview of another size takes the ticket's place and waits for the frame that
+        // shows it. Otherwise the ticket stays open with the reason.
         def place(ticket: Ticket): Unit =
+          val intent = ticket.intent.copy(price = Some(ticket.price))
           val crossing = view.bid
             .zip(view.ask)
             .map((bid, ask) => Trading.crossing(ticket.intent.side, ticket.price, bid, ask))
-          val sent =
-            if ticket.coin != snapshot.coin || !view.ready || view.pending || crossing.isEmpty then
+          def kept: Option[Ticket] = Some(ticket.copy(notice = current.actionNotice))
+          def shown(plan: OrderPlan): Boolean =
+            ticket.plan.exists(p => p.quantity == plan.quantity && p.limit == plan.limit)
+          val next =
+            if ticket.coin != snapshot.coin || !view.ready || view.pending || crossing.isEmpty ||
+              !settled
+            then
               refuse()
-              false
+              kept
             else
               crossing.flatten match
                 case Some(text) =>
                   addMessage("order", text)
-                  false
+                  kept
                 case None =>
-                  send(
-                    ticket.intent.copy(price = Some(ticket.price)),
-                    plan => plan.post && plan.limit == ticket.price
-                  )
-          current = current.copy(ticket =
-            if sent then None else Some(ticket.copy(notice = current.actionNotice))
-          )
+                  preview(intent, current.terms) match
+                    case Left(reason) =>
+                      addMessage("order", reason)
+                      Some(ticket.copy(plan = None, notice = current.actionNotice))
+                    case Right(plan)
+                        if plan.coin != snapshot.coin || !plan.post || plan.limit != ticket.price =>
+                      refuse()
+                      kept
+                    case Right(plan) if !shown(plan) =>
+                      addMessage("order", DeskController.sizeChanged)
+                      Some(ticket.copy(plan = Some(plan), notice = None))
+                    case Right(plan) => if submitPlan(intent, plan) then None else kept
+          current = current.copy(ticket = next)
         action match
           case DeskAction.Prepare(intent)
               if view.ready && !view.pending && current.mode != "VIEW" &&

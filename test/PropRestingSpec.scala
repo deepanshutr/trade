@@ -8,9 +8,7 @@ class PropRestingSpec extends TempDirectorySuite:
   private val meta = ujson.read(
     """{"universe":[{"name":"XMR","szDecimals":3,"maxLeverage":5},{"name":"BTC","szDecimals":5,"maxLeverage":40}]}"""
   )
-  private val noStables =
-    "Prop limit: not enough stables including fees. Lower order sizes in settings. " +
-      "The change applies to the next order."
+  private val noStables = "Not enough stables for order and fee"
   private val capText = "20 orders rest. Cancel one first"
   private def d(text: String): BigDecimal = BigDecimal(text)
   private def terms(dollars: String): TradeTerms =
@@ -434,7 +432,7 @@ class PropRestingSpec extends TempDirectorySuite:
       assertEquals(last.quantity, d("0.05"))
       assertEquals(
         f.preview(Side.Sell, None, "109.22"),
-        Left("Resting orders already reduce the whole position")
+        Left("Resting orders cover the position")
       )
       assertEquals(
         f.preview(Side.Sell, None, "20", OrderKind.Close).map(_.quantity),

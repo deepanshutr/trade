@@ -232,7 +232,7 @@ class TradingSpec extends munit.FunSuite:
   }
 
   test("an opening order under ten dollars of position value is refused") {
-    val floor = Left("Requested order must reach ten dollars at the quote and limit")
+    val floor = Left("Order must be at least $10")
     val intent = OrderIntent(Side.Buy, OrderKind.Hard)
     assertEquals(result(intent, amounts = sizes.copy(small = d("1.9")), leverage = 5), floor)
     val p = accepted(result(intent, amounts = sizes.copy(small = d("2")), leverage = 5))
@@ -799,7 +799,7 @@ class TradingSpec extends munit.FunSuite:
     assert(capped.reduceOnly)
     assertEquals(
       sellPlan("20", 5, "0.2", "0.2").swap.toOption,
-      Some("Resting orders already reduce the whole position")
+      Some("Resting orders cover the position")
     )
   }
 
@@ -876,7 +876,7 @@ class TradingSpec extends munit.FunSuite:
     assert(capped.reduceOnly)
     assertEquals(
       priced(Side.Sell, "546.20", "546.00", "20", 5, "0.2", "0.2").swap.toOption,
-      Some("Resting orders already reduce the whole position")
+      Some("Resting orders cover the position")
     )
   }
 

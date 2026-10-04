@@ -535,7 +535,7 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       f.position = "0.2"
       Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
       f.ready()
-      val covered = Left("Resting orders already reduce the whole position")
+      val covered = Left("Resting orders cover the position")
       assertEquals(f.worker.preview(OrderIntent(Side.Sell, OrderKind.Hard), f.terms), covered)
       assertEquals(f.worker.preview(f.priced(Side.Sell, "548"), f.terms), covered)
       assertEquals(

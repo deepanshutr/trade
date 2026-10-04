@@ -696,8 +696,8 @@ class LimitPanelSpec extends munit.FunSuite:
     assertEquals(row(free, 4), "Signer does not match the configured")
     assertEquals(row(free, 8), "owner")
     // A ticket keeps its rows, so the status shows its first line alone.
-    val held = frame(live.copy(block = Some("Resting orders already reduce the whole position")))
-    assertEquals(row(held, 4), "Resting orders already reduce the")
+    val held = frame(live.copy(block = Some("Saved order state failed. Restart to recover")))
+    assertEquals(row(held, 4), "Saved order state failed. Restart to")
     assertEquals(row(held, 8), "SELL LIMIT XMR reduce only")
   }
 
@@ -719,4 +719,88 @@ class LimitPanelSpec extends munit.FunSuite:
     // A ticket with neither a plan nor a refusal draws no size of its own.
     val bare = frame(panel = limit.copy(ticket = Some(ticketAt("546.10"))))
     assertEquals(row(bare, 10), "Size --")
+  }
+
+  test("every refusal a ticket can show fits the 38 column panel") {
+    // The plan's refusals for a priced press, each produced by the plan itself.
+    val book = Book(Vector(lv("546.09", "1")), Vector(lv("546.10", "1")), now)
+    val sizes = TradeSizes(BigDecimal(20), BigDecimal(100), BigDecimal(100))
+    def at(price: String, side: Side = Side.Buy, kind: OrderKind = OrderKind.Hard): OrderIntent =
+      OrderIntent(side, kind, price = Some(BigDecimal(price)))
+    def refused(
+        intent: OrderIntent = at("546.00"),
+        coin: String = "XMR",
+        rules: MarketRules = xmr,
+        quotes: Book = book,
+        reference: String = "546.10",
+        position: String = "0",
+        terms: TradeSizes = sizes,
+        leverage: Int = 5,
+        reserved: String = "0"
+    ): Option[String] =
+      Trading
+        .plan(
+          coin,
+          rules,
+          quotes,
+          BigDecimal(reference),
+          BigDecimal(position),
+          intent,
+          terms,
+          leverage,
+          Trading.defaultSlippage,
+          BigDecimal(reserved)
+        )
+        .left
+        .toOption
+    def bids(px: String, sz: String = "1"): Book = book.copy(bids = Vector(lv(px, sz)))
+    val planned = Vector(
+      refused(coin = ""),
+      refused(rules = MarketRules(-1, 3, 5)),
+      refused(leverage = 6),
+      refused(terms = sizes.copy(small = BigDecimal(0))),
+      refused(reference = "546.095"),
+      refused(position = "0.0001"),
+      refused(quotes = bids("abc")),
+      refused(quotes = bids("546.095")),
+      refused(quotes = bids("546.09", "0")),
+      refused(quotes = bids("546.09", "0.0001")),
+      refused(quotes = book.copy(bids = Vector.empty)),
+      refused(quotes = bids("546.11")),
+      refused(intent = at("546.00", kind = OrderKind.Best)),
+      refused(intent = at("546.005")),
+      refused(intent = at("546.10")),
+      refused(intent = at("546.20", Side.Sell), position = "0.2", reserved = "0.2"),
+      refused(terms = sizes.copy(small = BigDecimal("0.001"))),
+      refused(terms = sizes.copy(small = BigDecimal(1)))
+    )
+    assert(planned.forall(_.nonEmpty), planned)
+    assertEquals(planned.flatten.distinct.size, planned.size, planned)
+    // The workers' and the controller's own refusals of a ticket's preview or its Enter.
+    val others = Vector(
+      Trading.crossing(Side.Sell, BigDecimal(1), BigDecimal(1), BigDecimal(2)).get,
+      Trading.restingCapText,
+      TradingWorker.waitingDepthMessage,
+      TradingWorker.openingPausedMessage,
+      "Position unknown",
+      PropLedger.restingNoStables,
+      PropLedger.unavailable,
+      PropWorker.staleMessage,
+      PropWorker.behindMessage,
+      "Prop closed. Restart Desk",
+      "Reconnecting. Waiting for fresh prices",
+      "Prop waiting for market details",
+      "Prop waiting for selected-market depth",
+      "Prop quote invalid. Waiting for prices",
+      "Prop worker is closed",
+      "Wait for the pending prop order",
+      "No XMR to sell",
+      "Trading did not stop. Restart to retry",
+      "Order pending",
+      "Not sent: price or account changed",
+      "Not sent: controls changed",
+      "no further step",
+      DeskController.sizeChanged
+    )
+    for text <- planned.flatten ++ others do assert(text.length <= 38, s"${text.length}: $text")
   }

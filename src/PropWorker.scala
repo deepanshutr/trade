@@ -4,6 +4,11 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import scala.util.Try
 
+object PropWorker:
+  // Prop's preview answers with these while its depth is not fit to plan from.
+  val staleMessage: String = "Prop prices stale. Waiting for depth"
+  val behindMessage: String = "Prop depth behind quote. Waiting"
+
 final class PropWorker(
     config: TradingConfig,
     initialCoin: String,
@@ -72,8 +77,7 @@ final class PropWorker(
     metadata.nonEmpty && elapsed >= 0 && elapsed <= age
   private def blockReason: Option[ExecutionBlock] =
     if closed.get() then Some(ExecutionBlock(BlockCode.Blocked, "Prop closed. Restart Desk"))
-    else if !ledger.available then
-      Some(ExecutionBlock(BlockCode.Storage, "Prop storage unavailable. Restart to recover"))
+    else if !ledger.available then Some(ExecutionBlock(BlockCode.Storage, PropLedger.unavailable))
     else if !connected && !backup then
       Some(ExecutionBlock(BlockCode.Connection, "Reconnecting. Waiting for fresh prices"))
     else if rules.isEmpty || !metadataFresh(60000L) then
@@ -87,11 +91,11 @@ final class PropWorker(
     else if !book.exists(b =>
         fresh(b._2) && (!backup || (BigInt(wall()) - b._1.time).abs <= config.quoteAgeMs)
       ) || !touch.exists(t => fresh(t.receivedAt))
-    then Some(ExecutionBlock(BlockCode.Prices, "Prop prices stale. Waiting for fresh depth"))
+    then Some(ExecutionBlock(BlockCode.Prices, PropWorker.staleMessage))
     else if !book.exists(b =>
         touch.exists(t => (BigInt(b._1.time) - BigInt(t.time)).abs <= config.quoteAgeMs)
       )
-    then Some(ExecutionBlock(BlockCode.Prices, "Prop depth behind quote. Waiting for depth"))
+    then Some(ExecutionBlock(BlockCode.Prices, PropWorker.behindMessage))
     else None
   private def block: Option[String] = blockReason.map(_.text)
   private def ready: Boolean = block.isEmpty
