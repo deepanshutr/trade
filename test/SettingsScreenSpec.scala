@@ -813,6 +813,162 @@ class SettingsScreenSpec extends munit.FunSuite:
     assert(sizes >= 4 && sizes <= 6, sizes)
   }
 
+  // The wiring Desk runs
+
+  test("opening settings pauses drawing, turns the mouse off and clears, and leaving repaints") {
+    val paused = new AtomicBoolean(false)
+    val lock = new Object
+    val shown = new ByteArrayOutputStream()
+    val frames = new ByteArrayOutputStream()
+    val terminal = new Term.Writer(new PrintStream(frames))
+    terminal.write(Vector("chart", "buttons"), (100, 30))
+    var invalidated = 0
+    var inside = ""
+    val quit = SettingsWiring.show(
+      paused,
+      lock,
+      terminal,
+      () => invalidated += 1,
+      new PrintStream(shown, true, UTF_8)
+    ) {
+      inside = s"paused=${paused.get()} " + shown.toString(UTF_8)
+      true
+    }
+    assert(quit)
+    assertEquals(inside, s"paused=true ${esc}[?1006l${esc}[?1000l${esc}[2J")
+    assert(shown.toString(UTF_8).endsWith(s"${esc}[?1000h${esc}[?1006h"))
+    assert(!paused.get())
+    assertEquals(invalidated, 1)
+    frames.reset()
+    terminal.write(Vector("chart", "buttons"), (100, 30))
+    assert(frames.size() > 0, "the first frame after settings was not a full repaint")
+  }
+
+  test("the render pass waits while settings are open and drops a frame built as they opened") {
+    val paused = new AtomicBoolean(true)
+    val lock = new Object
+    val log = ArrayBuffer.empty[String]
+    SettingsWiring.renderPass(
+      paused,
+      () => true,
+      lock,
+      ms => {
+        log += s"sleep $ms"
+        if log.size == 3 then paused.set(false)
+      }
+    )(() => log += s"build paused=${paused.get()}")((_, _) => log += "write")
+    assertEquals(
+      log.toVector,
+      Vector("sleep 50", "sleep 50", "sleep 50", "build paused=false", "write")
+    )
+    val opened = ArrayBuffer.empty[String]
+    SettingsWiring.renderPass(paused, () => true, lock, _ => opened += "sleep")(() =>
+      paused.set(true)
+    )((_, _) => opened += "write")
+    assertEquals(opened.toVector, Vector.empty[String])
+  }
+
+  test("the keys thread opens settings by the live binding and quits when settings ask") {
+    def typed(
+        text: String,
+        bound: Bindings,
+        quit: Boolean,
+        take: Boolean = true
+    ): (Vector[Command], Int) =
+      val handled = ArrayBuffer.empty[Command]
+      var opened = 0
+      val input = new java.io.ByteArrayInputStream(text.getBytes(UTF_8))
+      SettingsWiring.keys(
+        input,
+        () => input.available() > 0 && !handled.contains(Command.Quit),
+        () => false,
+        new java.util.concurrent.atomic.AtomicReference(bound),
+        command => {
+          handled += command
+          take
+        },
+        () => {
+          opened += 1
+          quit
+        }
+      )
+      (handled.toVector, opened)
+    val z = Bindings.defaults
+      .updated(Bind.Settings, Binding(Vector(KeyGroup(Vector('z'.toInt)))))
+      .toOption
+      .get
+    assertEquals(typed("sc", z, false), (Vector(Command.ToggleCandles), 0))
+    assertEquals(typed("zc", z, false), (Vector(Command.Settings, Command.ToggleCandles), 1))
+    assertEquals(typed("zc", z, true), (Vector(Command.Settings, Command.Quit), 1))
+    // A command the controller did not take opens nothing.
+    assertEquals(typed("z", z, false, take = false), (Vector(Command.Settings), 0))
+  }
+
+  test(
+    "the settings context keeps the live bindings and controller together and reads off thread"
+  ) {
+    val controller = new DeskController(
+      PanelView(mode = "VIEW"),
+      () => start,
+      (_, _) => Left("no preview"),
+      _ => false,
+      _ => Right(())
+    )
+    val bound = new java.util.concurrent.atomic.AtomicReference(Bindings.defaults)
+    val release = new CountDownLatch(1)
+    val readers = ArrayBuffer.empty[String]
+    val handed = ArrayBuffer.empty[Seq[String]]
+    val context = SettingsWiring.context(
+      network = "mainnet",
+      config = None,
+      home = Path.of("/nowhere"),
+      bound = bound,
+      controller = controller,
+      keyRow = () => Right("Main"),
+      reload = () => Right(()),
+      ownerRead = () => {
+        readers.synchronized(readers += Thread.currentThread().getName)
+        val _ = release.await(5L, java.util.concurrent.TimeUnit.SECONDS)
+        Right(status())
+      },
+      reading = new AtomicBoolean(false),
+      handOff = command => {
+        handed += command
+        Right(0)
+      },
+      keyChild = Seq("java", "--keys"),
+      env = Map.empty,
+      copy = _ => Right(()),
+      livePending = () => false,
+      size = () => (100, 30),
+      now = () => start,
+      approve = Right(Nil)
+    )
+    try
+      val chosen =
+        Bindings.defaults.updated(Bind.Close, Binding(Vector(KeyGroup(Vector(11))))).toOption.get
+      context.applyBindings(chosen)
+      assertEquals((bound.get(), controller.panel.bindings), (chosen, chosen))
+      val terms = TradeTerms(TradeSizes(BigDecimal(25)), BigDecimal("0.002"))
+      context.applyTerms(terms)
+      assertEquals(controller.panel.terms, terms)
+      val began = System.nanoTime()
+      context.refreshOwner()
+      assert(System.nanoTime() - began < 1000000000L, "the status read ran on the caller's thread")
+      Wait.until("the status read never started")(readers.synchronized(readers.nonEmpty))
+      assertEquals(readers.synchronized(readers.toVector), Vector("owner-status"))
+      assertEquals(context.ownerStatus(), None)
+      release.countDown()
+      Wait.until("the status read never finished")(context.ownerStatus().nonEmpty)
+      assertEquals(context.runKeyScreen(), Right(0))
+      assertEquals(
+        context.runOwner(Seq("owner", "new", "--network", "mainnet")),
+        Left(Child.notInstalled)
+      )
+      assertEquals(handed.toVector, Vector(Seq("java", "--keys")))
+    finally release.countDown()
+  }
+
   // The workspace side
 
   test("s closes a mode review and is handled, so the keys thread opens settings") {

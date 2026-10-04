@@ -410,6 +410,153 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
       f.close()
   }
 
+  // The settings hand-off as Desk wires it, on a real router.
+
+  // Reads the JVM's current SIGINT handler by swapping a probe in and the handler straight back.
+  private def currentInt(): sun.misc.SignalHandler =
+    val signal = new sun.misc.Signal("INT")
+    val probe: sun.misc.SignalHandler = _ => ()
+    val found = sun.misc.Signal.handle(signal, probe)
+    val _ = sun.misc.Signal.handle(signal, found)
+    found
+
+  // Keys waiting in the terminal, and keys that come only when something blocks to read them.
+  private final class Typed(waiting: String, later: String) extends java.io.InputStream:
+    val queue = scala.collection.mutable.Queue.from(waiting.getBytes("UTF-8").map(_ & 0xff))
+    val after = scala.collection.mutable.Queue.from(later.getBytes("UTF-8").map(_ & 0xff))
+    def typed(text: String): Unit = queue ++= text.getBytes("UTF-8").map(_ & 0xff)
+    override def available(): Int = queue.size
+    override def read(): Int =
+      if queue.nonEmpty then queue.dequeue()
+      else if after.nonEmpty then after.dequeue()
+      else -1
+
+  private final class Exited(code: Int, onWait: () => Unit) extends Process:
+    def getOutputStream: java.io.OutputStream = java.io.OutputStream.nullOutputStream()
+    def getInputStream: java.io.InputStream = java.io.InputStream.nullInputStream()
+    def getErrorStream: java.io.InputStream = java.io.InputStream.nullInputStream()
+    def waitFor(): Int =
+      onWait()
+      code
+    def exitValue(): Int = code
+    def destroy(): Unit = ()
+    override def isAlive: Boolean = false
+
+  private final class Handing(
+      started: Boolean = false,
+      startFails: Boolean = false,
+      waitFails: Boolean = false
+  ):
+    val f = new Fixture()
+    val made = new AtomicInteger()
+    val route = making(f, "LIVE", made)
+    val events = scala.collection.mutable.ArrayBuffer.empty[String]
+    // n was pressed while live stopped. The Enter for "Press Enter" comes after the child.
+    val input = new Typed("n", "\n")
+    val output = new java.io.ByteArrayOutputStream()
+    val restoration = new WorkspaceApp.Restoration(() => (), () => ())
+    if started then
+      val _ = restoration.restore()
+    private val signal = new sun.misc.Signal("INT")
+    val desk: sun.misc.SignalHandler = _ => ()
+    private val jvm = sun.misc.Signal.handle(signal, desk)
+    def guarded: Boolean = !(currentInt() eq desk)
+    def run(): Either[String, Int] =
+      Wait.until("the live worker never opened its journal")(f.journalOpens.get() == 1)
+      SettingsWiring.handOff(
+        Seq("desk", "--keys"),
+        route,
+        () => {
+          events += "reload"
+          Right(())
+        },
+        restoration,
+        "saved",
+        input,
+        new java.io.PrintStream(output, true, "UTF-8"),
+        SettingsWiring.TermOps(
+          saved => events += s"restore $saved guarded=$guarded",
+          () => events += s"enter raw guarded=$guarded"
+        ),
+        command => {
+          events += s"start ${command.mkString(" ")} journal free=${journalFree(f)} " +
+            s"guarded=$guarded waiting=${input.available()} made=${made.get()}"
+          if startFails then throw new java.io.IOException("missing program")
+          new Exited(
+            0,
+            () => {
+              events += "child"
+              // A line typed while the child ran that the child never read.
+              input.typed("y\n")
+              if waitFails then throw new IllegalStateException("the wait failed")
+            }
+          )
+        }
+      )
+    def close(): Unit =
+      val _ = sun.misc.Signal.handle(signal, jvm)
+      route.close()
+      f.close()
+
+  test("the settings hand-off frees the journal, guards Control C and restarts live after") {
+    val h = new Handing()
+    try
+      assertEquals(h.run(), Right(0))
+      assertEquals(
+        h.events.toVector,
+        Vector(
+          "restore saved guarded=true",
+          "start desk --keys journal free=true guarded=true waiting=0 made=0",
+          "child",
+          "enter raw guarded=true",
+          "reload"
+        )
+      )
+      assert(!h.guarded, "Desk's SIGINT handler was not put back")
+      assertEquals(h.made.get(), 1)
+      // The stale line was drained, so the pause read the Enter typed after it.
+      assertEquals((h.input.queue.size, h.input.after.size), (0, 0))
+      assert(h.output.toString("UTF-8").contains("Press Enter to return to Desk."))
+    finally h.close()
+  }
+
+  test("a child that cannot start still gets the terminal back inside the guard and live back") {
+    val h = new Handing(startFails = true)
+    try
+      assertEquals(h.run(), Left("The step did not start: missing program"))
+      assertEquals(
+        h.events.toVector,
+        Vector(
+          "restore saved guarded=true",
+          "start desk --keys journal free=true guarded=true waiting=0 made=0",
+          "enter raw guarded=true"
+        )
+      )
+      assert(!h.guarded)
+      assertEquals(h.made.get(), 1)
+    finally h.close()
+  }
+
+  test("a wait that throws still takes the terminal back inside the guard and resumes live") {
+    val h = new Handing(waitFails = true)
+    try
+      intercept[IllegalStateException](h.run())
+      assertEquals(h.events.last, "enter raw guarded=true")
+      assert(!h.events.contains("reload"))
+      assert(!h.guarded)
+      assertEquals(h.made.get(), 1)
+    finally h.close()
+  }
+
+  test("while Desk restores the terminal itself the hand-off leaves raw mode to it") {
+    val h = new Handing(started = true)
+    try
+      assertEquals(h.run(), Right(0))
+      assert(!h.events.exists(_.startsWith("enter raw")), h.events)
+      assert(h.events.contains("reload"))
+    finally h.close()
+  }
+
   test("recorder startup reaches public storage without constructing an account worker") {
     val directory = tempDirectory("desk-record-routing")
     val config = directory.resolve("settings.json")
