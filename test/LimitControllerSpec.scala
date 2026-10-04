@@ -1,0 +1,573 @@
+package desk
+
+// The controller in limit mode, driven with hand built frames. A frame carries the actions a
+// drawn screen would offer, so these tests do not depend on how the panel is drawn.
+class LimitControllerSpec extends munit.FunSuite:
+  private val now = 1800000000000L
+  private val xmr = MarketRules(7, 3, 5)
+  private val viewOnly = "View only: p Prop or l Live to trade"
+  private def d(text: String): BigDecimal = BigDecimal(text)
+  private val buy = OrderIntent(Side.Buy, OrderKind.Hard)
+  private val sell = OrderIntent(Side.Sell, OrderKind.Hard)
+  private val close = OrderIntent(Side.Sell, OrderKind.Close)
+  private val ready = TradingView(
+    "XMR",
+    position = Some(d("0")),
+    message = "Ready",
+    ready = true,
+    rules = Some(xmr),
+    bid = Some(d("546.09")),
+    ask = Some(d("546.10")),
+    leverage = Some(5),
+    marginMode = Some("cross")
+  )
+  private def order(
+      id: String,
+      side: Side,
+      price: String,
+      size: String = "0.2",
+      flag: Boolean = false
+  ) =
+    RestingOrder(id, "XMR", 7, side, d(price), d(size), d(size), flag, now)
+  // Long 0.2 from 546.05. From the top the rows are the sells at 552.00 and 548.00, the current
+  // price 546.095, the entry 546.05, the buys at 546.00 and the flagged buy at 544.50.
+  private val rested = ready.copy(
+    position = Some(d("0.2")),
+    portfolio = PortfolioView(entry = Some(d("546.05"))),
+    resting = Vector(
+      order("s1", Side.Sell, "552.00"),
+      order("s2", Side.Sell, "548.00"),
+      order("b1", Side.Buy, "546.00"),
+      order("b2", Side.Buy, "546.00", "0.1"),
+      order("b3", Side.Buy, "544.50", flag = true)
+    )
+  )
+  private val trade: Set[DeskAction] = Set(
+    DeskAction.Prepare(buy),
+    DeskAction.Prepare(sell),
+    DeskAction.Close,
+    DeskAction.OrderType,
+    DeskAction.Orders,
+    DeskAction.Place
+  )
+  private val modes: Vector[DeskAction] = Vector(
+    DeskAction.Mode("PROP"),
+    DeskAction.Mode("LIVE"),
+    DeskAction.ConfirmMode("PROP"),
+    DeskAction.ConfirmMode("LIVE")
+  )
+
+  private class Fixture(mode: String = "LIVE", start: TradingView = ready):
+    val snapshot = Snapshot.initial("XMR", now)
+    var view = start
+    var planned = Vector.empty[OrderIntent]
+    var sent = Vector.empty[OrderReview]
+    var cancelled = Vector.empty[Vector[String]]
+    var accept = true
+    var refusal = Option.empty[String]
+    var reshape: OrderPlan => OrderPlan = identity
+    val controller = new DeskController(
+      PanelView(mode = mode),
+      () => now,
+      (intent, terms) => {
+        planned :+= intent
+        refusal
+          .toLeft(())
+          .flatMap(_ =>
+            Trading
+              .plan(
+                "XMR",
+                xmr,
+                Book(Vector(Level("546.09", "20", 1)), Vector(Level("546.10", "20", 1)), now),
+                view.reference(intent.side).get,
+                view.position.getOrElse(d("0")),
+                intent,
+                terms.sizes,
+                5,
+                terms.slippage
+              )
+              .map(reshape)
+          )
+      },
+      review => { sent :+= review; accept },
+      _ => Right(()),
+      cancel = ids => { cancelled :+= ids; true }
+    )
+    private def buttons(actions: Vector[DeskAction], row: Int): Vector[DeskButton] =
+      actions.zipWithIndex.map((a, i) => DeskButton(a.toString, a, i * 12, row, 11))
+    def frame(
+        shortcuts: Set[DeskAction] = trade,
+        disabled: Vector[DeskAction] = Vector.empty
+    ): Unit =
+      controller.publish(
+        WorkspaceFrame(
+          Vector.empty,
+          buttons(modes, 0),
+          "XMR",
+          120,
+          40,
+          controller.panel.mode,
+          disabledButtons = buttons(disabled, 1),
+          shortcuts = shortcuts
+        )
+      )
+    def key(command: Command): Boolean =
+      controller.handle(command, snapshot, view, (120, 40), false)
+    def panel: PanelView = controller.panel
+    def notice: Option[String] = panel.actionNotice
+    def ticket: Option[Ticket] = panel.ticket
+    def nothingSent(): Unit =
+      assertEquals((planned, sent, cancelled), (Vector.empty, Vector.empty, Vector.empty))
+    def limit(): Unit =
+      if panel.orderMode != OrderMode.Limit then key(Command.OrderType)
+      frame()
+    def open(intent: OrderIntent = buy): Unit =
+      limit()
+      key(Command.PlaceOrder(intent))
+      frame()
+
+  private val arrows =
+    Vector(Command.ZoomIn, Command.ZoomOut, Command.ScrubBack, Command.ScrubForward)
+
+  test("in limit mode a buy opens the ticket at the bid and a sell at the ask, sending nothing") {
+    val f = new Fixture
+    f.open(buy)
+    assertEquals(
+      f.ticket,
+      Some(Ticket("XMR", buy.copy(price = Some(d("546.09"))), d("546.09"), d("0.01"), None, None))
+    )
+    val g = new Fixture
+    g.open(sell)
+    assertEquals(
+      g.ticket,
+      Some(Ticket("XMR", sell.copy(price = Some(d("546.10"))), d("546.10"), d("0.01"), None, None))
+    )
+    f.nothingSent()
+    g.nothingSent()
+  }
+
+  test("the arrows move the ticket price and are consumed, and pass to the chart otherwise") {
+    val f = new Fixture
+    f.frame()
+    arrows.foreach(a => assert(!f.key(a), a.toString))
+    f.open(buy)
+    def at(command: Command, price: String, step: String): Unit =
+      assert(f.key(command), command.toString)
+      assertEquals(f.ticket.map(t => (t.price, t.step)), Some((d(price), d(step))))
+      assertEquals(f.ticket.flatMap(_.intent.price), Some(d(price)))
+    at(Command.ZoomIn, "546.10", "0.01")
+    at(Command.ScrubForward, "546.20", "0.1")
+    at(Command.ScrubBack, "546.10", "0.1")
+    at(Command.ZoomOut, "546.09", "0.01")
+    at(Command.ZoomOut, "546.08", "0.01")
+    f.nothingSent()
+  }
+
+  test("the ticket step is the real move where a tick is larger than the arrow's amount") {
+    val f = new Fixture(start = ready.copy(bid = Some(d("1234.5")), ask = Some(d("1234.6"))))
+    f.open(buy)
+    assertEquals(f.ticket.map(t => (t.price, t.step)), Some((d("1234.5"), d("0.1"))))
+    f.key(Command.ZoomIn)
+    assertEquals(f.ticket.map(t => (t.price, t.step)), Some((d("1234.6"), d("0.1"))))
+    f.key(Command.ScrubForward)
+    assertEquals(f.ticket.map(t => (t.price, t.step)), Some((d("1234.7"), d("0.1"))))
+  }
+
+  test("Enter previews and submits the priced press once and a sent order closes the ticket") {
+    val f = new Fixture
+    f.open(buy)
+    f.key(Command.ZoomOut)
+    f.key(Command.Confirm)
+    assertEquals(f.planned, Vector.empty, "nothing is sent at a price the ticket did not show")
+    f.frame()
+    f.key(Command.Confirm)
+    val priced = OrderIntent(Side.Buy, OrderKind.Hard, price = Some(d("546.08")))
+    assertEquals(f.planned, Vector(priced))
+    assertEquals(f.sent.map(_.intent), Vector(priced))
+    assertEquals(f.sent.map(r => (r.plan.post, r.plan.limit)), Vector((true, d("546.08"))))
+    assertEquals(f.sent.map(_.terms), Vector(f.panel.terms))
+    assertEquals(f.ticket, None)
+    assertEquals(f.notice, Some("Sending"))
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent.size, 1)
+  }
+
+  test("a refused order keeps the ticket open with the reason") {
+    val f = new Fixture
+    f.open(buy)
+    f.accept = false
+    f.key(Command.Confirm)
+    assertEquals(f.sent.size, 1)
+    assertEquals(f.notice, Some("Not sent: price or account changed"))
+    assertEquals(f.ticket.map(t => (t.price, t.notice)), Some((d("546.09"), f.notice)))
+    val g = new Fixture
+    g.open(buy)
+    g.refusal = Some("Resting orders already reduce the whole position")
+    g.key(Command.Confirm)
+    assertEquals(g.planned.size, 1)
+    assertEquals(g.sent, Vector.empty)
+    assertEquals(g.notice, g.refusal)
+    assertEquals(g.ticket.flatMap(_.notice), g.refusal)
+  }
+
+  test("a preview that is not a post only order at the ticket price is never submitted") {
+    val shapes: Vector[OrderPlan => OrderPlan] =
+      Vector(_.copy(post = false), _.copy(limit = d("546.10")))
+    shapes.foreach { shape =>
+      val f = new Fixture
+      f.open(buy)
+      f.reshape = shape
+      f.key(Command.Confirm)
+      assertEquals((f.planned.size, f.sent), (1, Vector.empty))
+      assertEquals(f.notice, Some("Not sent: price or account changed"))
+      assertEquals(f.ticket.map(_.price), Some(d("546.09")))
+    }
+  }
+
+  test("a press while a ticket is open sends nothing and keeps the ticket") {
+    for orderMode <- Vector(OrderMode.Limit, OrderMode.Market) do
+      val f = new Fixture
+      f.open(buy)
+      if orderMode == OrderMode.Market then f.key(Command.OrderType)
+      f.frame()
+      assertEquals(f.panel.orderMode, orderMode)
+      val before = f.ticket
+      f.key(Command.PlaceOrder(sell))
+      assertEquals(f.ticket, before, orderMode.toString)
+      f.nothingSent()
+  }
+
+  test("Enter on a price that would take liquidity refuses with the fixed text and sends nothing") {
+    val f = new Fixture
+    f.open(buy)
+    f.key(Command.ZoomIn)
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.notice, Some("Price would take liquidity. Move it below the ask"))
+    assertEquals(f.ticket.map(_.price), Some(d("546.10")))
+    f.nothingSent()
+    val g = new Fixture
+    g.open(sell)
+    g.key(Command.ZoomOut)
+    g.frame()
+    g.key(Command.Confirm)
+    assertEquals(g.notice, Some("Price would take liquidity. Move it above the bid"))
+    g.nothingSent()
+  }
+
+  test("Esc closes the ticket, sends nothing and gives the arrows back to the chart") {
+    val f = new Fixture
+    f.open(buy)
+    assert(f.key(Command.Cancel))
+    assertEquals(f.ticket, None)
+    arrows.foreach(a => assert(!f.key(a), a.toString))
+    f.nothingSent()
+  }
+
+  test("t toggles the order type in live and in prop and the type survives a switch") {
+    val f = new Fixture
+    f.frame()
+    f.key(Command.OrderType)
+    assertEquals(f.panel.orderMode, OrderMode.Limit)
+    f.key(Command.OrderType)
+    assertEquals(f.panel.orderMode, OrderMode.Market)
+    f.key(Command.OrderType)
+    f.frame()
+    f.key(Command.Mode("PROP"))
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals((f.panel.mode, f.panel.orderMode), ("PROP", OrderMode.Limit))
+    f.frame()
+    f.key(Command.OrderType)
+    assertEquals(f.panel.orderMode, OrderMode.Market)
+    f.nothingSent()
+  }
+
+  test("in view every order key answers the view text and reaches no worker") {
+    val f = new Fixture("VIEW", rested.copy(ready = false, block = Some("View only")))
+    f.frame()
+    val keys = Vector(
+      Command.OrderType,
+      Command.Orders,
+      Command.Place,
+      Command.PlaceOrder(buy),
+      Command.Close,
+      Command.Confirm
+    )
+    keys.zipWithIndex.foreach { (command, i) =>
+      assert(f.key(command), command.toString)
+      assertEquals(f.notice, Some(viewOnly), command.toString)
+      assertEquals(f.panel.actionNumber, i + 1L, command.toString)
+    }
+    assertEquals(f.panel.orderMode, OrderMode.Market)
+    assertEquals((f.panel.focus, f.ticket), (None, None))
+    f.nothingSent()
+    f.key(Command.Mode("PROP"))
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.panel.mode, "PROP", "Enter still answers a mode review in view")
+  }
+
+  test("o focuses the order row nearest the current price, never the entry row") {
+    val f = new Fixture(start = rested)
+    f.frame()
+    assert(f.key(Command.Orders))
+    assertEquals(f.panel.focus, Some(3))
+    assertEquals(f.notice, Some("opens"))
+  }
+
+  test("every row is reachable without a touch and with the most orders Desk holds") {
+    val f = new Fixture(start = rested.copy(bid = None, ask = None))
+    f.frame()
+    f.key(Command.Orders)
+    assertEquals(f.panel.focus, Some(0))
+    Vector.fill(5)(Command.ZoomOut).foreach(f.key)
+    assertEquals(f.panel.focus, Some(4))
+    val sells = Vector.tabulate(Trading.restingCap)(i => order(s"s$i", Side.Sell, s"${547 + i}.00"))
+    val g = new Fixture(start = rested.copy(resting = sells))
+    g.frame()
+    g.key(Command.Orders)
+    assertEquals(g.panel.focus, Some(Trading.restingCap - 1))
+    Vector.fill(Trading.restingCap + 5)(Command.ZoomIn).foreach(g.key)
+    assertEquals(g.panel.focus, Some(0))
+    g.frame()
+    g.key(Command.Confirm)
+    assertEquals(g.cancelled, Vector(Vector(s"s${Trading.restingCap - 1}")))
+    Vector.fill(Trading.restingCap + 5)(Command.ZoomOut).foreach(g.key)
+    assertEquals(g.panel.focus, Some(Trading.restingCap))
+  }
+
+  test("o without order rows answers No orders on XMR and does not focus") {
+    val f = new Fixture(start = rested.copy(resting = Vector.empty))
+    f.frame()
+    f.key(Command.Orders)
+    assertEquals(f.notice, Some("No orders on XMR"))
+    assertEquals(f.panel.focus, None)
+    arrows.foreach(a => assert(!f.key(a), a.toString))
+  }
+
+  test("o again and Esc drop focus, and o with a ticket open does nothing") {
+    val f = new Fixture(start = rested)
+    f.frame()
+    f.key(Command.Orders)
+    f.key(Command.Orders)
+    assertEquals(f.panel.focus, None)
+    f.key(Command.Orders)
+    f.key(Command.Cancel)
+    assertEquals(f.panel.focus, None)
+    f.open(buy)
+    f.key(Command.Orders)
+    assertEquals(f.panel.focus, None)
+    assert(f.ticket.nonEmpty)
+  }
+
+  test("Up and Down move over the selectable rows past the current price, Left and Right do not") {
+    val f = new Fixture(start = rested)
+    f.frame()
+    f.key(Command.Orders)
+    assert(f.key(Command.ZoomIn))
+    assertEquals(f.panel.focus, Some(2))
+    assert(f.key(Command.ZoomIn))
+    assertEquals(f.panel.focus, Some(1))
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled, Vector(Vector("s2")))
+    f.key(Command.ZoomIn)
+    f.key(Command.ZoomIn)
+    assertEquals(f.panel.focus, Some(0))
+    Vector.fill(6)(Command.ZoomOut).foreach(c => assert(f.key(c)))
+    assertEquals(f.panel.focus, Some(4))
+    assert(!f.key(Command.ScrubBack))
+    assert(!f.key(Command.ScrubForward))
+    assertEquals(f.panel.focus, Some(4))
+  }
+
+  test("the cursor follows its row and moves to the nearest order row when its row is gone") {
+    val f = new Fixture(start = rested)
+    f.frame()
+    f.key(Command.Orders)
+    f.view = rested.copy(resting = rested.resting :+ order("s3", Side.Sell, "550.00"))
+    f.controller.orders(f.view)
+    assertEquals(f.panel.focus, Some(4))
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled, Vector(Vector("b1", "b2")))
+    // The entry at 546.05 is nearer, but the cursor only ever lands on an order row by itself.
+    f.view = f.view.copy(resting = f.view.resting.filterNot(_.price == d("546.00")))
+    f.controller.orders(f.view)
+    assertEquals(f.panel.focus, Some(4))
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled.last, Vector("b3"))
+    // From 544.50, the sell at 548.00 and the buy at 541.00 are equally near.
+    f.view = f.view.copy(resting =
+      f.view.resting.filter(_.side == Side.Sell) :+ order("b4", Side.Buy, "541.00")
+    )
+    f.controller.orders(f.view)
+    assertEquals(f.panel.focus, Some(2), "the one above on a tie")
+    f.view = f.view.copy(resting = Vector.empty)
+    f.controller.orders(f.view)
+    assertEquals(f.panel.focus, None)
+    val g = new Fixture(start = rested)
+    g.frame()
+    g.key(Command.Orders)
+    g.key(Command.ZoomIn)
+    assertEquals(g.panel.focus, Some(2))
+    g.view = rested.copy(resting = Vector.empty)
+    g.controller.orders(g.view)
+    assertEquals(g.panel.focus, None, "the entry row alone keeps no focus")
+  }
+
+  test("Enter on the entry row sends the close x sends and is refused the same way") {
+    val f = new Fixture(start = rested)
+    f.frame()
+    f.key(Command.Orders)
+    f.key(Command.ZoomIn)
+    f.frame()
+    f.key(Command.Confirm)
+    val g = new Fixture(start = rested)
+    g.frame()
+    g.key(Command.Close)
+    assertEquals(f.planned, Vector(close))
+    assertEquals((f.planned, f.sent.map(_.intent)), (g.planned, g.sent.map(_.intent)))
+    val off = new Fixture(start = rested)
+    val disabled = Vector[DeskAction](DeskAction.Close)
+    off.frame(trade - DeskAction.Close, disabled)
+    off.key(Command.Orders)
+    off.key(Command.ZoomIn)
+    off.frame(trade - DeskAction.Close, disabled)
+    off.key(Command.Confirm)
+    assertEquals(off.notice, Some("Not sent: controls changed"))
+    off.key(Command.Close)
+    assertEquals(off.notice, Some("Not sent: controls changed"))
+    off.nothingSent()
+  }
+
+  test("Enter on an order row cancels its ids once drawn, and a gone row answers the fixed text") {
+    val f = new Fixture(start = rested)
+    f.frame()
+    f.key(Command.Orders)
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled, Vector.empty, "a cursor never acts on a row before it is drawn")
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled, Vector(Vector("b1", "b2")))
+    val g = new Fixture(start = rested)
+    g.frame()
+    g.key(Command.Orders)
+    g.frame()
+    g.view = rested.copy(resting = rested.resting.filterNot(_.price == d("546.00")))
+    g.key(Command.Confirm)
+    assertEquals(g.notice, Some("Nothing to cancel at that price"))
+    g.nothingSent()
+  }
+
+  test("a on an order row opens a ticket at its side and price and drops focus, not on the entry") {
+    val f = new Fixture(start = rested)
+    f.frame()
+    f.key(Command.Orders)
+    f.key(Command.ZoomIn)
+    f.key(Command.Place)
+    assertEquals((f.ticket, f.panel.focus), (None, Some(2)))
+    f.key(Command.ZoomIn)
+    f.key(Command.Place)
+    assertEquals(
+      f.ticket,
+      Some(Ticket("XMR", sell.copy(price = Some(d("548.00"))), d("548.00"), d("0.01"), None, None))
+    )
+    assertEquals(f.panel.focus, None)
+    assertEquals(f.panel.orderMode, OrderMode.Market)
+    val g = new Fixture(start = rested)
+    g.frame()
+    g.key(Command.Place)
+    assertEquals(g.ticket, None)
+    f.nothingSent()
+  }
+
+  test("a ticket, a mode review and the market prompt drop focus, and a mode review the ticket") {
+    def focused(): Fixture =
+      val f = new Fixture(start = rested)
+      f.frame()
+      f.key(Command.Orders)
+      f.frame()
+      assertEquals(f.panel.focus, Some(3))
+      f
+    val review = focused()
+    review.key(Command.Mode("PROP"))
+    assertEquals((review.panel.modeReview, review.panel.focus), (Some("PROP"), None))
+    val prompt = focused()
+    assert(!prompt.key(Command.StartMarketPrompt))
+    assertEquals(prompt.panel.focus, None)
+    val press = focused()
+    press.key(Command.OrderType)
+    press.frame()
+    press.key(Command.PlaceOrder(buy))
+    assertEquals((press.ticket.map(_.price), press.panel.focus), (Some(d("546.09")), None))
+    press.frame()
+    press.key(Command.Mode("PROP"))
+    assertEquals((press.panel.modeReview, press.ticket), (Some("PROP"), None))
+  }
+
+  test("resetMarket, Settings, new terms and new bindings close the ticket and drop focus") {
+    val resets: Vector[(String, DeskController => Unit)] = Vector(
+      "resetMarket" -> (_.resetMarket()),
+      "Settings" -> (c => {
+        val _ = c.handle(Command.Settings, Snapshot.initial("XMR", now), rested, (120, 40), false)
+      }),
+      "setTerms" -> (_.setTerms(TradeTerms(TradeSizes(small = d("20")), d("0.002")))),
+      "setBindings" -> (_.setBindings(Bindings.defaults))
+    )
+    resets.foreach { (name, reset) =>
+      val f = new Fixture(start = rested)
+      f.open(buy)
+      assert(f.ticket.nonEmpty, name)
+      reset(f.controller)
+      assertEquals(f.ticket, None, name)
+      val g = new Fixture(start = rested)
+      g.frame()
+      g.key(Command.Orders)
+      assertEquals(g.panel.focus, Some(3), name)
+      reset(g.controller)
+      assertEquals(g.panel.focus, None, name)
+      assert(!g.key(Command.ZoomIn), name)
+    }
+  }
+
+  test("the effect of the orders under the cursor shows on the status row") {
+    val f = new Fixture(start = rested)
+    f.frame()
+    f.key(Command.Orders)
+    assertEquals(f.notice, Some("opens"))
+    f.key(Command.ZoomIn)
+    assertEquals(f.notice, None)
+    f.key(Command.ZoomIn)
+    assertEquals(f.notice, Some("reduce"))
+    f.key(Command.ZoomIn)
+    assertEquals(f.notice, Some("flip $22.08 XMR if filled"))
+    Vector.fill(4)(Command.ZoomOut).foreach(f.key)
+    assertEquals(f.notice, Some("void"))
+  }
+
+  test("CLOSE in limit mode sends an immediate close and opens no ticket") {
+    val f = new Fixture(start = rested)
+    f.limit()
+    assertEquals(f.panel.orderMode, OrderMode.Limit)
+    f.key(Command.Close)
+    assertEquals(f.planned, Vector(close))
+    assertEquals(f.sent.map(_.intent), Vector(close))
+    assertEquals(f.ticket, None)
+  }
+
+  test("x in prop previews and submits a sell close once, and asks a sell even when flat") {
+    val f = new Fixture("PROP", rested.copy(leverage = Some(1), marginMode = None))
+    f.frame()
+    f.key(Command.Close)
+    assertEquals(f.planned, Vector(close))
+    assertEquals(f.sent.map(_.intent), Vector(close))
+    val flat = new Fixture("PROP", ready.copy(leverage = Some(1)))
+    flat.frame()
+    flat.key(Command.Close)
+    assertEquals(flat.planned, Vector(close))
+    assertEquals(flat.sent, Vector.empty)
+  }
