@@ -67,7 +67,9 @@ final case class WorkspaceFrame(
     disabledButtons: Vector[DeskButton] = Vector.empty,
     shortcuts: Set[DeskAction] = Set.empty,
     // The orders axis exactly as this frame drew it. Keys on the axis act on these rows.
-    axis: Option[Placed] = None
+    axis: Option[Placed] = None,
+    // The axis cursor this frame drew, from the panel it drew.
+    focus: Option[Int] = None
 ):
   def controls: Vector[DeskButton] = buttons ++ disabledButtons
 

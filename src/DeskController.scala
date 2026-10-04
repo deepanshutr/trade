@@ -17,10 +17,10 @@ final class DeskController(
   private var shown = Option.empty[WorkspaceFrame]
   private var pressed = Option.empty[(WorkspaceFrame, DeskButton, Boolean)]
   // The axis row under the cursor, and current.focus its index among the rows of the frame that
-  // drew it. Until a published frame draws the cursor on that row, moved holds and no key acts on
-  // the row.
+  // drew it. Keys act on that row only through a frame drawn with this focus, and stale holds them
+  // when the orders change after the frame was drawn.
   private var cursor = Option.empty[AxisMark]
-  private var moved = false
+  private var stale = false
   // The orders and entry the axis rows are made of, as last seen.
   private var made = (Vector.empty[(String, BigDecimal)], Option.empty[BigDecimal])
   private val orderUpdates = new OrderUpdates
@@ -33,7 +33,7 @@ final class DeskController(
       view.resting.filter(_.coin == view.coin).map(o => (o.id, o.price)),
       view.position.filter(_ != 0).flatMap(_ => view.portfolio.entry)
     )
-    if now != made then moved = true
+    if now != made then stale = true
     made = now
   }
   private def sameControl(
@@ -51,7 +51,8 @@ final class DeskController(
       (before, button, valid && sameControl(before, button, frame))
     )
     shown = Some(frame)
-    current.focus.foreach(refocus(frame, _))
+    stale = false
+    if current.focus.nonEmpty then refocus(frame)
   }
   def invalidate(): Unit = synchronized { shown = None }
   // A ticket or a cursor never carries one market's price or row to another.
@@ -111,33 +112,24 @@ final class DeskController(
   private def same(a: AxisMark, b: AxisMark): Boolean =
     a.kind == b.kind && (a.kind == AxisKind.Entry || a.price == b.price)
 
-  // A move to another row holds the axis keys until a frame draws it.
   private def point(rows: Vector[AxisMark], at: Option[AxisMark]): Unit =
-    if !cursor.zip(at).exists(same(_, _)) then moved = true
     cursor = at
     current = current.copy(focus = at.map(row => rows.indexWhere(same(_, row))))
 
-  // The frame drew the cursor at the focus index. When that row is the cursor's row, the keys may
-  // act on it. Otherwise the cursor follows its row, or moves to the nearest order row, the one
-  // above on a tie and never by itself onto the entry row, and waits for the frame that draws
-  // it there. Focus drops when the frame draws no order row.
-  private def refocus(frame: WorkspaceFrame, focus: Int): Unit =
+  // The cursor keeps its row in the frame's rows. When its row is gone it moves to the nearest
+  // order row, the one above on a tie and never by itself onto the entry row. Focus drops when the
+  // frame draws no order row. A focus that changes here waits for the frame that draws it.
+  private def refocus(frame: WorkspaceFrame): Unit =
     val rows = frame.axis.fold(Vector.empty[AxisMark])(OrdersAxis.selectable)
     val orders = rows.filter(isOrder)
-    rows.lift(focus).filter(row => orders.nonEmpty && cursor.exists(same(_, row))) match
-      case Some(row) =>
-        cursor = Some(row)
-        moved = false
-      case None =>
-        val next = cursor
-          .flatMap(was =>
-            rows
-              .find(same(_, was))
-              .orElse(orders.minByOption(row => ((row.price - was.price).abs, row.row)))
-          )
-          .filter(_ => orders.nonEmpty)
-        point(rows, next)
-        moved = true
+    val next = cursor
+      .flatMap(was =>
+        rows
+          .find(same(_, was))
+          .orElse(orders.minByOption(row => ((row.price - was.price).abs, row.row)))
+      )
+      .filter(_ => orders.nonEmpty)
+    point(rows, next)
 
   // What a fill of the row's orders would do to the position. A flip names the money that
   // would open the other side.
@@ -204,8 +196,11 @@ final class DeskController(
     // without a frame.
     val drawn = available.flatMap(_.axis)
     val rows = drawn.fold(Vector.empty[AxisMark])(OrdersAxis.selectable)
-    // The row the shown frame drew under the cursor, once nothing has moved since.
-    val chosen = if moved then None else current.focus.flatMap(rows.lift)
+    // The row the shown frame drew under the cursor, when it drew the cursor where it is now and
+    // the orders have not changed since.
+    val chosen =
+      if stale || !available.exists(_.focus == current.focus) then None
+      else current.focus.flatMap(rows.lift)
     def toggle(): Unit =
       current = current.copy(orderMode =
         if current.orderMode == OrderMode.Market then OrderMode.Limit else OrderMode.Market

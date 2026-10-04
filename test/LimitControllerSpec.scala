@@ -112,7 +112,8 @@ class LimitControllerSpec extends munit.FunSuite:
     def frame(
         shortcuts: Set[DeskAction] = trade,
         disabled: Vector[DeskAction] = Vector.empty,
-        axis: Option[Placed] = Some(drawn(view))
+        axis: Option[Placed] = Some(drawn(view)),
+        focus: Option[Int] = controller.panel.focus
     ): Unit =
       controller.orders(view)
       controller.publish(
@@ -125,7 +126,8 @@ class LimitControllerSpec extends munit.FunSuite:
           controller.panel.mode,
           disabledButtons = buttons(disabled, 1),
           shortcuts = shortcuts,
-          axis = axis
+          axis = axis,
+          focus = focus
         )
       )
     def key(command: Command): Boolean =
@@ -398,6 +400,23 @@ class LimitControllerSpec extends munit.FunSuite:
     f.key(Command.Confirm)
     assertEquals(f.cancelled, Vector.empty, "that frame drew the entry row under the cursor")
     f.frame(axis = Some(after))
+    f.key(Command.Confirm)
+    assertEquals(f.cancelled, Vector(Vector("b1", "b2")))
+  }
+
+  test("Enter acts only on a frame drawn with the cursor where the controller holds it") {
+    // Flat, so from the top the rows are the sells at 552.00 and 548.00 and the buys at 546.00
+    // and 544.50.
+    val f = new Fixture(start = rested.copy(position = Some(d("0"))))
+    f.frame()
+    f.key(Command.Orders)
+    assertEquals(f.panel.focus, Some(2))
+    f.frame(focus = Some(1))
+    f.key(Command.Confirm)
+    f.key(Command.Place)
+    assertEquals(f.cancelled, Vector.empty, "the frame drew the cursor on the sell at 548.00")
+    assertEquals(f.ticket, None)
+    f.frame(focus = Some(2))
     f.key(Command.Confirm)
     assertEquals(f.cancelled, Vector(Vector("b1", "b2")))
   }
