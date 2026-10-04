@@ -124,6 +124,30 @@
         "v": 28
       },
       "address": "0x14791697260e4c9a71f18484c9f997b308e59325"
+    },
+    {
+      "name": "cancelByCloidExpiryMain",
+      "action": {
+        "type": "cancelByCloid",
+        "cancels": [
+          {
+            "asset": 32767,
+            "cloid": "0x0123456789abcdef0123456789abcdef"
+          }
+        ]
+      },
+      "nonce": 1788684358294,
+      "expiresAfter": 1788684359294,
+      "mainnet": true,
+      "packed": "82a474797065ad63616e63656c4279436c6f6964a763616e63656c739182a56173736574cd7fffa5636c6f6964d92230783031323334353637383961626364656630313233343536373839616263646566",
+      "actionHash": "93ef5bf09a8d7ad8daa290c72babf55f91ee584a402308a261cfa3a5e2b529e4",
+      "digest": "beb49e1dd985b06bfd0fefd88afc53669e85f1b37d85aef74a60609a18540f7c",
+      "signature": {
+        "r": "0x5c5eb29dce4cd1939c9dfb5ca563de9964bedb35e385ecea7d386369ed636489",
+        "s": "0x4a254a4ffead3383ef0fbc7744ea7c80e9481a6da60b8abdb2e6e6519423c6c4",
+        "v": 27
+      },
+      "address": "0x14791697260e4c9a71f18484c9f997b308e59325"
     }
   ],
   "integerBytes": {

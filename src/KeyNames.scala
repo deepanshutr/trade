@@ -245,7 +245,10 @@ object KeySetup:
           case NonFatal(_) => Left("The saved state for the current key cannot be read")
       opened.flatMap { journal =>
         try
-          if journal.pending.isEmpty then Right(write)
-          else Left("A saved order for the current key must finish first")
+          if journal.pending.nonEmpty then
+            Left("A saved order for the current key must finish first")
+          else if journal.resting.nonEmpty then
+            Left("Cancel the resting orders for the current key first")
+          else Right(write)
         finally journal.close()
       }

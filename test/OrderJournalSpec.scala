@@ -209,3 +209,87 @@ class OrderJournalSpec extends TempDirectorySuite:
       assertEquals(ujson.read(Files.readString(file))("pending")("reduceOnly"), value)
     }
   }
+
+  test("a resting order keeps its oid and remaining size through a restart") {
+    val dir = tempDirectory("desk-resting")
+    val first = OrderJournal.open(dir, identity)
+    val saved = first.reserve(plan, owner, 1000L)
+    val rested = first.rest(saved.id, 77738308L)
+    assertEquals(rested.oid, Some(77738308L))
+    assertEquals(rested.remaining, Some(saved.quantity))
+    assertEquals(first.pending, None)
+    assertEquals(first.resting, Vector(rested))
+    first.remaining(saved.id, "0.15")
+    first.close()
+    val text = ujson.read(Files.readString(dir.resolve(identity + ".json")))
+    assertEquals(text("version").num, 2.0)
+    assertEquals(text("pending"), ujson.Null)
+    assertEquals(text("resting")(0)("oid"), ujson.Str("77738308"))
+    assertEquals(text("resting")(0)("remaining"), ujson.Str("0.15"))
+    assertEquals(text("resting")(0)("post"), ujson.Bool(false))
+    val second = OrderJournal.open(dir, identity)
+    try
+      assertEquals(second.resting, Vector(rested.copy(remaining = Some("0.15"))))
+      second.settle(saved.id)
+      assertEquals(second.resting, Vector.empty)
+    finally second.close()
+    val text1 = Files.readString(dir.resolve(identity + ".json"))
+    assert(text1.startsWith("""{"version":1,"""), text1)
+  }
+
+  test("a journal with no resting orders is written in the version 1 shape") {
+    val dir = tempDirectory("desk-v1-bytes")
+    val journal = OrderJournal.open(dir, identity)
+    try
+      assertEquals(journal.nextNonce(1000L), 1000L)
+      assertEquals(
+        Files.readString(dir.resolve(identity + ".json")),
+        """{"version":1,"lastNonce":"1000","pending":null}"""
+      )
+    finally journal.close()
+  }
+
+  test("a version 1 file loads with no resting orders and version 3 is refused") {
+    val dir = tempDirectory("desk-versions")
+    val first = OrderJournal.open(dir, identity)
+    first.reserve(plan, owner, 1000L)
+    first.close()
+    val file = dir.resolve(identity + ".json")
+    val reopened = OrderJournal.open(dir, identity)
+    try assertEquals(reopened.resting, Vector.empty)
+    finally reopened.close()
+    val data = ujson.read(Files.readString(file))
+    data("version") = 3
+    Files.writeString(file, ujson.write(data))
+    intercept[Exception](OrderJournal.open(dir, identity))
+  }
+
+  test("reserve throws while an order is pending and not while orders rest") {
+    val dir = tempDirectory("desk-reserve-rest")
+    val journal = OrderJournal.open(dir, identity)
+    try
+      val saved = journal.reserve(plan, owner, 1000L)
+      intercept[IllegalStateException](journal.reserve(plan, owner, 1001L))
+      journal.rest(saved.id, 4294967296L)
+      val next = journal.reserve(plan, owner, 1002L)
+      assertEquals(next.nonce, 1002L)
+      assertEquals(journal.resting.map(_.oid), Vector(Some(4294967296L)))
+      intercept[IllegalArgumentException](journal.rest("different", 1L))
+      intercept[IllegalArgumentException](journal.remaining("different", "1"))
+      intercept[IllegalArgumentException](journal.settle("different"))
+    finally journal.close()
+  }
+
+  test("a cancel nonce persists through nextNonce while an order rests") {
+    val dir = tempDirectory("desk-cancel-nonce")
+    val first = OrderJournal.open(dir, identity)
+    val saved = first.reserve(plan, owner, 1000L)
+    first.rest(saved.id, 5L)
+    assertEquals(first.nextNonce(900L), 1001L)
+    first.close()
+    val second = OrderJournal.open(dir, identity)
+    try
+      assertEquals(second.resting.map(_.id), Vector(saved.id))
+      assertEquals(second.nextNonce(0L), 1002L)
+    finally second.close()
+  }

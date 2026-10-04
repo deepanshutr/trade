@@ -94,10 +94,18 @@ object OrderSigning:
         bool(value("r"))
         val orderType = fields(value("t"), Vector("limit"))
         val limitType = fields(orderType("limit"), Vector("tif"))
-        if text(limitType("tif")) != "Ioc" then invalid()
+        if !Set("Alo", "Ioc").contains(text(limitType("tif"))) then invalid()
         value.value.get("c").foreach { identifier =>
           if !text(identifier).matches("0x[0-9a-f]{32}") then invalid()
         }
+      case "cancelByCloid" =>
+        fields(root, Vector("type", "cancels"))
+        val cancels = root("cancels") match
+          case array: ujson.Arr if array.value.size == 1 => array.value
+          case _                                         => invalid()
+        val one = fields(cancels.head, Vector("asset", "cloid"))
+        integer(one("asset"))
+        if !text(one("cloid")).matches("0x[0-9a-f]{32}") then invalid()
       case _ => invalid()
 
   private def writeUnsigned(out: ByteArrayOutputStream, value: Long, width: Int): Unit =
