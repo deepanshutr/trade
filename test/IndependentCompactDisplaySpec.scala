@@ -109,15 +109,16 @@ class IndependentCompactDisplaySpec extends munit.FunSuite:
       for history <- Vector(false, true) do
         val s = referenceFixture(mode, history, selected, cols, rows)
         val frame = draw(s, panel(selected))
+        // A reference row is its label of 30, its prices in 8 and its plot from column 38.
         val chartWidth = cols - 39
-        val cellCount = cols - 78
+        val cellCount = Layout.regions(cols, rows).plot
         val plain = frame.lines.map(Chart.plain)
         val references = Vector("BTC", "PAXG").filterNot(_ == selected)
         for coin <- references do
           val first = plain.indexWhere(_.startsWith(if coin == "BTC" then "BTC " else "PAXG ("))
           assert(first > 0, coin + " missing")
           assert(first + 3 <= rows - 15, "reference crosses trade controls")
-          val actual = plain.slice(first, first + 3).map(_.slice(chartWidth - 9, chartWidth).trim)
+          val actual = plain.slice(first, first + 3).map(_.slice(30, 38).trim)
           val factor = if coin == "BTC" then 1.0 else 10.0
           val wanted =
             Vector(242.0, if history then 215.0 else 210.0, if history then 188.0 else 178.0).map(
@@ -125,12 +126,12 @@ class IndependentCompactDisplaySpec extends munit.FunSuite:
             )
           assertEquals(
             actual(1),
-            "<" + BigDecimal(wanted(1)).bigDecimal.stripTrailingZeros().toPlainString
+            BigDecimal(wanted(1)).bigDecimal.stripTrailingZeros().toPlainString + ">"
           )
           assertEquals(actual.head.toDouble, wanted.head)
           assertEquals(actual.last.toDouble, wanted.last)
           assertEquals((actual.head.toDouble + actual.last.toDouble) / 2.0, wanted(1))
-          val middlePlot = plain(first + 1).slice(30, chartWidth - 9)
+          val middlePlot = plain(first + 1).slice(38, chartWidth)
           if mode == ChartMode.Line then
             val last = middlePlot.last.toInt - 0x2800
             assert(
@@ -157,5 +158,5 @@ class IndependentCompactDisplaySpec extends munit.FunSuite:
     for coin <- Vector("BTC", "PAXG") do
       val first = plain.indexWhere(_.startsWith(if coin == "BTC" then "BTC " else "PAXG ("))
       assert(first > 0)
-      assert(plain.slice(first, first + 3).forall(_.slice(52, 61).trim.isEmpty))
+      assert(plain.slice(first, first + 3).forall(_.slice(30, 38).trim.isEmpty))
   }

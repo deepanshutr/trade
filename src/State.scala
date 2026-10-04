@@ -217,8 +217,8 @@ object State:
     r.copy(samples = keep(r.samples, sec, samplesMs) :+ (sec, mid))
 
   private def step(s: Snapshot): Long =
-    val width = Layout.workspaceChartWidth(s.cols)
-    (Layout.plotColumns(width, s.chartMode) / 4L).max(1L) * zooms(s.zoom)
+    val cells = Layout.regions(s.cols, s.rows).plot
+    (Layout.columnsIn(cells, s.chartMode) / 4L).max(1L) * zooms(s.zoom)
 
   def reduce(s: Snapshot, e: Event, now: Long): Snapshot = e match
     case Event.BookUpdate(coin, book, fromSocket) =>

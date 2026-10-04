@@ -88,7 +88,8 @@ object Screen:
   // The chart block: the stats row, the price rows, the volume row, the reference rows and the
   // time axis, in the left pane and the plot of the regions. Each price row is the decor's label
   // of 17 columns, with the marker on the current price row in its last column, then the depth
-  // bar of 21 and the plot. The reference rows keep today's columns until they are replaced.
+  // bar of 21 and the plot. Each reference row is its label of 30, its prices in the rest of the
+  // left pane and its plot on the main plot's cells and time scale.
   def renderMarket(
       s: Snapshot,
       now: Long,
@@ -122,11 +123,10 @@ object Screen:
     }
     val (volume, _) = Chart.volumeRows(columns, Style.mono, s.chartMode, cells)
     val volumeLine = Chart.rjust("volume", regions.left - 1) + " " + volume.head
-    val oldCells = Layout.cells(width)
-    val oldCount = Layout.plotColumns(width, s.chartMode)
+    val priceWidth = regions.left - Layout.leftW
     val referenceLines = references.flatMap { coin =>
       val data = s.refs.getOrElse(coin, Ref.empty)
-      val values = Chart.referenceColumns(data, oldCount, s, now)
+      val values = Chart.referenceColumns(data, count, s, now)
       val current = values.flatten.lastOption.map(_.last)
       val ax = Chart.axis(values, None, Layout.referenceRows).map { a =>
         current.fold(a) { price =>
@@ -134,15 +134,16 @@ object Screen:
           Axis(price - radius, price + radius, a.rows)
         }
       }
-      val ink = ax.fold(Vector.fill(Layout.referenceRows)(" " * oldCells))(a =>
-        Chart.plot(values, a, oldCells, s.chartMode)
+      val ink = ax.fold(Vector.fill(Layout.referenceRows)(" " * cells))(a =>
+        Chart.plot(values, a, cells, s.chartMode)
       )
       val label = if coin == "PAXG" then "PAXG (token tied to gold)" else coin
       val labels =
         Vector(Chart.fit(label, Layout.leftW)).padTo(Layout.referenceRows, " " * Layout.leftW)
-      val currentText = current.map(p => Trading.display(BigDecimal(p), Layout.scaleW - 1))
-      val prices = Chart.scaleRows(ax, Layout.referenceRows, current.map(_ => 1), currentText)
-      (0 until Layout.referenceRows).map(i => labels(i) + ink(i) + prices(i))
+      val currentText = current.map(p => Trading.display(BigDecimal(p), priceWidth - 1))
+      val prices =
+        Chart.scaleRows(ax, Layout.referenceRows, current.map(_ => 1), currentText, priceWidth)
+      (0 until Layout.referenceRows).map(i => labels(i) + prices(i) + ink(i))
     }
     val (first, z) = Chart.window(s, count, now)
     val candles = s.chartMode == ChartMode.Candles

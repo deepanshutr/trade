@@ -56,7 +56,7 @@ class WorkspaceHelpersSpec extends munit.FunSuite:
     )
     assertEquals(
       digest(frames.flatMap(_._2)),
-      "f3fa0c152f26e3f4413dfbab9f0eca8302d21ba6ce8ae2d41f4a8c27977d83a2"
+      "4b9c2b1cddb4c1f854fdcfc4520ffd1121e2e6030163642ac5a05c40f663b41c"
     )
     // The band rows from tradeTop down hash as they did before the chart block changed.
     assertEquals(

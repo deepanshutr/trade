@@ -87,15 +87,15 @@ class CandleModeSpec extends munit.FunSuite:
 
   test("the candle window and scrub step use the visible candle count") {
     val s = press(Snapshot.initial("XMR", now), Command.ToggleCandles)
-    val count = Layout.plotColumns(100, s.chartMode)
-    assertEquals(count, 15)
-    assertEquals(Layout.plotColumns(100, ChartMode.Line), 122)
+    val count = Layout.columnsIn(Layout.regions(100, 30).plot, s.chartMode)
+    assertEquals(count, 5)
+    assertEquals(Layout.columnsIn(Layout.regions(100, 30).plot, ChartMode.Line), 46)
     val (first, z) = Chart.window(s, count, now)
     assertEquals(first + count - 1, Math.floorDiv(now / 1000, 60L))
     assertEquals(z, 60)
     assertEquals(press(s, Command.ScrubBack).offsetSec, 60L)
     val wide = s.copy(cols = 120)
-    assertEquals(Layout.plotColumns(120, ChartMode.Candles), 20)
+    assertEquals(Layout.columnsIn(Layout.regions(120, 40).plot, ChartMode.Candles), 10)
     assertEquals(press(wide, Command.ScrubBack).offsetSec, 120L)
   }
 
@@ -258,8 +258,7 @@ class CandleModeSpec extends munit.FunSuite:
           )
         )
       )
-    // cols is the chart area. The main plot starts at column 38. The reference rows keep
-    // today's columns, a label of 30 and a price column of 9, until they are replaced.
+    // cols is the chart area. The main plot and the reference plots start at column 38.
     for cols <- Vector(100, 101, 120) do
       val cells = cols - 38
       val count = Layout.columnsIn(cells, ChartMode.Candles)
@@ -271,16 +270,10 @@ class CandleModeSpec extends munit.FunSuite:
       assert(main.exists(_.slice(start, end) == "│ │ ███ "))
       assert(main.exists(_.slice(start, end) == "└─┘ ███ "))
       assert(main.forall(row => row.take(start).trim.isEmpty && row.drop(end).trim.isEmpty))
-      val refStart = (Layout.plotColumns(cols, ChartMode.Candles) - 2) * Layout.candleW
       for first <- Vector(13, 16) do
-        val ref = frame.slice(first, first + 3).map(_.slice(Layout.leftW, cols - Layout.scaleW))
-        assertEquals(
-          ref.map(_.slice(refStart, refStart + 8)),
-          Vector(" │   │  ", " □  ███ ", "        ")
-        )
-        assert(
-          ref.forall(row => row.take(refStart).trim.isEmpty && row.drop(refStart + 8).trim.isEmpty)
-        )
+        val ref = frame.slice(first, first + 3).map(_.drop(38))
+        assertEquals(ref.map(_.slice(start, end)), Vector(" │   │  ", " □  ███ ", "        "))
+        assert(ref.forall(row => row.take(start).trim.isEmpty && row.drop(end).trim.isEmpty))
       val volume = frame(12).drop(38)
       assertEquals(
         volume.zipWithIndex.collect { case (ch, i) if ch != ' ' => i },

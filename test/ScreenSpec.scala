@@ -207,7 +207,8 @@ class ScreenSpec extends munit.FunSuite:
 
   // The chart block of lane L5. The fixture series spans 544.00 to 552.00 and the book holds
   // three levels a side, so the axis is 543.60 to 552.40 and every expected row can be worked
-  // out by hand from the rules.
+  // out by hand from the rules. BTC runs from 95000 to 96000 and PAXG from 2300 to 2310, so
+  // their axes centred on the current price are 94950 to 97050 and 2299.5 to 2320.5.
   private val pinNow = 1_800_000_000_000L
   private def pinned: Snapshot =
     val sec = pinNow / 1000
@@ -224,7 +225,11 @@ class ScreenSpec extends munit.FunSuite:
           )
         ),
         samples =
-          Vector((sec - 40, 548.0), (sec - 30, 552.0), (sec - 20, 544.0), (sec - 1, 546.095))
+          Vector((sec - 40, 548.0), (sec - 30, 552.0), (sec - 20, 544.0), (sec - 1, 546.095)),
+        refs = Map(
+          "BTC" -> Ref(Vector((sec - 40, 95000.0), (sec - 1, 96000.0)), Map.empty),
+          "PAXG" -> Ref(Vector((sec - 40, 2300.0), (sec - 1, 2310.0)), Map.empty)
+        )
       )
   private def chart(
       s: Snapshot,
@@ -244,7 +249,8 @@ class ScreenSpec extends munit.FunSuite:
 
   test("the header and the left pane match the hand written fixtures") {
     // Each fixture line ends with a bar so that its trailing spaces stay visible. The lines are
-    // the header, the left 38 columns of every price row and of the volume row, and the time axis.
+    // the header, the left 38 columns of every price row, the volume row and the six reference
+    // rows, and the time axis.
     for (cols, rows) <- Vector((100, 30), (120, 40)) do
       val r = Layout.regions(cols, rows)
       val frame = chart(pinned, cols, rows, Style.mono)
@@ -255,7 +261,7 @@ class ScreenSpec extends munit.FunSuite:
         .toVector
         .map(_.stripSuffix("|"))
       val actual =
-        Vector(text.head) ++ text.slice(1, r.priceRows + 2).map(_.take(r.left)) ++ Vector(text.last)
+        Vector(text.head) ++ text.slice(1, text.size - 1).map(_.take(r.left)) ++ Vector(text.last)
       assertEquals(actual, expected)
       assertEquals(frame.priceRows, r.priceRows)
       assertEquals(text.size, r.priceRows + 9)
@@ -380,9 +386,35 @@ class ScreenSpec extends munit.FunSuite:
           .digest(lines.mkString("\n").getBytes(java.nio.charset.StandardCharsets.UTF_8))
       )
 
-  test("the reference rows and the band rows are byte for byte today's") {
-    // The two digests were taken from the frames drawn at a9b9335, before this lane changed the
-    // chart block, with today's price rows of tradeTop - 9, or tradeTop - 8 for BTC and PAXG.
+  test("a reference row's plot shares the main plot's columns and time scale") {
+    // The main market and both references hold samples 40 seconds and one second back. At two
+    // dots a cell the older one is dot 2 * plot - 41, so all three draw from that cell to the last.
+    for (cols, rows) <- Vector((100, 30), (120, 40)) do
+      val r = Layout.regions(cols, rows)
+      val text = chart(pinned, cols, rows, Style.mono).lines.map(plain)
+      def inked(lines: Vector[String]): Vector[Int] =
+        lines
+          .flatMap(_.zipWithIndex.collect { case (c, i) if c >= 0x2800 && c <= 0x28ff => i })
+          .filter(_ >= r.left)
+          .distinct
+          .sorted
+      val expected = (r.left + (2 * r.plot - 41) / 2 until r.left + r.plot).toVector
+      assertEquals(inked(text.slice(1, r.priceRows + 1)), expected)
+      assertEquals(inked(text.slice(r.priceRows + 2, r.priceRows + 5)), expected)
+      assertEquals(inked(text.slice(r.priceRows + 5, r.priceRows + 8)), expected)
+      assert(text.forall(_.length == r.left + r.plot), text.map(_.length))
+  }
+
+  test("the scrub step is a quarter of the plot the owner sees") {
+    for (cols, step) <- Vector((100, 11L), (101, 12L), (120, 21L)) do
+      val s = Snapshot.initial("XMR", t0).copy(cols = cols, rows = 30)
+      assertEquals(State.reduce(s, Event.Key(Command.ScrubBack), t0).offsetSec, step, cols)
+      assertEquals(step, Layout.regions(cols, 30).plot * 2 / 4L)
+  }
+
+  test("the band rows are byte for byte today's") {
+    // The digest was taken from the frames drawn at a9b9335, before this lane changed the chart
+    // block.
     val cases =
       (for
         coin <- Vector("XMR", "BTC", "PAXG")
@@ -400,21 +432,6 @@ class ScreenSpec extends munit.FunSuite:
           (cols, rows) <- Vector((100, 30), (120, 40))
           style <- Vector(Style.mono, Style.colour)
         yield (Golden.snapshot, cols, rows, style, Golden.now))
-    val references = cases.flatMap { (s, cols, rows, style, now) =>
-      val priceRows = rows - 15 - 10
-      val refs = State.refCoins.distinct.count(_ != s.coin)
-      Screen
-        .renderMarket(
-          s,
-          now,
-          java.time.ZoneOffset.UTC,
-          style,
-          Layout.regions(cols, rows).copy(priceRows = priceRows),
-          AxisDecor.plain
-        )
-        .lines
-        .slice(priceRows + 2, priceRows + 2 + 3 * refs)
-    }
     val bands = cases.flatMap { (s, cols, rows, style, now) =>
       Workspace
         .draw(
@@ -430,11 +447,6 @@ class ScreenSpec extends munit.FunSuite:
         .lines
         .drop(rows - 15)
     }
-    assertEquals(references.size, 168)
-    assertEquals(
-      digest(references),
-      "2f0aace8ec0f3bce2d6252301190a34f71037c8b774e58486b9a7023297fd055"
-    )
     assertEquals(bands.size, 600)
     assertEquals(digest(bands), "cf3496d4fbe85dd4824d7a420c2c27bae4efcffc687167549a2c3a211e29e26c")
   }

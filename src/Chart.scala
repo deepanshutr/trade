@@ -407,32 +407,37 @@ object Chart:
     (0 until axis.rows).toVector.map { i =>
       if i % 3 == 1 || i == axis.rows - 1 then
         val middle = axis.hi - (i + 0.5) * (axis.hi - axis.lo) / axis.rows
-        val fixed = s"%.${dec}f".format(middle)
-        val text =
-          if fixed.length <= 8 || !middle.isFinite then fixed
-          else Trading.display(BigDecimal(middle), 8)
-        Screen.dim + " " * 8 + rjust(text, 8) + " " + Screen.reset
+        Screen.dim + " " * 8 + rjust(fitted(middle, dec, 8), 8) + " " + Screen.reset
       else " " * 17
     }
 
+  // A price at dec decimals, shortened by Trading.display when it is wider than width.
+  private def fitted(price: Double, dec: Int, width: Int): String =
+    val fixed = s"%.${dec}f".format(price)
+    if fixed.length <= width || !price.isFinite then fixed
+    else Trading.display(BigDecimal(price), width)
+
+  // The prices beside a small plot in width columns: the top, the middle and the bottom of the
+  // axis right aligned before a space, and the current price in bold with > after it on its row.
   def scaleRows(
       ax: Option[Axis],
       rows: Int,
       midRow: Option[Int],
-      mid: Option[String]
+      mid: Option[String],
+      width: Int
   ): Vector[String] =
-    ax.fold(Vector.fill(rows)(" " * Layout.scaleW)) { a =>
+    ax.fold(Vector.fill(rows)(" " * width)) { a =>
       val dec = decimals(a.hi)
       val middle = a.hi - (a.hi - a.lo) * (rows / 2) / (rows - 1).max(1)
       val labels = Map(0 -> a.hi, rows / 2 -> middle, rows - 1 -> a.lo)
       (0 until rows).toVector.map { row =>
         (midRow, mid) match
           case (Some(m), Some(text)) if m == row =>
-            Screen.bold + rjust("<" + text, Layout.scaleW) + Screen.reset
+            Screen.bold + rjust(text, width - 1) + ">" + Screen.reset
           case _ =>
-            labels
-              .get(row)
-              .fold(" " * Layout.scaleW)(v => rjust(s"%.${dec}f".format(v), Layout.scaleW))
+            labels.get(row).fold(" " * width) { v =>
+              rjust(fitted(v, dec, width - 1), width - 1) + " "
+            }
       }
     }
 

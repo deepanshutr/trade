@@ -476,8 +476,8 @@ class Playback:
             self.key("candles", b"c", contains("1m/candle"))
             self.key("line", b"c", contains("2s/col"))
             before = self.frames.complete[-1]
-            # The scrub step is a quarter of the 44 one second dots in the chart's old plot of 22
-            # cells at 100 columns.
+            # The scrub step is a quarter of the 46 one second dots in the plot of 23 cells at 100
+            # columns, rounded down.
             step = 11
             history = self.key("history back", ESC + b"[D", lambda f: history_matches(before, f, -step))
             self.key("history forward", ESC + b"[C",

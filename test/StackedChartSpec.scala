@@ -40,16 +40,18 @@ class StackedChartSpec extends munit.FunSuite:
     val end = mainEnd(full)
     assertEquals(withRefs.take(end + 1), withoutRefs.take(end + 1))
     val panels = withRefs.slice(end + 1, end + 7)
-    assert(panels.take(3).exists(_.slice(30, 91).trim.nonEmpty))
-    assert(panels.drop(3).exists(_.slice(30, 91).trim.nonEmpty))
-    assert(withoutRefs.slice(end + 1, end + 7).forall(_.slice(30, 91).trim.isEmpty))
+    assert(panels.take(3).exists(_.drop(38).trim.nonEmpty))
+    assert(panels.drop(3).exists(_.drop(38).trim.nonEmpty))
+    assert(withoutRefs.slice(end + 1, end + 7).forall(_.drop(38).trim.isEmpty))
     assert(panels.head.startsWith("BTC"))
     assert(panels(3).startsWith("PAXG"))
   }
 
   test("each reference uses its own axis and the shared window") {
     val s = Golden.snapshot
-    val count = Layout.dotCols(100)
+    // The chart area of 100 columns has a plot of 62 cells, 124 dots.
+    val count =
+      Layout.columnsIn(Layout.regions(100 + Layout.outlookWidth + 1, 30).plot, ChartMode.Line)
     val (first, z) = Chart.window(s, count, now)
     for coin <- references(s) do
       val ref = s.refs(coin)
@@ -74,7 +76,10 @@ class StackedChartSpec extends munit.FunSuite:
         )
       )
     val frame = draw(s)
-    assertEquals(frame.slice(13, 16).map(_.drop(91)), Vector("   3050.0", "    <2000", "    950.0"))
+    assertEquals(
+      frame.slice(13, 16).map(_.slice(30, 38)),
+      Vector(" 3050.0 ", "   2000>", "  950.0 ")
+    )
     val changedMain = draw(s.copy(samples = Vector(sec -> 9000.0)))
     assertEquals(frame.slice(13, 19), changedMain.slice(13, 19))
   }

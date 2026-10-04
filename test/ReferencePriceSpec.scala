@@ -29,14 +29,15 @@ class ReferencePriceSpec extends munit.FunSuite:
       )
     val frame = render(s)
     val first = frame.priceRows + 2
+    // The price column is the 8 columns after the label of 30, beside the plot.
     val btc = frame.lines
       .slice(first, first + 3)
-      .map(line => Chart.plain(line).takeRight(Layout.scaleW).trim)
+      .map(line => Chart.plain(line).slice(30, 38).trim)
     val gold = frame.lines
       .slice(first + 3, first + 6)
-      .map(line => Chart.plain(line).takeRight(Layout.scaleW).trim)
-    assertEquals(btc, Vector("242.00", "<210", "178.00"))
-    assertEquals(gold, Vector("2420.0", "<2100", "1780.0"))
+      .map(line => Chart.plain(line).slice(30, 38).trim)
+    assertEquals(btc, Vector("242.00", "210>", "178.00"))
+    assertEquals(gold, Vector("2420.0", "2100>", "1780.0"))
   }
 
   test("empty reference history never invents a current price") {
@@ -45,6 +46,6 @@ class ReferencePriceSpec extends munit.FunSuite:
     assert(
       frame.lines
         .slice(first, first + 6)
-        .forall(line => Chart.plain(line).takeRight(Layout.scaleW).trim.isEmpty)
+        .forall(line => Chart.plain(line).slice(30, 38).trim.isEmpty)
     )
   }

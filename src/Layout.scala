@@ -16,20 +16,15 @@ object Layout:
   val marketLabelWidth = 40
   val minCols = 100
   val minRows = 30
-  // The reference rows keep today's label of 30 and price column of 9 until they are replaced,
-  // and the scrub step still reads the plot width from them.
+  // The label of a reference row. Its prices take the rest of the left pane.
   val leftW = 30
   val barW = 21
-  val scaleW = 9
   val volRows = 1
   val referenceRows = 3
   val candleW = 4
   def workspaceMarketWidth(cols: Int): Int = (cols * 3 / 5).min(cols - 47)
   val outlookWidth = 38
   def workspaceChartWidth(cols: Int): Int = cols - outlookWidth - 1
-  def cells(cols: Int): Int = cols - leftW - scaleW
-  def dotCols(cols: Int): Int = cells(cols) * 2
-  def plotColumns(cols: Int, mode: ChartMode): Int = columnsIn(cells(cols), mode)
   // A line draws two dot columns in a cell and a candle takes four cells.
   def columnsIn(cells: Int, mode: ChartMode): Int = mode match
     case ChartMode.Line    => cells * 2
