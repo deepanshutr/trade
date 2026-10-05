@@ -877,7 +877,8 @@ class LimitPanelSpec extends munit.FunSuite:
       Workspace.closeRefused,
       Workspace.canceling,
       Workspace.cancelRefused,
-      TradingWorker.closeNextMessage
+      TradingWorker.closeNextMessage,
+      PropLedger.holds("PAXG")
     )
     // Prop market fills on the status row, at the largest amount a prop wallet can hold, whole.
     val fills = Vector(

@@ -39,6 +39,9 @@ object PropLedger:
   private val changed = "Prop canceled: account changed after review"
   private[desk] val unavailable = "Prop storage unavailable. Restart Desk"
   private val missing = "Prop order not found"
+  // Prop holds one market at a time. A ticket meets this, so it fits the panel's 38 columns for
+  // a market name of up to four letters.
+  private[desk] def holds(coin: String): String = "Prop holds " + coin + ". Return to that market"
 
   private def valid(order: PropOrder): Boolean =
     order.id.matches("0x[0-9a-f]{32}") && State.validMarket(order.coin) && order.price > 0 &&
@@ -99,10 +102,7 @@ object PropLedger:
     if !State.validMarket(plan.coin) then Left("Prop rejected: invalid market")
     else if q <= 0 || q > plan.quantity || value <= 0 then
       Left("Prop rejected: no valid fill at this limit")
-    else if saved.positions.keys.exists(_ != plan.coin) then
-      Left(
-        "Prop holds " + saved.positions.keys.head + ". Return to that market before opening another position"
-      )
+    else if saved.positions.keys.exists(_ != plan.coin) then Left(holds(saved.positions.keys.head))
     else
       val price = value / q
       val boundary = multiply(q, plan.limit)
@@ -214,12 +214,17 @@ final class PropLedger private[desk] (
         healthy = false
         Left("Prop storage failed. Restart to recover")
 
-  // A buy rests only when its value and maker fee fit the cash that other resting buys leave.
+  // An order rests only on the market prop holds, or on any market while it holds none, so it
+  // never rests to be cancelled at its fill. A buy rests only when its value and maker fee fit
+  // the cash that other resting buys leave.
   def checkResting(order: PropOrder, snapshot: PropAccount): Either[String, Unit] =
     val others = PropLedger.without(snapshot, order.id)
-    if order.side == Side.Sell || PropLedger.reservation(order) <= PropLedger.usable(others) then
-      Right(())
-    else Left(PropLedger.restingNoStables)
+    snapshot.positions.keys.find(_ != order.coin) match
+      case Some(held) => Left(PropLedger.holds(held))
+      case None       =>
+        if order.side == Side.Sell || PropLedger.reservation(order) <= PropLedger.usable(others)
+        then Right(())
+        else Left(PropLedger.restingNoStables)
 
   def rest(order: PropOrder, expectedCount: Long): Either[String, String] = synchronized {
     if !available then Left(PropLedger.unavailable)

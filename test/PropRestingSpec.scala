@@ -589,6 +589,35 @@ class PropRestingSpec extends TempDirectorySuite:
     }
   }
 
+  test("while prop holds another market a posted order is refused at preview and at rest") {
+    withFixture() { f =>
+      f.fill(Side.Buy, "109.22")
+      assert(f.held > 0)
+      f.worker.select("BTC")
+      f.worker.observe(
+        Event.BookUpdate(
+          "BTC",
+          Book(Vector(Level("60000", "1", 1)), Vector(Level("60001", "1", 1)), start + 50),
+          true
+        )
+      )
+      val held = Left("Prop holds XMR. Return to that market")
+      assertEquals(
+        f.worker
+          .preview(OrderIntent(Side.Buy, OrderKind.Hard, price = Some(d("59990"))), terms("60")),
+        held
+      )
+      val btc = PropOrder(id(1), "BTC", Side.Buy, d("59990"), d("0.001"), false, start)
+      assertEquals(f.ledger.rest(btc, f.ledger.account.count), held)
+      assertEquals(f.ledger.account.resting, Vector.empty)
+      // Back on the market it holds, a posted order rests as before.
+      f.worker.select("XMR")
+      f.book()
+      f.place(Side.Buy, "546.00", "109.20")
+      assertEquals(f.ledger.account.resting.map(_.coin), Vector("XMR"))
+    }
+  }
+
   test("a buy whose value and fee equal the usable cash rests and leaves none") {
     withFixture("109.21638") { f =>
       f.place(Side.Buy, "546.00", "109.20")
