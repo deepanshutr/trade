@@ -68,7 +68,8 @@ price can lie beyond it. It widens so an order just beyond the current price kee
 Marks are packed back from an edge, so none is left off while its side has a free
 row. When a side has more prices than rows, the farthest are left off and the status
 row reads `2 more above` or `2 more below`. An amount is faint while the account data
-is stale, or while a cancel of that row runs.
+is stale, while a cancel of that row runs, or after live trading stopped on a failure.
+Then the status row says to restart, and fills and cancels no longer show.
 
 The live position's liquidation price sits on the axis too, but it never widens the
 range. Beyond the range it sits on the nearest edge row, with `'` below the range or `,`
@@ -125,7 +126,7 @@ Size $10.98 of $21.84 held  fee $0.01
 | 6 | The order type, the orders on the axis, the sound and Desk's resting orders on other markets, such as `1 on BTC` |
 | 7 | The two trade buttons |
 | 8 to 11 | The ticket or the mode confirmation. Otherwise a long status wraps onto them |
-| 12 | The mode keys, the market key and the chart key |
+| 12 | The mode keys, the market key and the chart key. In prop and view, the live orders still resting when live last ran, such as `3 live`, in place of the chart key |
 
 A long key name on row 6 drops the count first, then the sound.
 
@@ -139,8 +140,14 @@ The status row names Desk's own outcomes with their dollars and a result number:
 | `XMR canceled $16.38 at 546.09`, or a cancel by the venue | `Canceled $16.38 #10` |
 | `XMR canceled before sending` | `Not sent #11` |
 | `XMR canceling 1 of 3`, while a cancel runs | `Canceling` |
+| CLOSE pressed while a cancel runs | `Close goes after this cancel` |
+| Esc or settings while that CLOSE waits | `Close withdrawn` |
 | `XMR cancel rejected` | `Cancel refused #12` |
 | `XMR order rejected. Resting reduce orders may block it, press o` | `Close refused. Press o for orders #13` |
+
+Outcomes that land together, such as two venue cancels from one CLOSE, each take their
+own number and their own line in the order result log, in order. The status row keeps
+the last, with its number. Desk keeps the last 50 outcomes for this.
 
 A prop market fill reads `Bought $20.00 #14` or `Sold $20.00 #15`, the money it put up
 at the fill price, and `Part filled` when the depth held less. Its full text, such as
@@ -269,9 +276,9 @@ the button still shows the same label.
 
 REDUCE only shrinks the position and stops at flat. It never opens the other side.
 To turn a long into a short, press CLOSE, then SHORT. For 2 seconds after a REDUCE or
-CLOSE finishes, or after a resting order fills and shrinks the position, real trading
-refuses any order that would open or grow a position, with the notice "Opening paused
-for 2 s after closing". The pause stops only new sends. An order already resting fills
+CLOSE finishes, or after a resting order fills in whole or in part and shrinks the
+position, real trading refuses any order that would open or grow a position, with the
+notice "Opening paused for 2 s after closing". The pause stops only new sends. An order already resting fills
 whenever the market reaches it. Prop pauses only after a CLOSE or a resting sell fill.
 
 CLOSE sits on row 5 after the two amounts. Press `x`, click it, or press Enter on the
@@ -280,8 +287,9 @@ the position puts up, for example `x Close $21.84`, or `x Close --` while the le
 is unknown. On a narrow row the label drops the amount. It is enabled in live and prop
 with ready account data and a fresh nonzero position, while no order is pending or
 saved, no mode confirmation or market prompt is open, no market change is pending,
-and the heading fits the row. Otherwise it reads `x Close` and is faint. With ready
-account data and no position, `x` shows "Not sent: controls changed". A close that
+and the heading fits the row. Otherwise it reads `x Close` and is faint. In live, `x`
+pressed while a row cancel runs still acts: CLOSE goes after the current cancel. With
+ready account data and no position, `x` shows "Not sent: controls changed". A close that
 fills in part leaves the rest open. Press CLOSE again. In prop, CLOSE sells the whole
 holding at once with the prop fee. CLOSE never cancels a resting order. See
 [CLOSE and resting orders](trading.md#close-and-resting-orders). In view `x` answers

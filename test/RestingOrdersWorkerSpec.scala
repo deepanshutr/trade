@@ -134,6 +134,8 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     @volatile var openOrders: Option[ujson.Value] = Some(ujson.Arr())
     @volatile var cancels: String => Option[ujson.Value] = _ => Some(cancelReply("success"))
     @volatile var inGate = false
+    // Makes every journal write fail, as a full disk would.
+    @volatile var failWrites = false
     @volatile var orders: OrderEvent => Unit = _ => ()
     @volatile var journal: OrderJournal = null
     // Holds the first account read when asked, so a test acts while the position is unknown.
@@ -304,8 +306,10 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
         journal = OrderJournal.open(
           directory,
           config.identity,
-          beforeReplace =
-            () => record.synchronized { writersSeen += Thread.currentThread().getName }
+          beforeReplace = () => {
+            if failWrites then throw new java.io.IOException("disk full")
+            record.synchronized { writersSeen += Thread.currentThread().getName }
+          }
         )
         journal
       },
@@ -583,7 +587,12 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       f.ready()
       f.orderError = Some("Post only order would have immediately matched, bbo was 546.09@546.10")
       assert(f.press(f.priced(Side.Buy, "546.09")))
-      Wait.until("rejection not shown")(f.worker.view.outcome.contains("XMR order rejected"))
+      Wait.until("rejection not shown")(
+        f.worker.view.outcome.contains(
+          "XMR order rejected | venue: Post only order would have immediately matched, " +
+            "bbo was 546.09@546.10"
+        )
+      )
       assertEquals(f.journal.pending, None)
       assertEquals(f.resting.size, 1)
       f.ready()
@@ -591,10 +600,47 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       assert(f.press(OrderIntent(Side.Sell, OrderKind.Close)))
       Wait.until("close rejection not shown")(
         f.worker.view.outcome.contains(
-          "XMR order rejected. Resting reduce orders may block it, press o"
+          "XMR order rejected. Resting reduce orders may block it, press o | venue: " +
+            "Reduce only order would increase position"
         )
       )
       assertEquals(f.cancelPosts, Vector.empty)
+    }
+  }
+
+  test("the CLOSE refusal is shown only for an immediate CLOSE while reduce only orders rest") {
+    // A REDUCE ticket whose free remainder is under $10 becomes a posted plan of kind Close.
+    using(new Fixture(Vector(Seed(Side.Sell, "0.01", "560", 5L, reduceOnly = true)))) { f =>
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      val ticket = f.priced(Side.Sell, "546.20")
+      val plan = f.worker.preview(ticket, f.terms).toOption.get
+      assertEquals((plan.kind, plan.post, plan.reduceOnly), (OrderKind.Close, true, true))
+      f.orderError = Some("Post only order would have immediately matched")
+      assert(f.press(ticket))
+      Wait.until("rejection not shown")(f.worker.view.outcome.nonEmpty)
+      assertEquals(
+        f.worker.view.outcome,
+        Some("XMR order rejected | venue: Post only order would have immediately matched")
+      )
+    }
+    // An immediate CLOSE with an entry resting here and a reduce only order on another market.
+    val seeds = Vector(
+      Seed(Side.Buy, "0.183", "540", 5L),
+      Seed(Side.Sell, "0.001", "99000", 6L, coin = "BTC", reduceOnly = true)
+    )
+    using(new Fixture(seeds)) { f =>
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      f.orderError = Some("Reduce only order would increase position")
+      assert(f.press(OrderIntent(Side.Sell, OrderKind.Close)))
+      Wait.until("rejection not shown")(f.worker.view.outcome.nonEmpty)
+      assertEquals(
+        f.worker.view.outcome,
+        Some("XMR order rejected | venue: Reduce only order would increase position")
+      )
     }
   }
 
@@ -731,6 +777,36 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     }
   }
 
+  test("a fatal worker dims the amounts and the status row keeps the restart text") {
+    using(new Fixture(Vector(Seed(Side.Buy, "0.2", "546.09", 5L)))) { f =>
+      f.ready()
+      assert(!f.worker.view.stale)
+      f.failWrites = true
+      f.push(ws(f.seeded.head, "open", "0.15", venueTime))
+      Wait.until("storage failure not shown")(
+        f.worker.view.block.contains(TradingWorker.storageFailedMessage)
+      )
+      // Account reads and active data go on, but fills are no longer applied.
+      f.refreshes()
+      val view = f.worker.view
+      assert(view.stale, "a fatal worker drew its orders as current")
+      val frame = Workspace.draw(
+        Snapshot.initial("XMR", 0L),
+        view,
+        PanelView(mode = "LIVE"),
+        100,
+        30,
+        0L,
+        java.time.ZoneOffset.UTC,
+        Style.mono
+      )
+      assertEquals(
+        Chart.plain(frame.lines(30 - 12 + 3)).take(38).trim,
+        TradingWorker.storageFailedMessage
+      )
+    }
+  }
+
   // Test 10: order updates.
 
   test("a partial fill updates the remaining size and the text and marks the fill") {
@@ -789,6 +865,63 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     }
   }
 
+  test("a reducing partial fill refuses an opening preview for 2 seconds") {
+    // Long 0.2 with an unflagged sell of 0.5 resting, which reads flip. A sweep fills 0.3 of it.
+    using(new Fixture(Vector(Seed(Side.Sell, "0.5", "550", 5L)))) { f =>
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      f.push(ws(f.seeded.head, "open", "0.2", venueTime))
+      Wait.until("partial fill not applied")(f.resting.head.remaining.contains("0.2"))
+      val paused = Left(TradingWorker.openingPausedMessage)
+      assertEquals(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms), paused)
+      // The account now reads short 0.1, so a sell opens.
+      f.position = "-0.1"
+      Wait.until("short position not read")(
+        f.worker.view.position.contains(BigDecimal("-0.1"))
+      )
+      val opening = OrderIntent(Side.Sell, OrderKind.Hard)
+      assertEquals(f.worker.preview(opening, f.terms), paused)
+      f.clock.addAndGet(TradingWorker.openingPauseMs - 1)
+      f.book("546.09", "546.10", 3000L)
+      assertEquals(f.worker.preview(opening, f.terms), paused)
+      f.clock.addAndGet(1L)
+      f.book("546.09", "546.10", 3001L)
+      f.ready()
+      assert(f.worker.preview(opening, f.terms).isRight)
+    }
+  }
+
+  test("a lookup or an open orders read that shrinks a facing order starts the pause") {
+    val seed = Vector(Seed(Side.Sell, "0.5", "550", 5L))
+    using(new Fixture(seed, firstReadHeld = true)) { f =>
+      f.position = "0.2"
+      f.statuses.put(f.seeded.head.id, lookupReply(f.seeded.head, "open", "0.2"))
+      f.firstHold.open()
+      Wait.until("looked up size not applied")(
+        f.resting.headOption.exists(_.remaining.contains("0.2"))
+      )
+      f.ready()
+      assertEquals(
+        f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms),
+        Left(TradingWorker.openingPausedMessage)
+      )
+    }
+    using(new Fixture(seed)) { f =>
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms).isRight)
+      f.openOrders = Some(ujson.Arr(listed(f.seeded.head, "0.2")))
+      f.opened()
+      Wait.until("lower open size not applied")(f.resting.head.remaining.contains("0.2"))
+      assertEquals(
+        f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms),
+        Left(TradingWorker.openingPausedMessage)
+      )
+    }
+  }
+
   test("venue cancels settle with their own texts") {
     val seeds = Vector(
       Seed(Side.Buy, "0.183", "546.09", 5L),
@@ -809,6 +942,71 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
         Some("XMR canceled by the venue $16.38 at 546.09 (reduceOnlyCanceled)")
       )
       assertEquals(f.worker.view.fills, Vector.empty)
+    }
+  }
+
+  test("two settles in one batch reach the result log as two lines and the status row in turn") {
+    val seeds = Vector(
+      Seed(Side.Buy, "0.183", "546.09", 5L),
+      Seed(Side.Sell, "0.2", "546.09", 6L, remaining = Some("0.15"), reduceOnly = true)
+    )
+    using(new Fixture(seeds)) { f =>
+      f.ready()
+      // The status row of each result as the controller records it, drawn on a ready panel.
+      val drawnReady = TradingView("XMR", message = "Ready", ready = true)
+      var log = Vector.empty[(Long, String)]
+      var rows = Vector.empty[String]
+      lazy val controller: DeskController = new DeskController(
+        PanelView(mode = "LIVE"),
+        () => f.clock.get(),
+        f.worker.preview,
+        f.worker.submitReviewed,
+        _ => Left("no mode switch"),
+        result = (number, text) => {
+          log :+= ((number, text))
+          val frame = Workspace.draw(
+            Snapshot.initial("XMR", 0L),
+            drawnReady,
+            controller.panel,
+            100,
+            30,
+            0L,
+            java.time.ZoneOffset.UTC,
+            Style.mono
+          )
+          rows :+= Chart.plain(frame.lines(30 - 12 + 3)).take(38).trim
+        }
+      )
+      controller.orders(f.worker.view)
+      f.push(
+        ws(f.seeded(0), "selfTradeCanceled", "0.183", venueTime),
+        ws(f.seeded(1), "reduceOnlyCanceled", "0.15", venueTime)
+      )
+      Wait.until("both settles not applied")(f.resting.isEmpty)
+      controller.orders(f.worker.view)
+      controller.orders(f.worker.view)
+      assertEquals(
+        log,
+        Vector(
+          (1L, "XMR resting buy $19.99 at 546.09 canceled by self-trade prevention"),
+          (2L, "XMR canceled by the venue $16.38 at 546.09 (reduceOnlyCanceled)")
+        )
+      )
+      assertEquals(rows, Vector("Canceled $19.99 #1", "Canceled $16.38 #2"))
+    }
+  }
+
+  test("the worker keeps the last 50 outcomes with rising ids") {
+    using(new Fixture(Vector(Seed(Side.Buy, "1", "546.09", 5L)))) { f =>
+      f.ready()
+      val order = f.seeded.head
+      f.push((1 to 60).map(i => ws(order, "open", (1 - BigDecimal(i) / 1000).toString, i))*)
+      Wait.until("part fills not applied")(f.resting.head.remaining.contains("0.94"))
+      val view = f.worker.view
+      assertEquals(view.outcomes.size, 50)
+      assertEquals(view.outcomes.map(_._1), view.outcomes.map(_._1).sorted.distinct)
+      assertEquals(view.outcomes.last, (view.outcomeId, view.outcome.get))
+      assertEquals(view.outcomes.head._2, "XMR part filled $0.11 of $109.22 at 546.09")
     }
   }
 
@@ -1213,6 +1411,175 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       Wait.until("order not settled as not found")(f.resting.isEmpty)
       assertEquals(f.worker.view.outcome, Some("XMR $21.84 at 546.09 not found at the venue"))
       assertEquals(f.worker.view.notFoundOrders, 1L)
+      // An order settled as not found is not remembered, so its later fill is named and counted.
+      f.push(ws(f.seeded.head, "filled", "0", venueTime))
+      Wait.until("late fill of a not found order not counted")(
+        f.worker.view.ignoredOrderUpdates == 1L
+      )
+      assertEquals(f.worker.view.outcome, Some("XMR filled $21.84 at 546.09 after release"))
+    }
+  }
+
+  // Test 11b: a lost post only order.
+
+  // Presses a limit buy at 546.09 whose reply is lost and walks it to its release: past the
+  // margin, an open orders read that misses it, then three unknownOid answers ten seconds apart.
+  // The open orders read lists only the given orders.
+  private def releaseLost(
+      f: Fixture,
+      listedOrders: Vector[ujson.Value] = Vector.empty
+  ): SavedOrder =
+    f.ready()
+    f.lostOrders = true
+    assert(f.press(f.priced(Side.Buy, "546.09")))
+    Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+    val pending = f.journal.pending.get
+    assert(pending.post)
+    // A refresh sees the order before time moves on, as one does every second.
+    f.refreshes()
+    f.openOrders = Some(ujson.Arr.from(listedOrders))
+    // Past the signed expiry plus the margin and 65 s after the reservation.
+    f.clock.set(pending.expiresAfter + Exchange.ExpiryMarginMs + 1)
+    Wait.until("open orders not read past the margin")(f.openReads.get() >= 1)
+    f.refreshes()
+    f.refreshes()
+    assertEquals(f.journal.pending.map(_.id), Some(pending.id), "released on one unknownOid")
+    f.clock.addAndGet(10000L)
+    f.refreshes()
+    assertEquals(f.journal.pending.map(_.id), Some(pending.id), "released on two unknownOid")
+    f.clock.addAndGet(10000L)
+    Wait.until("lost post only order not released")(f.journal.pending.isEmpty)
+    assertEquals(f.worker.view.outcome, Some("XMR not placed"))
+    pending
+
+  test("a lost post only order waits for the resting bound and its late fill is named") {
+    // A Desk order resting at the same price and size is not the lost one, so its listing
+    // does not hold the lost order back.
+    using(new Fixture(Vector(Seed(Side.Buy, "0.183", "546.09", 5L)))) { f =>
+      val pending = releaseLost(f, Vector(listed(f.seeded.head, "0.183")))
+      assertEquals(f.resting.map(_.id), Vector(f.seeded.head.id))
+      assertEquals(f.worker.view.ignoredOrderUpdates, 0L)
+      f.push(ws(pending.id, Side.Buy, "546.09", "0.183", 4242L, "filled", "0", venueTime))
+      Wait.until("late fill not counted")(f.worker.view.ignoredOrderUpdates == 1L)
+      assertEquals(f.worker.view.outcome, Some("XMR filled $19.99 at 546.09 after release"))
+      assert(
+        f.worker.view.fills
+          .contains(Fill("XMR", Side.Buy, venueTime, BigDecimal("546.09"), BigDecimal("0.183")))
+      )
+      assertEquals(f.resting.map(_.id), Vector(f.seeded.head.id))
+    }
+  }
+
+  test("an open orders read listing a lost post only order holds its release") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+      val pending = f.journal.pending.get
+      f.refreshes()
+      // A partly filled order lists a smaller size, and still holds the release.
+      f.openOrders = Some(ujson.Arr(listed(pending.copy(oid = Some(4242L)), "0.1")))
+      f.clock.set(pending.expiresAfter + Exchange.ExpiryMarginMs + 1)
+      Wait.until("open orders not read past the margin")(f.openReads.get() >= 1)
+      for _ <- 1 to 4 do
+        f.refreshes()
+        f.clock.addAndGet(10000L)
+      f.refreshes()
+      assertEquals(f.journal.pending.map(_.id), Some(pending.id))
+    }
+  }
+
+  test("an open orders read before the margin does not count toward the release") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+      val pending = f.journal.pending.get
+      f.refreshes()
+      // A socket open reads the open orders just before the margin. The order is missing.
+      f.clock.set(70000L)
+      f.opened()
+      Wait.until("open orders not read on the socket open")(f.openReads.get() == 1)
+      // Past the margin the read runs again at once and lists the order, so nothing counts.
+      f.openOrders = Some(ujson.Arr(listed(pending.copy(oid = Some(4242L)), "0.183")))
+      f.clock.set(75001L)
+      Wait.until("open orders not read at the margin")(f.openReads.get() == 2)
+      f.refreshes()
+      f.clock.set(85001L)
+      f.refreshes()
+      f.clock.set(95001L)
+      f.refreshes()
+      f.refreshes()
+      assertEquals(f.journal.pending.map(_.id), Some(pending.id))
+      // The next minute read misses it, and three spaced answers then release it.
+      f.openOrders = Some(ujson.Arr())
+      f.clock.set(135002L)
+      Wait.until("minute read missing")(f.openReads.get() == 3)
+      f.refreshes()
+      f.clock.set(145002L)
+      f.refreshes()
+      f.clock.set(155002L)
+      Wait.until("lost post only order not released")(f.journal.pending.isEmpty)
+      assertEquals(f.worker.view.outcome, Some("XMR not placed"))
+    }
+  }
+
+  test("a lost posted order is read at once past the margin and released 85 s after sending") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+      val pending = f.journal.pending.get
+      assertEquals(pending.createdAt, 10000L)
+      f.refreshes()
+      // The minute read lands just before the margin and cannot count.
+      f.clock.set(70001L)
+      Wait.until("minute read missing")(f.openReads.get() == 1)
+      f.refreshes()
+      // Past the margin the next read runs at once, not a minute later.
+      f.clock.set(75001L)
+      Wait.until("open orders not read at the margin")(f.openReads.get() == 2)
+      f.refreshes()
+      f.clock.set(85001L)
+      f.refreshes()
+      assertEquals(f.journal.pending.map(_.id), Some(pending.id))
+      assert(f.worker.view.pending, "trading was free while the order was pending")
+      f.clock.set(95001L)
+      Wait.until("lost post only order not released 85 s after sending")(
+        f.journal.pending.isEmpty
+      )
+      assertEquals(f.worker.view.outcome, Some("XMR not placed"))
+    }
+  }
+
+  test("a late open update for a released order rests again in the list and the journal") {
+    using(new Fixture()) { f =>
+      val pending = releaseLost(f)
+      f.push(ws(pending.id, Side.Buy, "546.09", "0.183", 4242L, "open", "0.15", venueTime))
+      Wait.until("late open order not adopted")(f.resting.size == 1)
+      val adopted = f.resting.head
+      assertEquals(
+        (adopted.id, adopted.oid, adopted.remaining, adopted.post),
+        (pending.id, Some(4242L), Some("0.15"), true)
+      )
+      assertEquals(f.worker.view.outcome, Some("XMR resting $16.38 at 546.09 after release"))
+      assertEquals(f.worker.view.ignoredOrderUpdates, 1L)
+      // From here its updates apply as any resting order's.
+      f.push(ws(adopted, "filled", "0", venueTime + 1))
+      Wait.until("adopted order fill not applied")(f.resting.isEmpty)
+      assertEquals(f.worker.view.outcome, Some("XMR filled $16.38 at 546.09"))
+      assertEquals(f.worker.view.ignoredOrderUpdates, 1L)
+    }
+    // A venue size above the order's own never shows more than Desk placed.
+    using(new Fixture()) { f =>
+      val pending = releaseLost(f)
+      f.push(ws(pending.id, Side.Buy, "546.09", "0.183", 4242L, "open", "0.2", venueTime))
+      Wait.until("late open order not adopted")(f.resting.size == 1)
+      assertEquals(f.resting.head.remaining, Some("0.183"))
+      assertEquals(f.worker.view.outcome, Some("XMR resting $19.99 at 546.09 after release"))
     }
   }
 
@@ -1242,11 +1609,9 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     using(new Fixture(seeds)) { f =>
       val Vector(a, b, c) = f.seeded
       f.ready()
-      f.statuses.put(b.id, lookupReply(b, "canceled", "0.15"))
-      f.cancels = cloid =>
-        if cloid == a.id then Some(cancelReply("success"))
-        else if cloid == b.id then Some(cancelReply(gone))
-        else None
+      f.statuses.put(c.id, lookupReply(c, "canceled", "0.2"))
+      f.cancels =
+        cloid => if cloid == c.id then Some(cancelReply(gone)) else Some(cancelReply("success"))
       val hold = new Hold
       f.cancelHolds.put(b.id, hold)
       val entries = f.gateEntries.get()
@@ -1263,9 +1628,97 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       assert(sent.forall(_("cancels").arr.size == 1))
       assertEquals(f.postedInGate, Vector(true, true, true))
       assertEquals(f.gateEntries.get() - entries, 3)
-      assertEquals(f.lookups.drop(3), Vector(b.id, c.id))
-      assertEquals(f.resting.map(_.id), Vector(c.id))
+      assertEquals(f.lookups.drop(3), Vector(c.id))
+      assertEquals(f.resting, Vector.empty)
       assertEquals(f.worker.view.resting.filter(_.cancelling), Vector.empty)
+    }
+  }
+
+  test("a row cancel stops at the first cancel without a clear success and leaves the rest") {
+    val seeds = Vector(
+      Seed(Side.Buy, "0.2", "540", 5L),
+      Seed(Side.Buy, "0.15", "541", 6L),
+      Seed(Side.Buy, "0.2", "542", 7L)
+    )
+    using(new Fixture(seeds)) { f =>
+      val Vector(a, b, c) = f.seeded
+      Wait.until("start lookups missing")(f.lookups.size == 3)
+      f.ready()
+      // The venue answers b with an error and its lookup finds it canceled. The loop still
+      // stops, since the reply itself was not a clear success.
+      f.statuses.put(b.id, lookupReply(b, "canceled", "0.15"))
+      f.cancels =
+        cloid => if cloid == b.id then Some(cancelReply(gone)) else Some(cancelReply("success"))
+      assert(f.worker.cancel(Vector(a.id, b.id, c.id)))
+      Wait.until("cancel request never finished")(!f.worker.view.pending)
+      def cloids = f.cancelPosts.map(_("action")("cancels")(0)("cloid").str)
+      assertEquals(cloids, Vector(a.id, b.id))
+      assertEquals(f.resting.map(_.id), Vector(c.id))
+      // No reply at all stops it the same way.
+      f.cancels = _ => None
+      f.ready()
+      assert(f.worker.cancel(Vector(c.id)))
+      Wait.until("cancel request never finished")(!f.worker.view.pending)
+      assertEquals(f.worker.view.outcome, Some("XMR cancel result unknown"))
+      assertEquals(f.resting.map(_.id), Vector(c.id))
+      f.cancels = _ => Some(cancelReply("success"))
+      f.ready()
+      assert(f.worker.cancel(Vector(c.id)))
+      Wait.until("the next Enter did not cancel the rest")(f.resting.isEmpty)
+      assertEquals(cloids, Vector(a.id, b.id, c.id, c.id))
+    }
+  }
+
+  test("a CLOSE pressed during a three order cancel is sent after the current cancel") {
+    val seeds = Vector(
+      Seed(Side.Buy, "0.1", "540", 5L),
+      Seed(Side.Buy, "0.1", "541", 6L),
+      Seed(Side.Buy, "0.1", "542", 7L)
+    )
+    using(new Fixture(seeds)) { f =>
+      val Vector(a, b, c) = f.seeded
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      val controller = new DeskController(
+        PanelView(mode = "LIVE", terms = f.terms),
+        () => f.clock.get(),
+        f.worker.preview,
+        f.worker.submitReviewed,
+        _ => Left("no mode switch"),
+        cancel = f.worker.cancel,
+        closeFirst = f.worker.closeFirst
+      )
+      val hold = new Hold
+      f.cancelHolds.put(a.id, hold)
+      assert(f.worker.cancel(Vector(a.id, b.id, c.id)))
+      hold.await()
+      val running = f.worker.view
+      assert(running.pending && !running.ready)
+      // The frame drawn while the cancel runs shows CLOSE faint, as the panel draws it.
+      val close = DeskButton("x Close", DeskAction.Close, 0, 23, 9)
+      controller.publish(
+        WorkspaceFrame(Vector.empty, Vector.empty, "XMR", 120, 40, "LIVE", None, Vector(close))
+      )
+      val snapshot = Snapshot.initial("XMR", f.clock.get())
+      assert(controller.handle(Command.Close, snapshot, running, (120, 40), false))
+      assertEquals(f.worker.view.message, TradingWorker.closeNextMessage)
+      assertEquals(f.orderPosts, Vector.empty)
+      hold.open()
+      // The render pass hands each view to the controller, which sends CLOSE once live is ready.
+      Wait.until("CLOSE was not sent after the current cancel") {
+        controller.orders(f.worker.view)
+        f.orderPosts.nonEmpty
+      }
+      Wait.until("CLOSE did not finish")(!f.worker.view.pending)
+      assertEquals(f.posts.map(_("action")("type").str), Vector("cancelByCloid", "order"))
+      assertEquals(f.cancelPosts.map(_("action")("cancels")(0)("cloid").str), Vector(a.id))
+      val sent = f.orderPosts.head("action")("orders")(0)
+      assertEquals(sent("b").bool, false)
+      assertEquals(sent("r").bool, true)
+      assertEquals(sent("s").str, "0.2")
+      assertEquals(sent("t")("limit")("tif").str, "Ioc")
+      assertEquals(f.resting.map(_.id), Vector(b.id, c.id))
     }
   }
 
@@ -1321,12 +1774,13 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       Wait.until("cancel request never finished")(!f.worker.view.pending)
       assertEquals(f.lookups.drop(2), Vector(a.id))
       assertEquals(f.resting.map(_.id), Vector(b.id))
-      assertEquals(f.worker.view.outcome, Some("XMR canceled $21.60 at 540"))
+      val named = " | venue: Something the docs never named"
+      assertEquals(f.worker.view.outcome, Some("XMR canceled $21.60 at 540" + named))
       assert(f.worker.cancel(Vector(b.id)))
       Wait.until("cancel request never finished")(!f.worker.view.pending)
       assertEquals(f.lookups.drop(2), Vector(a.id, b.id))
       assertEquals(f.resting.map(_.id), Vector(b.id))
-      assertEquals(f.worker.view.outcome, Some("XMR cancel rejected"))
+      assertEquals(f.worker.view.outcome, Some("XMR cancel rejected" + named))
     }
   }
 
@@ -1424,6 +1878,256 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       )
       assertEquals(f.posts.size, 1)
     }
+  }
+
+  test("Esc withdraws a CLOSE waiting on a cancel, and the other cancels stay unsent") {
+    val seeds = Vector(
+      Seed(Side.Buy, "0.1", "540", 5L),
+      Seed(Side.Buy, "0.1", "541", 6L),
+      Seed(Side.Buy, "0.1", "542", 7L)
+    )
+    using(new Fixture(seeds)) { f =>
+      val Vector(a, b, c) = f.seeded
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      val controller = new DeskController(
+        PanelView(mode = "LIVE", terms = f.terms),
+        () => f.clock.get(),
+        f.worker.preview,
+        f.worker.submitReviewed,
+        _ => Left("no mode switch"),
+        cancel = f.worker.cancel,
+        closeFirst = f.worker.closeFirst,
+        withdrawClose = f.worker.withdrawClose
+      )
+      val hold = new Hold
+      f.cancelHolds.put(a.id, hold)
+      assert(f.worker.cancel(Vector(a.id, b.id, c.id)))
+      hold.await()
+      val close = DeskButton("x Close", DeskAction.Close, 0, 23, 9)
+      controller.publish(
+        WorkspaceFrame(Vector.empty, Vector.empty, "XMR", 120, 40, "LIVE", None, Vector(close))
+      )
+      val snapshot = Snapshot.initial("XMR", f.clock.get())
+      assert(controller.handle(Command.Close, snapshot, f.worker.view, (120, 40), false))
+      assertEquals(f.worker.view.message, TradingWorker.closeNextMessage)
+      assert(controller.handle(Command.Cancel, snapshot, f.worker.view, (120, 40), false))
+      assertEquals(f.worker.view.message, TradingWorker.closeWithdrawnMessage)
+      hold.open()
+      Wait.until("cancel did not finish")(!f.worker.view.pending)
+      f.refreshes()
+      f.ready()
+      controller.orders(f.worker.view)
+      controller.orders(f.worker.view)
+      assertEquals(f.orderPosts, Vector.empty)
+      assertEquals(f.cancelPosts.map(_("action")("cancels")(0)("cloid").str), Vector(a.id))
+      assertEquals(f.resting.map(_.id), Vector(b.id, c.id))
+    }
+  }
+
+  // R4j. A loop that ended leaves no cancel for a later CLOSE to wait on.
+  test("CLOSE waits on a cancel only while one runs") {
+    val seeds = Vector(Seed(Side.Buy, "0.1", "540", 5L), Seed(Side.Buy, "0.1", "541", 6L))
+    using(new Fixture(seeds)) { f =>
+      f.ready()
+      assert(!f.worker.closeFirst())
+      val hold = new Hold
+      f.cancelHolds.put(f.seeded(0).id, hold)
+      assert(f.worker.cancel(Vector(f.seeded(0).id)))
+      hold.await()
+      assert(f.worker.closeFirst())
+      hold.open()
+      Wait.until("cancel request never finished")(!f.worker.view.pending)
+      assert(!f.worker.closeFirst(), "a finished loop still took CLOSE")
+      f.ready()
+      assert(f.worker.cancel(Vector(f.seeded(1).id)))
+      Wait.until("second cancel not settled")(f.resting.isEmpty)
+      assert(!f.worker.closeFirst())
+    }
+  }
+
+  // R2e. The lookup that moves a lost order into resting at a smaller size found a part fill.
+  test("a lost order that rests at a smaller size starts the opening pause") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+      val pending = f.journal.pending.get
+      assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms).isRight)
+      f.statuses.put(pending.id, lookupReply(pending.copy(oid = Some(4242L)), "open", "0.1"))
+      Wait.until("venue size not applied")(
+        f.resting.headOption.exists(_.remaining.contains("0.1"))
+      )
+      assertEquals(
+        f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms),
+        Left(TradingWorker.openingPausedMessage)
+      )
+    }
+  }
+
+  // R3d. A listing starts the count of unknownOid answers again.
+  test("a listing after a counted answer starts the count of a lost posted order again") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+      val pending = f.journal.pending.get
+      f.refreshes()
+      f.clock.set(70001L)
+      Wait.until("minute read missing")(f.openReads.get() == 1)
+      f.refreshes()
+      // Past the margin the read misses it and the next lookup counts one answer.
+      f.clock.set(75001L)
+      Wait.until("open orders not read at the margin")(f.openReads.get() == 2)
+      f.refreshes()
+      // A socket open reads again, and this time the venue lists the order.
+      f.openOrders = Some(ujson.Arr(listed(pending.copy(oid = Some(4242L)), "0.183")))
+      f.opened()
+      Wait.until("open orders not read on the socket open")(f.openReads.get() == 3)
+      f.refreshes()
+      f.clock.set(85001L)
+      f.refreshes()
+      f.clock.set(95001L)
+      f.refreshes()
+      f.refreshes()
+      assertEquals(f.journal.pending.map(_.id), Some(pending.id))
+    }
+  }
+
+  // R3h. Only an order at the lost order's own limit can be it.
+  test("a listing at another limit does not hold a lost posted order") {
+    val elsewhere = ujson.Obj(
+      "coin" -> "XMR",
+      "limitPx" -> "546.08",
+      "oid" -> ujson.Num(999.0),
+      "side" -> "B",
+      "sz" -> "0.183",
+      "timestamp" -> ujson.Num(1699999990000.0)
+    )
+    using(new Fixture()) { f =>
+      val pending = releaseLost(f, Vector(elsewhere))
+      assertEquals(f.journal.pending, None)
+      assertEquals(f.worker.view.outcome, Some("XMR not placed"))
+      assert(pending.post)
+    }
+  }
+
+  // R3m. A late fill counts as any fill: one that faced the stamped position pauses.
+  test("a late fill of a released order that faced the position starts the pause") {
+    using(new Fixture(Vector(Seed(Side.Sell, "0.1", "550", 5L)))) { f =>
+      f.position = "0.2"
+      Wait.until("start lookup missing")(f.lookups.size == 1)
+      f.opened()
+      Wait.until("open orders not read")(f.openReads.get() == 1)
+      f.clock.set(20000L)
+      Wait.until("second lookup missing")(f.lookups.size == 2)
+      f.clock.set(70001L)
+      Wait.until("third lookup missing")(f.lookups.size == 3)
+      f.clock.set(80001L)
+      Wait.until("fourth lookup missing")(f.lookups.size == 4)
+      f.clock.set(90001L)
+      Wait.until("order not settled as not found")(f.resting.isEmpty)
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.book("546.09", "546.10", 5000L)
+      val opening = OrderIntent(Side.Buy, OrderKind.Hard)
+      assert(f.worker.preview(opening, f.terms).isRight)
+      f.push(ws(f.seeded.head, "filled", "0", venueTime))
+      Wait.until("late fill not counted")(f.worker.view.ignoredOrderUpdates == 1L)
+      assertEquals(f.worker.preview(opening, f.terms), Left(TradingWorker.openingPausedMessage))
+    }
+  }
+
+  // R3n. A lost order's count never carries into its life as a resting order.
+  test("a lost posted order that rests starts with no count") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+      val pending = f.journal.pending.get
+      f.refreshes()
+      f.clock.set(75001L)
+      Wait.until("open orders not read past the margin")(f.openReads.get() >= 1)
+      f.refreshes()
+      f.refreshes()
+      f.clock.set(85001L)
+      f.refreshes()
+      assertEquals(f.journal.pending.map(_.id), Some(pending.id))
+      // Two answers counted. The order then turns up resting.
+      f.statuses.put(pending.id, lookupReply(pending.copy(oid = Some(4242L)), "open", "0.183"))
+      Wait.until("lost order did not rest")(f.resting.size == 1)
+      f.statuses.remove(pending.id)
+      f.clock.set(95001L)
+      f.refreshes()
+      f.refreshes()
+      assertEquals(f.resting.map(_.id), Vector(pending.id))
+      assertEquals(f.worker.view.notFoundOrders, 0L)
+    }
+  }
+
+  test("the venue's own rejection words reach the order result log line") {
+    using(new Fixture(Vector(Seed(Side.Buy, "0.2", "540", 5L)))) { f =>
+      f.ready()
+      val drawnReady = TradingView("XMR", message = "Ready", ready = true)
+      var log = Vector.empty[(Long, String)]
+      var rows = Vector.empty[String]
+      lazy val controller: DeskController = new DeskController(
+        PanelView(mode = "LIVE"),
+        () => f.clock.get(),
+        f.worker.preview,
+        f.worker.submitReviewed,
+        _ => Left("no mode switch"),
+        result = (number, text) => {
+          log :+= ((number, text))
+          val frame = Workspace.draw(
+            Snapshot.initial("XMR", 0L),
+            drawnReady,
+            controller.panel,
+            100,
+            30,
+            0L,
+            java.time.ZoneOffset.UTC,
+            Style.mono
+          )
+          rows :+= Chart.plain(frame.lines(30 - 12 + 3)).take(38).trim
+        }
+      )
+      controller.orders(f.worker.view)
+      f.orderError = Some("Order has insufficient margin, not enough to fill")
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("rejection not shown")(f.worker.view.outcome.nonEmpty)
+      controller.orders(f.worker.view)
+      f.ready()
+      val order = f.seeded.head
+      f.cancels = _ => Some(cancelReply(ujson.Obj("error" -> "Order was never placed, or filled.")))
+      f.statuses.put(order.id, lookupReply(order, "open", "0.2"))
+      assert(f.worker.cancel(Vector(order.id)))
+      Wait.until("cancel request never finished")(!f.worker.view.pending)
+      controller.orders(f.worker.view)
+      assertEquals(
+        log,
+        Vector(
+          (1L, "XMR order rejected | venue: Order has insufficient margin, not enough to fill"),
+          (2L, "XMR cancel rejected | venue: Order was never placed, or filled.")
+        )
+      )
+      // The status row keeps Desk's own word, whatever the venue said.
+      assertEquals(rows, Vector("Not sent #1", "Cancel refused #2"))
+    }
+  }
+
+  test("the venue's words are the first line, free of control bytes and at most 160 long") {
+    assertEquals(TradingWorker.venueWords(""), "")
+    assertEquals(TradingWorker.venueWords("  \nsecond"), "")
+    val clear = 27.toChar.toString + "[2J"
+    assertEquals(
+      TradingWorker.venueWords(s"Bad ${clear}price\nsecond line"),
+      " | venue: Bad price"
+    )
+    assertEquals(TradingWorker.venueWords("x" * 300), " | venue: " + "x" * 160)
   }
 
   // Diagnostics.

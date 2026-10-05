@@ -732,6 +732,49 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
     assertEquals(propResting(f), Vector(propId))
   }
 
+  test("prop shows the count of live orders resting when live retired") {
+    val f = new Fixture(autoStart = false)
+    val id = restLive(f)
+    val route = router(f, "LIVE", quiet)
+    try
+      route.start()
+      f.ready()
+      assertEquals(route.view.resting.map(_.id), Vector(id))
+      assertEquals(route.view.liveResting, 0)
+      assertEquals(route.switchMode("PROP"), Right(()))
+      Wait.until("live worker never retired")(f.worker.isRetired)
+      Wait.until("prop does not show the live count")(route.view.liveResting == 1)
+      assertEquals(route.view.resting, Vector.empty)
+    finally
+      route.close()
+      f.close()
+  }
+
+  test("CLOSE waits on a running cancel only in live") {
+    for mode <- Vector("LIVE", "PROP", "VIEW") do
+      val f = new Fixture(autoStart = false)
+      val id = restLive(f)
+      val route = router(f, mode, quiet)
+      try
+        f.worker.start()
+        route.start()
+        f.ready()
+        assert(!route.closeFirst(), mode)
+        f.hold = true
+        assert(f.worker.cancel(Vector(id)))
+        assert(f.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), mode)
+        assertEquals(route.closeFirst(), mode == "LIVE", mode)
+        route.withdrawClose()
+        assertEquals(
+          f.worker.view.message == TradingWorker.closeWithdrawnMessage,
+          mode == "LIVE",
+          mode
+        )
+      finally
+        route.close()
+        f.close()
+  }
+
   test("a resting order shows through the live worker restarted after a settings child") {
     val f = new Fixture(autoStart = false)
     val id = restLive(f)

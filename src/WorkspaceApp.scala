@@ -126,7 +126,9 @@ object WorkspaceApp:
       worker.switchMode,
       mute,
       result,
-      worker.cancel
+      worker.cancel,
+      worker.closeFirst,
+      worker.withdrawClose
     )
 
   private[desk] def drawFrame(

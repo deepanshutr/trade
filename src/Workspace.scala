@@ -172,6 +172,7 @@ object Workspace:
     "A limit order takes a sized press",
     Trading.restingCapText,
     TradingWorker.cancelPendingMessage,
+    TradingWorker.closeNextMessage,
     "Read the trading key first. Press r"
   )
 
@@ -216,8 +217,12 @@ object Workspace:
     else ""
 
   private def orderStatus(view: TradingView, panel: PanelView): String =
-    val raw =
+    // The venue's own words after the mark go to the order result log only.
+    val full =
       if view.pending then view.message else view.block.orElse(panel.actionNotice).getOrElse("")
+    val raw = full.indexOf(TradingWorker.venueMark) match
+      case -1 => full
+      case at => full.take(at)
     if effect(raw) then return if panel.focus.nonEmpty then raw else ""
     val unsaved = raw.toLowerCase.matches("order result #[0-9]+ not saved")
     val lower = raw.toLowerCase
@@ -603,16 +608,23 @@ object Workspace:
               button(8, 0, "Enter " + name, DeskAction.ConfirmMode(name), !view.pending)
               button(8, name.length + 9, "Esc Cancel", DeskAction.Cancel, enabled = true)
             case None => wrapped.tail.take(4).zipWithIndex.foreach((line, i) => put(7 + i, 0, line))
-      // Row 12, the mode keys.
+      // Row 12, the mode keys, then the market and chart keys. In prop and view the live orders
+      // still resting follow, such as 3 live, in the place of the keys that do not fit beside it.
       val prop = keyed(Bind.Prop, "Prop")
       val liveLabel = keyed(Bind.Live, "Live")
       button(11, 0, prop, DeskAction.Mode("PROP"), choosing)
       button(11, prop.length + 3, liveLabel, DeskAction.Mode("LIVE"), choosing)
-      put(
-        11,
-        text(11).length + 1,
-        s"${keyed(Bind.Market, "Market")} ${keyed(Bind.Chart, "Chart")}"
-      )
+      val hints = Vector(keyed(Bind.Market, "Market"), keyed(Bind.Chart, "Chart"))
+      val liveCount =
+        Option.when(panel.mode != "LIVE" && view.liveResting > 0)(s"${view.liveResting} live")
+      val hintsAt = text(11).length + 1
+      val modeRow = liveCount.fold(hints) { count =>
+        hints.inits
+          .map(_ :+ count)
+          .find(fields => hintsAt + fields.mkString(" ").length <= width)
+          .getOrElse(hints)
+      }
+      put(11, hintsAt, modeRow.mkString(" "))
       val active = buttons.result()
       val inactive = disabled.result()
       // The colours: bold for the mode word and the entry's and ticket's side, bold side colours

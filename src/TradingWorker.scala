@@ -27,7 +27,11 @@ final case class TradingView(
     fills: Vector[Fill] = Vector.empty,
     stale: Boolean = false,
     ignoredOrderUpdates: Long = 0L,
-    notFoundOrders: Long = 0L
+    notFoundOrders: Long = 0L,
+    // The last outcomes with their ids, oldest first. The newest is outcome with outcomeId.
+    outcomes: Vector[(Long, String)] = Vector.empty,
+    // In prop and view, the live orders resting when the last live worker retired.
+    liveResting: Int = 0
 ):
   def reference(side: Side): Option[BigDecimal] =
     if side == Side.Buy then ask else bid
@@ -53,6 +57,15 @@ object TradingWorker:
   val openingPauseMs: Long = 2000L
   val openingPausedMessage: String = "Opening paused for 2 s after closing"
   val cancelPendingMessage: String = "Wait for the pending order"
+  val closeNextMessage: String = "Close goes after this cancel"
+  val closeWithdrawnMessage: String = "Close withdrawn"
+  // The venue's own words follow Desk's text in the order result log, after this mark. The status
+  // row reads only the part before it. They are the first line, free of control bytes, cut to
+  // 160 characters.
+  val venueMark: String = " | venue: "
+  private[desk] def venueWords(text: String): String =
+    val words = Workspace.safeText(text).takeWhile(_ != '\n').trim.take(160)
+    if words.isEmpty then "" else venueMark + words
   val waitingDepthMessage: String = "Waiting for fresh depth"
   // Two fatal texts. Each fits the 38 column panel, where a ticket shows it on its size row.
   val storageFailedMessage: String = "Order state failed. Restart to recover"
@@ -62,6 +75,8 @@ object TradingWorker:
   private[desk] val updateLimit: Int = 256
   private[desk] val fillLimit: Int = 200
   private[desk] val finishedLimit: Int = 200
+  // Outcomes kept for the frame loop, so a batch of them between two frames loses none.
+  private[desk] val outcomeLimit: Int = 50
 
   // The loader hands this worker its own copy of the key. The worker wipes it on close.
   def create(
@@ -157,6 +172,7 @@ final class TradingWorker private[desk] (
     case Hold, Drop, Ignore
     case Lost(order: SavedOrder)
     case Apply(order: SavedOrder)
+    case Late(order: SavedOrder)
   private enum Gone:
     case Venue(status: String)
     case NotFound
@@ -196,6 +212,7 @@ final class TradingWorker private[desk] (
   private var message = if enabled then "Preparing trading" else "View only"
   private var outcome = Option.empty[String]
   private var outcomeId = 0L
+  private var outcomes = Vector.empty[(Long, String)]
   private var fatal = false
   private var waitingRefresh = false
   private var accountVersion = 0L
@@ -208,6 +225,8 @@ final class TradingWorker private[desk] (
   // Monotonic time at which this process first saw the saved order.
   private var savedSeenAt = 0L
   private var errOrder = Option.empty[String]
+  // The venue's words of that err reply.
+  private var errWords = ""
   // Monotonic time at which the last reduce-only order completed.
   private var reducedAt = Option.empty[Long]
   private var journal = Option.empty[OrderJournal]
@@ -217,8 +236,15 @@ final class TradingWorker private[desk] (
   // The journal's resting orders, read again after every change to them.
   private var restingOrders = Vector.empty[SavedOrder]
   private var cancelling = Option.empty[String]
+  // A row cancel runs from its request to the end of its loop. A CLOSE pressed meanwhile stops
+  // the loop before its next order, so CLOSE goes next.
+  private var cancelRunning = false
+  private var closeWanted = false
   private var fills = Vector.empty[Fill]
   private var finished = Vector.empty[String]
+  // Orders released as not placed or settled as not found. The venue may still hold one, so a
+  // later update for it is named and counted, and an open one rests again.
+  private var released = Vector.empty[SavedOrder]
   private var ignoredUpdates = 0L
   private var notFound = 0L
   private var checks = Map.empty[String, Check]
@@ -278,9 +304,14 @@ final class TradingWorker private[desk] (
   private def announce(text: String): Unit =
     outcome = Some(text)
     outcomeId = OrderUpdates.nextId()
+    outcomes = (outcomes :+ (outcomeId -> text)).takeRight(TradingWorker.outcomeLimit)
 
   private def remember(id: String): Unit =
     finished = (finished.filterNot(_ == id) :+ id).takeRight(TradingWorker.finishedLimit)
+
+  private def letGo(order: SavedOrder): Unit =
+    released =
+      (released.filterNot(_.id == order.id) :+ order).takeRight(TradingWorker.finishedLimit)
 
   private def addFill(fill: Fill): Unit =
     val added = fills :+ fill
@@ -362,9 +393,11 @@ final class TradingWorker private[desk] (
       usableMargin = usableMargin.filter(_ => fresh(activeAt, config.positionAgeMs)),
       resting = restingOrders.map(restingView),
       fills = fills,
-      stale = !fresh(activeAt, config.positionAgeMs),
+      // A fatal worker no longer applies fills or cancels, so its orders draw faint.
+      stale = fatal || !fresh(activeAt, config.positionAgeMs),
       ignoredOrderUpdates = ignoredUpdates,
-      notFoundOrders = notFound
+      notFoundOrders = notFound,
+      outcomes = outcomes
     )
   }
 
@@ -382,10 +415,27 @@ final class TradingWorker private[desk] (
     else if known.isEmpty || !busy.compareAndSet(false, true) then false
     else
       outcome = None
-      if requests.offer(Request.Cancel(known)) then true
+      if requests.offer(Request.Cancel(known)) then
+        cancelRunning = true
+        closeWanted = false
+        true
       else
         busy.set(false)
         false
+  }
+
+  // True when a row cancel runs. It then stops before its next order, so CLOSE goes next.
+  def closeFirst(): Boolean = synchronized {
+    if cancelRunning then
+      closeWanted = true
+      message = TradingWorker.closeNextMessage
+    cancelRunning
+  }
+
+  // Esc or settings took the CLOSE back. The cancels after the current one stay for the next
+  // Enter, as when the loop stops on an unclear reply.
+  def withdrawClose(): Unit = synchronized {
+    if cancelRunning then message = TradingWorker.closeWithdrawnMessage
   }
 
   def select(next: String): Unit = synchronized {
@@ -564,13 +614,15 @@ final class TradingWorker private[desk] (
   }
 
   // Ends the order in flight. With an oid it moves into the resting list instead. The pause
-  // follows a reduce-only order unless the caller decides it.
+  // follows a reduce-only order unless the caller decides it. An order released as not placed
+  // is not remembered, so a later update for it still shows.
   private def complete(
       p: SavedOrder,
       text: String,
       rest: Option[Long] = None,
       fill: Option[Fill] = None,
-      pause: Option[Boolean] = None
+      pause: Option[Boolean] = None,
+      release: Boolean = false
   ): Unit =
     try
       rest match
@@ -583,7 +635,8 @@ final class TradingWorker private[desk] (
         waitingRefresh = true
         if pause.getOrElse(p.reduceOnly) then reducedAt = Some(monotonic())
         fill.foreach(addFill)
-        if rest.isEmpty then remember(p.id)
+        if release then letGo(p) else if rest.isEmpty then remember(p.id)
+        checks -= p.id
         mirror()
         accountChanged()
       }
@@ -599,8 +652,65 @@ final class TradingWorker private[desk] (
         storageFailure()
         None
 
+  // What happened to an order the venue no longer holds. Callers hold the lock.
+  private def goneText(r: SavedOrder, gone: Gone): String =
+    val limit = BigDecimal(r.limit)
+    val money = dollars(left(r), limit)
+    val price = priceText(limit)
+    val side = if r.side == Side.Buy then "buy" else "sell"
+    gone match
+      case Gone.Venue("filled")            => s"${r.coin} filled $money at $price"
+      case Gone.Venue("canceled")          => s"${r.coin} canceled $money at $price"
+      case Gone.Venue("selfTradeCanceled") =>
+        s"${r.coin} resting $side $money at $price canceled by self-trade prevention"
+      case Gone.Venue(status) => s"${r.coin} canceled by the venue $money at $price ($status)"
+      case Gone.NotFound      => s"${r.coin} $money at $price not found at the venue"
+
+  // An update for an order Desk released. It is named and counted. An open one rests again, in
+  // the journal and on the axis, and a fill marks the chart and pauses as any fill does.
+  private def late(o: SavedOrder, u: VenueOrders.OrderUpdate, sign: Option[Int]): Unit =
+    if u.status == "open" then
+      // Like shrink, the venue's size never takes the order above what Desk placed.
+      val size = u.remaining.min(BigDecimal(o.quantity))
+      val adopted = o.copy(oid = Some(u.oid), remaining = Some(Trading.format(size)))
+      journalChange { j =>
+        Option.when(!j.resting.exists(_.id == o.id) && !j.pending.exists(_.id == o.id)) {
+          j.adopt(adopted)
+          adopted
+        }
+      }.foreach { r =>
+        synchronized {
+          released = released.filterNot(_.id == r.id)
+          ignoredUpdates += 1
+          val limit = BigDecimal(r.limit)
+          announce(
+            s"${r.coin} resting ${dollars(left(r), limit)} at ${priceText(limit)} after release"
+          )
+          mirror()
+          accountChanged()
+        }
+        wakeAccount()
+      }
+    else
+      synchronized {
+        ignoredUpdates += 1
+        if VenueOrders.terminal.contains(u.status) then
+          announce(goneText(o, Gone.Venue(u.status)) + " after release")
+          if u.status == "filled" then
+            addFill(Fill(o.coin, o.side, u.at, BigDecimal(o.limit), left(o)))
+            if facing(sign, o.side) then reducedAt = Some(monotonic())
+          accountChanged()
+      }
+      wakeAccount()
+
   // Removes a resting order the venue no longer holds and says why.
-  private def settle(order: SavedOrder, gone: Gone, at: Option[Long], reduced: Boolean): Unit =
+  private def settle(
+      order: SavedOrder,
+      gone: Gone,
+      at: Option[Long],
+      reduced: Boolean,
+      venue: String = ""
+  ): Unit =
     journalChange { j =>
       j.resting.find(_.id == order.id).map { r =>
         j.settle(r.id)
@@ -608,22 +718,14 @@ final class TradingWorker private[desk] (
       }
     }.foreach { r =>
       synchronized {
-        val limit = BigDecimal(r.limit)
-        val money = dollars(left(r), limit)
-        val price = priceText(limit)
-        val side = if r.side == Side.Buy then "buy" else "sell"
-        announce(gone match
-          case Gone.Venue("filled")            => s"${r.coin} filled $money at $price"
-          case Gone.Venue("canceled")          => s"${r.coin} canceled $money at $price"
-          case Gone.Venue("selfTradeCanceled") =>
-            s"${r.coin} resting $side $money at $price canceled by self-trade prevention"
-          case Gone.Venue(status) => s"${r.coin} canceled by the venue $money at $price ($status)"
-          case Gone.NotFound      => s"${r.coin} $money at $price not found at the venue")
+        announce(goneText(r, gone) + venue)
         if gone == Gone.Venue("filled") then
-          at.foreach(time => addFill(Fill(r.coin, r.side, time, limit, left(r))))
+          at.foreach(time => addFill(Fill(r.coin, r.side, time, BigDecimal(r.limit), left(r))))
           if reduced then reducedAt = Some(monotonic())
-        if gone == Gone.NotFound then notFound += 1
-        remember(r.id)
+        if gone == Gone.NotFound then
+          notFound += 1
+          letGo(r)
+        else remember(r.id)
         checks -= r.id
         mirror()
         accountChanged()
@@ -632,7 +734,13 @@ final class TradingWorker private[desk] (
     }
 
   // Lowers a resting order's remaining size, never raises it, and names the part that filled.
-  private def shrink(order: SavedOrder, size: BigDecimal, at: Option[Long]): Unit =
+  // A part fill that reduced starts the opening pause, as a whole fill does.
+  private def shrink(
+      order: SavedOrder,
+      size: BigDecimal,
+      at: Option[Long],
+      reduced: Boolean
+  ): Unit =
     journalChange { j =>
       j.resting.find(_.id == order.id).filter(r => size > 0 && size < left(r)).map { r =>
         j.remaining(r.id, Trading.format(size))
@@ -647,6 +755,7 @@ final class TradingWorker private[desk] (
             s"${dollars(BigDecimal(r.quantity), limit)} at ${priceText(limit)}"
         )
         at.foreach(time => addFill(Fill(r.coin, r.side, time, limit, part)))
+        if reduced then reducedAt = Some(monotonic())
         mirror()
         accountChanged()
       }
@@ -697,7 +806,10 @@ final class TradingWorker private[desk] (
             restingOrders.find(_.id == u.cloid) match
               case Some(r) if r.coin == u.coin && r.oid.contains(u.oid) => Route.Apply(r)
               case Some(_)                                              => Route.Ignore
-              case None => if finished.contains(u.cloid) then Route.Drop else Route.Ignore
+              case None                                                 =>
+                released.find(_.id == u.cloid) match
+                  case Some(o) if o.coin == u.coin && o.oid.forall(_ == u.oid) => Route.Late(o)
+                  case _ => if finished.contains(u.cloid) then Route.Drop else Route.Ignore
       }
       route match
         case Route.Hold =>
@@ -720,11 +832,12 @@ final class TradingWorker private[desk] (
           // sends one with a smaller sz. The venue docs list the field without saying so. If it
           // were not, only the shown remaining size would be wrong, because shrink never raises
           // a size and sends nothing. The owner checks it on the first live partial fill.
-          if u.status == "open" then shrink(r, u.remaining, Some(u.at))
+          if u.status == "open" then shrink(r, u.remaining, Some(u.at), facing(item.sign, r.side))
           else if VenueOrders.terminal.contains(u.status) then
             settle(r, Gone.Venue(u.status), Some(u.at), facing(item.sign, r.side))
-        case Route.Drop   => ()
-        case Route.Ignore => synchronized { ignoredUpdates += 1 }
+        case Route.Late(o) => late(o, u, item.sign)
+        case Route.Drop    => ()
+        case Route.Ignore  => synchronized { ignoredUpdates += 1 }
     }
 
   private def lookup(order: SavedOrder): Option[ujson.Value] =
@@ -733,6 +846,7 @@ final class TradingWorker private[desk] (
     )
 
   // Applies a status lookup of a resting order. Anything but a clear answer keeps the order.
+  // A lookup carries no stamped position, so a part fill it finds counts as a reduce.
   // An unknownOid answer counts toward the bound only for the spaced reconciliation lookups,
   // while the open orders read missed the order, after its creation plus the margin, with the
   // signer role proven.
@@ -740,14 +854,15 @@ final class TradingWorker private[desk] (
       r: SavedOrder,
       reply: Option[ujson.Value],
       lookupAt: Long,
-      counting: Boolean
+      counting: Boolean,
+      venue: String = ""
   ): Unit =
     VenueOrders.lookup(reply) match
       case Some(VenueOrders.Lookup.Open(_, size)) if Exchange.sameOrder(reply, r) =>
         synchronized { checks -= r.id }
-        shrink(r, size, None)
+        shrink(r, size, None, facing(None, r.side))
       case Some(VenueOrders.Lookup.Settled(status, _)) if Exchange.sameOrder(reply, r) =>
-        settle(r, Gone.Venue(status), None, reduced = true)
+        settle(r, Gone.Venue(status), None, reduced = true, venue)
       case Some(VenueOrders.Lookup.Unknown) if counting =>
         val gone = synchronized {
           val proven = roleGeneration.contains(generation) && fresh(roleAt, 60000L)
@@ -768,23 +883,26 @@ final class TradingWorker private[desk] (
 
   // The safety net for missed updates: an open orders read after every socket open and once a
   // minute while orders rest, then a status lookup for each order missing from it, each no
-  // sooner than ten seconds after its last try.
+  // sooner than ten seconds after its last try. A posted order whose reply was lost is read for
+  // too, and the refresh looks it up.
   private def reconcile(): Unit =
     val now = monotonic()
-    val own = synchronized {
+    val (own, lost) = synchronized {
       val mine = restingOrders.filter(ownOrder)
-      checks = checks.filter((id, _) => mine.exists(_.id == id))
+      val post = saved.filter(p => p.post && ownOrder(p))
+      checks = checks.filter((id, _) => mine.exists(_.id == id) || post.exists(_.id == id))
       // With nothing resting there is nothing to read. The minute starts with the first order.
-      if mine.isEmpty then
+      if mine.isEmpty && post.isEmpty then
         ordersDue = false
         ordersAt = Long.MinValue
       else if ordersAt == Long.MinValue then ordersAt = now
-      mine
+      (mine, post)
     }
-    val read = own.nonEmpty && synchronized(
+    val read = (own.nonEmpty || lost.nonEmpty) && synchronized(
       (ordersDue || !fresh(ordersAt, 60000L)) && waited(ordersFailedAt, 10000L)
     )
     if read then
+      val readAt = wall()
       val reply = exchange.info(ujson.Obj("type" -> "openOrders", "user" -> config.owner.get))
       Exchange.openOrders(reply) match
         case None         => synchronized { ordersFailedAt = now }
@@ -797,12 +915,30 @@ final class TradingWorker private[desk] (
             listed.find(o => r.oid.contains(o.oid) && o.coin == r.coin) match
               case Some(o) =>
                 synchronized { checks -= r.id }
-                shrink(r, o.size, None)
+                shrink(r, o.size, None, facing(None, r.side))
               case None =>
                 synchronized {
                   checks =
                     checks.updated(r.id, checks.getOrElse(r.id, Check()).copy(missing = true))
                 }
+          }
+          // A posted order with no oid yet is listed when any order not resting in Desk has its
+          // market, side and limit and no more than its size. A miss counts past the margin.
+          lost.foreach { p =>
+            synchronized {
+              val known = restingOrders.flatMap(_.oid).toSet
+              val seen = listed.exists(o =>
+                !known.contains(o.oid) && o.coin == p.coin && o.side == p.side &&
+                  o.limit == BigDecimal(p.limit) && o.size <= BigDecimal(p.quantity)
+              )
+              // A listing starts the count again but keeps the entry, so the read past the
+              // margin is asked for once and later reads keep the minute.
+              if saved.exists(_.id == p.id) then
+                if seen then checks.get(p.id).foreach(_ => checks = checks.updated(p.id, Check()))
+                else if BigInt(readAt) > BigInt(p.expiresAfter) + Exchange.ExpiryMarginMs then
+                  checks =
+                    checks.updated(p.id, checks.getOrElse(p.id, Check()).copy(missing = true))
+            }
           }
     val due = synchronized(
       own.filter(r =>
@@ -868,7 +1004,13 @@ final class TradingWorker private[desk] (
       val response = Try(exchange.post(request.get)).toOption.flatten
       if Exchange.isErrReply(response) then
         synchronized {
-          if saved.contains(p) then errOrder = Some(p.id)
+          if saved.contains(p) then
+            errOrder = Some(p.id)
+            errWords = response
+              .flatMap(_.objOpt)
+              .flatMap(_.get("response"))
+              .flatMap(_.strOpt)
+              .fold("")(TradingWorker.venueWords)
         }
       Exchange.placed(response, p) match
         case Some(VenueOrders.Placed.Resting(oid)) =>
@@ -882,17 +1024,21 @@ final class TradingWorker private[desk] (
             s"${p.coin} filled ${dollars(quantity, price)} at ${priceText(price)}"
           )
           complete(p, text, fill = Some(Fill(p.coin, p.side, wall(), price, quantity)))
-        case Some(VenueOrders.Placed.Rejected(_)) =>
+        case Some(VenueOrders.Placed.Rejected(reason)) =>
+          // Resting reduce only orders can block only a CLOSE sent at once on their market.
+          val blocked = synchronized(restingOrders.exists(r => r.coin == p.coin && r.reduceOnly))
           complete(
             p,
-            if press.plan.kind == OrderKind.Close then
-              p.coin + " order rejected. Resting reduce orders may block it, press o"
-            else p.coin + " order rejected"
+            (if press.plan.kind == OrderKind.Close && !p.post && blocked then
+               p.coin + " order rejected. Resting reduce orders may block it, press o"
+             else p.coin + " order rejected") + TradingWorker.venueWords(reason)
           )
         case None =>
           synchronized { message = p.coin + " waiting for order result" }
 
   // Cancels run on the orders thread, one signed action per order, each under the account gate.
+  // The loop stops at the first cancel whose reply is not a clear success, and before its next
+  // order once CLOSE is pressed. The rest wait for the next Enter.
   private def executeCancel(ids: Vector[String]): Unit =
     executing.set(true)
     try
@@ -900,14 +1046,15 @@ final class TradingWorker private[desk] (
       ids.zipWithIndex.foreach { (id, index) =>
         // A cancel names only an order the journal holds, never an id from outside it.
         val order =
-          if stopped || synchronized(disabled.get() || closed.get() || fatal) then None
+          if stopped || synchronized(closeWanted || disabled.get() || closed.get() || fatal) then
+            None
           else journal.flatMap(_.resting.find(_.id == id))
         order.foreach { r =>
           synchronized {
             message = s"${r.coin} canceling ${index + 1} of ${ids.size}"
             cancelling = Some(r.id)
           }
-          try orderPermission(() => cancelOne(r))
+          try orderPermission(() => if !cancelOne(r) then stopped = true)
           catch
             case _: Exception =>
               stopped = true
@@ -919,30 +1066,42 @@ final class TradingWorker private[desk] (
       }
     finally
       executing.set(false)
-      synchronized { if !fatal then busy.set(false) }
+      synchronized {
+        cancelRunning = false
+        closeWanted = false
+        if !fatal then busy.set(false)
+      }
 
-  private def cancelOne(r: SavedOrder): Unit =
-    journalChange(j => Some(j.nextNonce(wall()))).foreach { nonce =>
+  // True only when the venue answered the cancel with a clear success.
+  private def cancelOne(r: SavedOrder): Boolean =
+    journalChange(j => Some(j.nextNonce(wall()))).exists { nonce =>
       val request = Try(
         signed(VenueOrders.cancelAction(r.asset, r.id), nonce, Some(Math.addExact(wall(), 5000L)))
       ).toOption
       val reply = request.flatMap(body => Try(exchange.post(body)).toOption.flatten)
+      val success = request.nonEmpty && VenueOrders.cancelOutcome(reply).contains(Right(()))
+      val venue = VenueOrders
+        .cancelOutcome(reply)
+        .flatMap(_.left.toOption)
+        .fold("")(TradingWorker.venueWords)
       if request.isEmpty then synchronized { announce(r.coin + " cancel not sent") }
-      else if VenueOrders.cancelOutcome(reply).contains(Right(())) then
-        settle(r, Gone.Venue("canceled"), None, reduced = false)
+      else if success then settle(r, Gone.Venue("canceled"), None, reduced = false)
       else
         // The venue documents no error text for a cancel by cloid, so any error or unclear
         // reply is settled only from one status lookup. An order still open was not canceled,
         // and an order the lookup cannot place stays for the next reconciliation.
         val status = lookup(r)
-        looked(r, status, wall(), counting = false)
+        looked(r, status, wall(), counting = false, venue)
         val open = VenueOrders.lookup(status) match
           case Some(VenueOrders.Lookup.Open(_, _)) => Exchange.sameOrder(status, r)
           case _                                   => false
         synchronized {
           if restingOrders.exists(_.id == r.id) then
-            announce(r.coin + (if open then " cancel rejected" else " cancel result unknown"))
+            announce(
+              r.coin + (if open then " cancel rejected" else " cancel result unknown") + venue
+            )
         }
+      success
     }
 
   private def initializeSigning(): Unit =
@@ -1057,16 +1216,36 @@ final class TradingWorker private[desk] (
         )
         VenueOrders.lookup(reply) match
           case Some(VenueOrders.Lookup.Unknown) =>
-            Exchange
-              .released(
-                p,
-                lookupAt,
-                elapsed,
-                allowUnknown = p.owner.nonEmpty && p.owner == config.owner &&
-                  synchronized(roleGeneration.contains(g) && fresh(roleAt, 60000L)),
-                errReply = gotErrReply
-              )
-              .foreach(text => complete(p, text))
+            val past = Exchange.released(
+              p,
+              lookupAt,
+              elapsed,
+              allowUnknown = p.owner.nonEmpty && p.owner == config.owner &&
+                synchronized(roleGeneration.contains(g) && fresh(roleAt, 60000L)),
+              errReply = gotErrReply
+            )
+            if gotErrReply then past.foreach(text => complete(p, text + synchronized(errWords)))
+            else if !p.post then past.foreach(text => complete(p, text, release = true))
+            else
+              // A posted order may rest, so it takes the bound of a resting order: a miss in an
+              // open orders read past the margin, then three unknownOid answers ten seconds
+              // apart, each past the margin with the role proven. The first answer past the
+              // margin asks for that read at once, so the wait is not a minute longer.
+              val gone = past.nonEmpty && synchronized {
+                checks.get(p.id) match
+                  case None =>
+                    checks = checks.updated(p.id, Check())
+                    ordersDue = true
+                    false
+                  case Some(c) if c.missing && waited(c.attemptAt, 10000L) =>
+                    checks = checks.updated(
+                      p.id,
+                      c.copy(attemptAt = monotonic(), unknowns = c.unknowns + 1)
+                    )
+                    c.unknowns + 1 >= 3
+                  case Some(_) => false
+              }
+              if gone then past.foreach(text => complete(p, text, release = true))
           case Some(VenueOrders.Lookup.Settled(status, _)) if Exchange.sameOrder(reply, p) =>
             complete(p, s"${p.coin} recovered $status")
           // The order is on the book. It moves into the resting list with the venue's size.
@@ -1076,7 +1255,8 @@ final class TradingWorker private[desk] (
               s"${p.coin} resting ${dollars(BigDecimal(p.quantity), limit)} at ${priceText(limit)}"
             )
             complete(p, text, rest = Some(oid), pause = Some(false))
-            synchronized(restingOrders.find(_.id == p.id)).foreach(shrink(_, size, None))
+            synchronized(restingOrders.find(_.id == p.id))
+              .foreach(r => shrink(r, size, None, facing(None, r.side)))
           case _ => ()
       }
       val cached = synchronized {
@@ -1266,6 +1446,8 @@ final class TradingWorker private[desk] (
   private[desk] def disable(): Unit = disabled.set(true)
 
   private[desk] def isRetired: Boolean = retired.get()
+
+  private[desk] def restingCount: Int = synchronized(restingOrders.size)
 
   private def finishRetirement(): Unit = synchronized {
     if !retired.get() && workers.forall(!_.isAlive) then

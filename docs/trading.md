@@ -299,6 +299,13 @@ the signed `expiresAfter` plus a fixed 60-second margin. Before then it stays sa
 because an action still in flight may not show in the lookup yet. After the margin,
 an order with an `err` reply releases as rejected without owner and role checks.
 Any other order releases as "not placed" under the owner and role checks below.
+A limit order may rest, so it releases as "not placed" only on the bound a resting
+order has. An open orders read past the margin must list no order at its market, side
+and limit with no more than its size, other than Desk's own resting orders. Then three
+`unknownOid` answers at least ten seconds apart must follow, each past the margin with
+the role proven. Desk reads the open orders as soon as the margin passes, so a lost
+limit order is released about 85 seconds after it was sent. Every press waits until
+then, CLOSE included.
 Desk remembers which order got the `err` reply only in memory, so a restart
 applies the normal saved-order rules. Both time releases rely on four assumptions:
 the local clock is within the margin of the venue's clock; the venue refuses an
@@ -381,7 +388,8 @@ queue.
 
 Desk holds at most 20 resting orders for each key, across markets. A limit press past
 that answers "20 orders rest. Cancel one first". The cap applies to limit presses
-only, so market presses and CLOSE still work.
+only, so market presses and CLOSE still work. It governs new orders only, so an order
+Desk takes back after a release can take the list past 20.
 
 What is sent is what the ticket showed. Enter previews the order again and sends it
 only when the fresh preview is the same order: the same market, side, kind, size,
@@ -431,8 +439,10 @@ less than ten dollars of the free position closes all of the free position inste
 CLOSE ignores resting orders and is always the whole position.
 
 For 2 seconds after a fill shrinks the position, from an immediate order or a resting
-one, Desk refuses any new order that would open or grow a position. The pause gates
-only new sends. An order that rested before it fills whenever the market reaches it,
+one, Desk refuses any new order that would open or grow a position. A part fill of a
+resting order starts the pause too. A fill Desk finds through a status lookup or the
+open orders read counts as one that shrank the position. The pause gates only new
+sends. An order that rested before it fills whenever the market reaches it,
 and Desk cannot stop it.
 
 Resting orders on both sides reserve margin at the venue, so the account's own
@@ -465,7 +475,13 @@ A fill update can arrive before the reply to the order itself. Desk holds it unt
 order rests, then applies it, so no row shows twice. A fill update also settles an
 order whose reply was lost. An update for an order Desk did not place is ignored and
 counted in diagnostics. A count above zero means another tool places orders on the
-account.
+account, or that the venue still held an order Desk let go.
+
+Desk lets an order go when it releases it as "not placed" or settles it as not found.
+It keeps such orders in memory, up to 200, until it quits. A later update for one is
+counted the same way and named with "after release", such as "XMR filled $19.99 at
+546.09 after release". An open one rests again on the axis and in the saved order file,
+and Desk follows it from then on.
 
 Updates are missed while the connection is down, so Desk keeps a safety net. When it
 starts, it looks up each resting order once. After every connection opens, and once
@@ -483,13 +499,31 @@ the row's amount is faint. A success reads `Canceled $16.38 #9` on the status ro
 no clear reply is settled only from one status lookup. An order the lookup finds still
 open stays, and the status row reads `Cancel refused`, with "XMR cancel rejected" in
 the log. An order the lookup cannot place stays for the next check, and the status row
-reads `Confirming result`, with "XMR cancel result unknown" in the log. A cancel waits while an order is pending, with "Wait for the pending order". It
-needs neither the selected market nor fresh prices. Desk sends no cancel you did not
-pick on the axis, and a market change cancels nothing.
+reads `Confirming result`, with "XMR cancel result unknown" in the log. Desk stops at
+the first cancel the venue does not answer with a clear success. The orders after it
+stay, and the next Enter on the row cancels them. A cancel waits while an order is
+pending, with "Wait for the pending order". It needs neither the selected market nor
+fresh prices. Desk sends no cancel you did not pick on the axis, and a market change
+cancels nothing.
+
+When the venue refuses an order or a cancel, the order result log keeps the venue's own
+words after Desk's text, such as "XMR order rejected | venue: Order has insufficient
+margin". Desk keeps their first line, at most 160 characters. The status row shows only
+Desk's short word, such as `Not sent` or `Cancel refused`. Record these words when you
+run the rollout checks of the venue assumptions.
+
+CLOSE pressed in live while a row cancel runs goes next. Desk finishes the cancel it
+is sending, sends none of the others and reads `Close goes after this cancel` on the
+status row. CLOSE is then sent as soon as live is ready again, as if pressed at that
+moment. If live is not ready within 30 seconds, CLOSE is not sent and the status row
+says why. A market change before then drops it too. Esc or opening settings withdraws
+it, and the status row reads `Close withdrawn`. The orders after the current cancel stay
+for the next Enter.
 
 While prop or view is selected, or while settings run a key or owner step, Desk does
 not follow live orders and live fills are not seen. They show when live runs again,
-after Desk looks the orders up.
+after Desk looks the orders up. Live orders keep resting and can fill after Desk quits
+or while prop or view is selected.
 
 ### CLOSE and resting orders
 
@@ -505,10 +539,11 @@ after it. Four consequences follow:
 2. Resting reduce only orders left with nothing to reduce are expected to be cancelled
    by the venue, shown as "XMR canceled by the venue $16.38 at 546.09
    (reduceOnlyCanceled)".
-3. If the venue refuses the CLOSE while reduce only orders rest, the status row reads
-   `Close refused. Press o for orders`. The order result log keeps "XMR order rejected.
-   Resting reduce orders may block it, press o". Cancel them from the axis, then press
-   CLOSE again.
+3. If the venue refuses a CLOSE sent at once while reduce only orders rest on its
+   market, the status row reads `Close refused. Press o for orders`. The order result
+   log keeps "XMR order rejected. Resting reduce orders may block it, press o". Cancel
+   them from the axis, then press CLOSE again. Any other refusal, such as a posted
+   REDUCE that became a close, reads `Not sent` with "XMR order rejected" in the log.
 4. After a CLOSE or a REDUCE to flat, an entry resting on the far side without the
    reduce only flag stays on the axis in its side's colour. It opens a new position
    with no press when the market reaches it. Cancel it from the axis if you do not
@@ -544,6 +579,9 @@ trades:
   and never while Desk uses backup prices.
 - One trade through two orders fills the nearest first.
 - An order on another market fills only once that market is selected.
+- Prop rests limit orders on one market at a time. While it holds tokens of one market,
+  or orders rest on one market, a limit order on another market is refused at the ticket
+  and at Enter with "Prop holds XMR. Return to that market".
 - A buy checks the cash when it rests. Its value and maker fee must fit the cash left
   after the other resting buys, else "Not enough stables for order and fee". `Usable`
   on the panel is that figure. A buy whose cash an immediate buy spent later is

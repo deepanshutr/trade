@@ -57,6 +57,7 @@ final class PropWorker(
   private var rules = metadata.flatMap(m => Try(Exchange.market(m, coin)).toOption)
   private var outcome = Option.empty[String]
   private var outcomeId = 0L
+  private var outcomes = Vector.empty[(Long, String)]
   private var pendingAt = 0L
   private var pendingCoin = initialCoin
   private var stage = "queued"
@@ -127,6 +128,11 @@ final class PropWorker(
     plan.reduceOnly,
     at
   )
+  // The same list of outcomes as live keeps, so none is lost between two frames.
+  private def announce(text: String): Unit =
+    outcome = Some(text)
+    outcomeId = OrderUpdates.nextId()
+    outcomes = (outcomes :+ (outcomeId -> text)).takeRight(TradingWorker.outcomeLimit)
   private def record(fill: Fill): Unit =
     fills = fills.updated(
       fill.coin,
@@ -166,7 +172,8 @@ final class PropWorker(
       leverage = Some(1),
       resting = resting(account),
       fills = fills.valuesIterator.flatten.toVector,
-      stale = !touch.exists(t => fresh(t.receivedAt))
+      stale = !touch.exists(t => fresh(t.receivedAt)),
+      outcomes = outcomes
     )
   }
   def select(next: String): Unit = synchronized {
@@ -238,9 +245,7 @@ final class PropWorker(
           .map(o => settle(o, trade.time))
       }
     }
-    if texts.nonEmpty then
-      outcome = Some(texts.mkString("\n"))
-      outcomeId = OrderUpdates.nextId()
+    if texts.nonEmpty then announce(texts.mkString("\n"))
 
   private def settle(order: PropOrder, at: Long): String =
     ledger.resolve(order.id, at) match
@@ -331,8 +336,7 @@ final class PropWorker(
         .flatMap(_ => ledger.rest(order(plan, id, wall()), prepared.get.accountCount))
       lastPlan = Some(review.plan)
       prepared = None
-      outcome = Some(result.fold(identity, identity))
-      outcomeId = OrderUpdates.nextId()
+      announce(result.fold(identity, identity))
       true
     else if !pending.compareAndSet(false, true) then false
     else
@@ -351,9 +355,7 @@ final class PropWorker(
     if closed.get() || pending.get() then false
     else
       val texts = ids.distinct.flatMap(id => ledger.cancel(id).toOption)
-      if texts.nonEmpty then
-        outcome = Some(texts.mkString("\n"))
-        outcomeId = OrderUpdates.nextId()
+      if texts.nonEmpty then announce(texts.mkString("\n"))
       texts.nonEmpty
   }
   def start(): Unit =
@@ -417,8 +419,7 @@ final class PropWorker(
               if review.intent.kind == OrderKind.Close then reducedAt = Some(monotonic())
             }
             prepared = None
-            outcome = Some(result.fold(identity, _._1))
-            outcomeId = OrderUpdates.nextId()
+            announce(result.fold(identity, _._1))
             pending.set(false)
           }
       }

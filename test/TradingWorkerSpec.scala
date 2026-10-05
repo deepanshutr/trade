@@ -604,7 +604,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       receive(f.activePayload, f.clock.getAndIncrement())
       f.recoveryRelease.countDown()
       Wait.until("rejected order not released")(!f.worker.view.pending)
-      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
+      assertEquals(f.worker.view.outcome, Some("XMR order rejected | venue: x"))
       assert(!f.worker.view.ready, "active data stamped before the release restored readiness")
       assertEquals(f.worker.view.position, Some(BigDecimal(0)))
       f.sendActive()
@@ -1384,7 +1384,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
         f.worker.view.outcome.nonEmpty
       )
       assertEquals(f.openedJournal.pending, None)
-      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
+      assertEquals(f.worker.view.outcome, Some("XMR order rejected | venue: x"))
       assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }
@@ -1444,7 +1444,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       // Only a lookup sent after the margin may release, and no lookup follows a release.
       assert(f.recoveryReads.get() > held, "the lookup sent before expiry released the order")
       assertEquals(f.openedJournal.pending, None)
-      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
+      assertEquals(f.worker.view.outcome, Some("XMR order rejected | venue: x"))
       assertEquals(f.orderPosts.get(), 1)
     finally f.close()
   }
@@ -1608,7 +1608,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
           assertEquals(f.worker.view.outcome, None, s"released at monotonic $at")
           assertEquals(f.openedJournal.pending, Some(saved))
         f.clock.set(saved.createdAt + 65000L)
-        val text = if errReply then "XMR order rejected" else "XMR not placed"
+        val text = if errReply then "XMR order rejected | venue: x" else "XMR not placed"
         Wait.until("unknown order not released")(f.worker.view.outcome.contains(text))
         assertEquals(f.openedJournal.pending, None)
         assertEquals(f.orderPosts.get(), 1)
