@@ -1486,23 +1486,59 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
       val pending = f.journal.pending.get
       f.refreshes()
-      // A socket open reads the open orders well before the margin. The order is missing.
-      f.clock.set(20000L)
+      // A socket open reads the open orders just before the margin. The order is missing.
+      f.clock.set(70000L)
       f.opened()
       Wait.until("open orders not read on the socket open")(f.openReads.get() == 1)
-      // Past the margin the next minute read comes at 80000, so the counting starts there.
+      // Past the margin the read runs again at once and lists the order, so nothing counts.
+      f.openOrders = Some(ujson.Arr(listed(pending.copy(oid = Some(4242L)), "0.183")))
       f.clock.set(75001L)
-      f.refreshes()
+      Wait.until("open orders not read at the margin")(f.openReads.get() == 2)
       f.refreshes()
       f.clock.set(85001L)
-      Wait.until("minute read missing")(f.openReads.get() == 2)
       f.refreshes()
       f.clock.set(95001L)
       f.refreshes()
       f.refreshes()
       assertEquals(f.journal.pending.map(_.id), Some(pending.id))
-      f.clock.set(105001L)
+      // The next minute read misses it, and three spaced answers then release it.
+      f.openOrders = Some(ujson.Arr())
+      f.clock.set(135002L)
+      Wait.until("minute read missing")(f.openReads.get() == 3)
+      f.refreshes()
+      f.clock.set(145002L)
+      f.refreshes()
+      f.clock.set(155002L)
       Wait.until("lost post only order not released")(f.journal.pending.isEmpty)
+      assertEquals(f.worker.view.outcome, Some("XMR not placed"))
+    }
+  }
+
+  test("a lost posted order is read at once past the margin and released 85 s after sending") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+      val pending = f.journal.pending.get
+      assertEquals(pending.createdAt, 10000L)
+      f.refreshes()
+      // The minute read lands just before the margin and cannot count.
+      f.clock.set(70001L)
+      Wait.until("minute read missing")(f.openReads.get() == 1)
+      f.refreshes()
+      // Past the margin the next read runs at once, not a minute later.
+      f.clock.set(75001L)
+      Wait.until("open orders not read at the margin")(f.openReads.get() == 2)
+      f.refreshes()
+      f.clock.set(85001L)
+      f.refreshes()
+      assertEquals(f.journal.pending.map(_.id), Some(pending.id))
+      assert(f.worker.view.pending, "trading was free while the order was pending")
+      f.clock.set(95001L)
+      Wait.until("lost post only order not released 85 s after sending")(
+        f.journal.pending.isEmpty
+      )
       assertEquals(f.worker.view.outcome, Some("XMR not placed"))
     }
   }

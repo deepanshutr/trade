@@ -303,7 +303,9 @@ A limit order may rest, so it releases as "not placed" only on the bound a resti
 order has. An open orders read past the margin must list no order at its market, side
 and limit with no more than its size, other than Desk's own resting orders. Then three
 `unknownOid` answers at least ten seconds apart must follow, each past the margin with
-the role proven. The read runs once a minute, so this takes two to three minutes.
+the role proven. Desk reads the open orders as soon as the margin passes, so a lost
+limit order is released about 85 seconds after it was sent. Every press waits until
+then, CLOSE included.
 Desk remembers which order got the `err` reply only in memory, so a restart
 applies the normal saved-order rules. Both time releases rely on four assumptions:
 the local clock is within the margin of the venue's clock; the venue refuses an

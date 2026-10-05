@@ -908,8 +908,10 @@ final class TradingWorker private[desk] (
                 !known.contains(o.oid) && o.coin == p.coin && o.side == p.side &&
                   o.limit == BigDecimal(p.limit) && o.size <= BigDecimal(p.quantity)
               )
+              // A listing starts the count again but keeps the entry, so the read past the
+              // margin is asked for once and later reads keep the minute.
               if saved.exists(_.id == p.id) then
-                if seen then checks -= p.id
+                if seen then checks.get(p.id).foreach(_ => checks = checks.updated(p.id, Check()))
                 else if BigInt(readAt) > BigInt(p.expiresAfter) + Exchange.ExpiryMarginMs then
                   checks =
                     checks.updated(p.id, checks.getOrElse(p.id, Check()).copy(missing = true))
@@ -1192,16 +1194,21 @@ final class TradingWorker private[desk] (
             else
               // A posted order may rest, so it takes the bound of a resting order: a miss in an
               // open orders read past the margin, then three unknownOid answers ten seconds
-              // apart, each past the margin with the role proven.
+              // apart, each past the margin with the role proven. The first answer past the
+              // margin asks for that read at once, so the wait is not a minute longer.
               val gone = past.nonEmpty && synchronized {
-                checks.get(p.id).filter(c => c.missing && waited(c.attemptAt, 10000L)) match
-                  case Some(c) =>
+                checks.get(p.id) match
+                  case None =>
+                    checks = checks.updated(p.id, Check())
+                    ordersDue = true
+                    false
+                  case Some(c) if c.missing && waited(c.attemptAt, 10000L) =>
                     checks = checks.updated(
                       p.id,
                       c.copy(attemptAt = monotonic(), unknowns = c.unknowns + 1)
                     )
                     c.unknowns + 1 >= 3
-                  case None => false
+                  case Some(_) => false
               }
               if gone then past.foreach(text => complete(p, text, release = true))
           case Some(VenueOrders.Lookup.Settled(status, _)) if Exchange.sameOrder(reply, p) =>
