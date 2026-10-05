@@ -765,6 +765,40 @@ class TradingSpec extends munit.FunSuite:
     )
   }
 
+  test("sameOrder holds only when every field that changes what is sent is equal") {
+    val drawn = OrderPlan(
+      "XMR",
+      7,
+      Side.Sell,
+      OrderKind.Hard,
+      d("0.183"),
+      d("546.10"),
+      d("546.10"),
+      d("0"),
+      d("0"),
+      None,
+      d("1.0"),
+      reduceOnly = true,
+      post = true
+    )
+    // Equal value at another scale, and the fields that are not sent, keep the same order.
+    assert(drawn.sameOrder(drawn.copy(quantity = d("0.1830"), limit = d("546.100"))))
+    assert(drawn.sameOrder(drawn.copy(positionAfter = d("0.817"), estimatedValue = d("1"))))
+    val changed = Vector(
+      "coin" -> drawn.copy(coin = "BTC"),
+      "asset" -> drawn.copy(asset = 8),
+      "side" -> drawn.copy(side = Side.Buy),
+      "kind" -> drawn.copy(kind = OrderKind.Close),
+      "quantity" -> drawn.copy(quantity = d("0.184")),
+      "limit" -> drawn.copy(limit = d("546.11")),
+      "reduceOnly" -> drawn.copy(reduceOnly = false),
+      "post" -> drawn.copy(post = false)
+    )
+    for (field, other) <- changed do
+      assert(!drawn.sameOrder(other), field)
+      assert(!other.sameOrder(drawn), field)
+  }
+
   test("the fee and the resting cap are fixed") {
     assertEquals(Trading.baseMakerFee, d("0.00015"))
     assertEquals(Trading.restingCap, 20)
