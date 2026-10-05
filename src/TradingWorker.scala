@@ -958,7 +958,7 @@ final class TradingWorker private[desk] (
           java.util.Arrays.fill(loaded, 0.toByte)
           synchronized {
             fatal = true
-            message = "Protected signing key is unavailable or differs"
+            message = SessionKey.unavailable
           }
 
   private def receiveActive(

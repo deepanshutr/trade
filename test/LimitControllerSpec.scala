@@ -455,7 +455,7 @@ class LimitControllerSpec extends munit.FunSuite:
     f.key(Command.Confirm)
     assertEquals(f.sent, Vector.empty)
     assertEquals(f.ticket.flatMap(_.plan).map(_.quantity), Some(d("0.3")))
-    assertEquals(f.notice, Some(DeskController.sizeChanged))
+    assertEquals(f.notice, Some(DeskController.orderChanged))
     // Until a frame draws the new size, Enter sends nothing.
     f.key(Command.Confirm)
     assertEquals(f.sent, Vector.empty)
@@ -463,6 +463,58 @@ class LimitControllerSpec extends munit.FunSuite:
     f.key(Command.Confirm)
     assertEquals(f.sent.map(r => (r.plan.quantity, r.plan.limit)), Vector((d("0.3"), d("546.10"))))
     assertEquals(f.ticket, None)
+  }
+
+  test("Enter sends only the order the ticket showed, its reduce only flag included") {
+    // A $20 sell against a long of 1.0 reduces 0.183. Flat, the same 0.183 would open a short.
+    val f = new Fixture(start = ready.copy(position = Some(d("1.0"))))
+    f.controller.setTerms(TradeTerms(TradeSizes(d("20"), d("100"), d("100")), d("0.001")))
+    f.open(sell)
+    def shown = f.ticket.flatMap(_.plan).map(p => (p.quantity, p.reduceOnly))
+    assertEquals(shown, Some((d("0.183"), true)))
+    // The position goes flat after the last move. The frame still draws the reduce only plan.
+    f.view = f.view.copy(position = Some(d("0")))
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent, Vector.empty)
+    assertEquals(shown, Some((d("0.183"), false)))
+    assertEquals(f.notice, Some(DeskController.orderChanged))
+    f.key(Command.Confirm)
+    assertEquals(f.sent, Vector.empty)
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent.map(r => (r.plan.quantity, r.plan.reduceOnly)), Vector((d("0.183"), false)))
+  }
+
+  test("a preview that stops being post only is never sent, even after a redrawn frame") {
+    val f = new Fixture
+    f.open(buy)
+    f.reshape = _.copy(post = false)
+    f.key(Command.Confirm)
+    assertEquals(f.sent, Vector.empty)
+    f.frame()
+    f.key(Command.Confirm)
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent, Vector.empty)
+    assertEquals(f.notice, Some("Not sent: price or account changed"))
+  }
+
+  test("a ticket whose preview was refused sends at Enter only a plan a frame has shown") {
+    val f = new Fixture
+    f.refusal = Some(TradingWorker.openingPausedMessage)
+    f.open(buy)
+    assertEquals(f.ticket.flatMap(_.plan), None)
+    // The pause ends. Enter previews a clean plan, which no frame has drawn yet.
+    f.refusal = None
+    f.key(Command.Confirm)
+    assertEquals(f.sent, Vector.empty)
+    val fresh = f.ticket.flatMap(_.plan)
+    assert(fresh.exists(_.limit == d("546.09")), f.ticket)
+    assertEquals(f.notice, Some(DeskController.orderChanged))
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent.map(_.plan), fresh.toVector)
   }
 
   test("a preview that is not a post only order at the ticket price is never submitted") {

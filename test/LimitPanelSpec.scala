@@ -800,7 +800,90 @@ class LimitPanelSpec extends munit.FunSuite:
       "Not sent: price or account changed",
       "Not sent: controls changed",
       "no further step",
-      DeskController.sizeChanged
+      DeskController.orderChanged,
+      SessionKey.unavailable
     )
     for text <- planned.flatten ++ others do assert(text.length <= 38, s"${text.length}: $text")
+  }
+
+  test("no control byte reaches the status row from a pass through, fallback, block or dollar") {
+    val clear = 27.toChar.toString + "[2J"
+    val frames = Vector(
+      drawn(
+        ready,
+        PanelView(mode = "LIVE", actionNotice = Some(s"Nothing to cancel at that price$clear"))
+      ),
+      drawn(ready, PanelView(mode = "LIVE", actionNotice = Some(s"Odd $clear text"))),
+      drawn(
+        ready.copy(block = Some(s"waiting $clear"), blockCode = BlockCode.Market),
+        PanelView(mode = "LIVE")
+      ),
+      drawn(ready, PanelView(mode = "LIVE", actionNotice = Some(s"XMR filled $$21.84$clear at 1")))
+    )
+    for f <- frames do assert(!f.lines.exists(_.contains(27.toChar)), f.lines.mkString("\n"))
+  }
+
+  test("a fill on another market leaves this market's plot as it is") {
+    def plot(fills: Vector[Fill]): Vector[String] =
+      frame(live.copy(fills = fills), limit.copy(ticket = None)).lines
+        .slice(1, 10)
+        .map(line => Chart.plain(line).drop(38))
+    val btc = Fill("BTC", Side.Buy, now - 11_000, BigDecimal("95000"), BigDecimal("0.001"))
+    assertEquals(plot(Vector(btc)), plot(Vector.empty))
+  }
+
+  test("the ticket's and the entry's prices widen the scale, and the ticket line takes its row") {
+    // The plain numbers: a price in columns 8 to 15 with no amount before it and no tie after it.
+    def plain(f: WorkspaceFrame): Vector[Double] =
+      f.lines.slice(1, 10).map(Chart.plain).collect {
+        case line
+            if line.take(8).isBlank && line.charAt(16) == ' ' && line.slice(8, 16).trim.nonEmpty =>
+          line.slice(8, 16).trim.toDouble
+      }
+    val high = frame(panel = limit.copy(ticket = Some(ticketAt("560.00", quantity = Some("0.1")))))
+    assert(plain(high).exists(_ > 553), plain(high))
+    val low = frame(live.copy(portfolio = live.portfolio.copy(entry = Some(BigDecimal("530.00")))))
+    assert(plain(low).exists(_ < 543), plain(low))
+    // 550.50 is on true row 1 of 543.60 to 552.40, where the rounding row is 2.
+    val near = limit.copy(ticket = Some(ticketAt("550.50", quantity = Some("0.1"), reduce = true)))
+    val lines = frame(panel = near, style = Style.colour).lines
+    assert(lines(2).contains(Style.colour.ask + "⠒"), lines(2))
+    assert(!lines(3).contains(Style.colour.ask + "⠒"), lines(3))
+  }
+
+  test("the Live label and a disabled CLOSE follow their bindings") {
+    def bound(action: Bind, key: String): Bindings =
+      Bindings.defaults
+        .updated(action, Binding(Vector(KeyGroup(key.getBytes("UTF-8").toVector.map(_ & 0xff)))))
+        .toOption
+        .get
+    val rebound = frame(panel = limit.copy(ticket = None, bindings = bound(Bind.Live, "u")))
+    assertEquals(row(rebound, 12), "[p Prop] [u Live] m Market c Chart")
+    val view = frame(panel = limit.copy(mode = "VIEW", bindings = bound(Bind.Close, "j")))
+    assertEquals(row(view, 5), "[$20 *] [$100] [j Close]")
+  }
+
+  test("prop draws the mode row, the trade row and the ticket exactly as live does") {
+    val panel = limit.copy(actionNotice = None)
+    val l = frame(panel = panel)
+    val p = frame(panel = panel.copy(mode = "PROP"))
+    assertEquals(band(p).drop(5), band(l).drop(5))
+    def lower(f: WorkspaceFrame): Vector[DeskButton] = f.controls.filter(_.y >= 30 - 12 + 6)
+    assertEquals(lower(p), lower(l))
+    assert(band(l)(5).endsWith("1 on BTC") && band(l)(10).startsWith("[Enter Place]"))
+  }
+
+  test("Orders, the order type and Place light only when they can act") {
+    val elsewhere =
+      live.copy(resting = Vector(order("b2", Side.Buy, "95000", "0.001", coin = "BTC")))
+    val other = frame(elsewhere, limit.copy(ticket = None))
+    assert(other.disabledButtons.exists(_.action == DeskAction.Orders), other.buttons)
+    assert(!other.buttons.exists(_.action == DeskAction.Orders), other.buttons)
+    val pending = frame(live.copy(pending = true), limit.copy(ticket = None))
+    assert(pending.disabledButtons.exists(_.action == DeskAction.OrderType), pending.buttons)
+    assert(!pending.buttons.exists(_.action == DeskAction.OrderType), pending.buttons)
+    val unready = frame(live.copy(ready = false))
+    assert(unready.disabledButtons.exists(_.action == DeskAction.Place), unready.buttons)
+    assert(!unready.buttons.exists(_.action == DeskAction.Place), unready.buttons)
+    assert(!unready.shortcuts.contains(DeskAction.Place))
   }

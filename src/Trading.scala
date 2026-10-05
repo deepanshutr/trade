@@ -40,7 +40,13 @@ final case class OrderPlan(
     positionAfter: BigDecimal,
     reduceOnly: Boolean,
     post: Boolean = false
-)
+):
+  // Every field that changes what is sent. A ticket sends a fresh plan only when it is the same
+  // order as the one the ticket drew, so a new field that changes the order belongs here.
+  def sameOrder(other: OrderPlan): Boolean =
+    coin == other.coin && asset == other.asset && side == other.side && kind == other.kind &&
+      quantity == other.quantity && limit == other.limit && reduceOnly == other.reduceOnly &&
+      post == other.post
 
 final case class RestingOrder(
     id: String,

@@ -2,8 +2,8 @@ package desk
 
 object DeskController:
   val viewOnly: String = "View only: p Prop or l Live to trade"
-  // Enter found a size other than the one the ticket showed. The ticket now shows the new one.
-  val sizeChanged: String = "Size changed. Enter again to send"
+  // Enter found an order other than the one the ticket showed. The ticket now shows the new one.
+  val orderChanged: String = "Order changed. Enter again to send"
 
 final class DeskController(
     initial: PanelView,
@@ -295,17 +295,16 @@ final class DeskController(
               case _ =>
                 refuse()
                 false
-        // A ticket sends one post only order at its own price, of exactly the size it showed. A
-        // fresh preview of another size takes the ticket's place and waits for the frame that
-        // shows it. Otherwise the ticket stays open with the reason.
+        // A ticket sends one post only order at its own price, exactly the order it showed. A
+        // fresh preview of any other order takes the ticket's place and waits for the frame that
+        // shows it. A preview not post only at the ticket's price is never kept or sent.
         def place(ticket: Ticket): Unit =
           val intent = ticket.intent.copy(price = Some(ticket.price))
           val crossing = view.bid
             .zip(view.ask)
             .map((bid, ask) => Trading.crossing(ticket.intent.side, ticket.price, bid, ask))
           def kept: Option[Ticket] = Some(ticket.copy(notice = current.actionNotice))
-          def shown(plan: OrderPlan): Boolean =
-            ticket.plan.exists(p => p.quantity == plan.quantity && p.limit == plan.limit)
+          def drew(plan: OrderPlan): Boolean = ticket.plan.exists(_.sameOrder(plan))
           val next =
             if ticket.coin != snapshot.coin || !view.ready || view.pending || crossing.isEmpty ||
               !settled
@@ -326,8 +325,8 @@ final class DeskController(
                         if plan.coin != snapshot.coin || !plan.post || plan.limit != ticket.price =>
                       refuse()
                       kept
-                    case Right(plan) if !shown(plan) =>
-                      addMessage("order", DeskController.sizeChanged)
+                    case Right(plan) if !drew(plan) =>
+                      addMessage("order", DeskController.orderChanged)
                       Some(ticket.copy(plan = Some(plan), notice = None))
                     case Right(plan) => if submitPlan(intent, plan) then None else kept
           current = current.copy(ticket = next)
