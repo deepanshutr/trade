@@ -454,14 +454,30 @@ object Exchange:
     else if allowUnknown then Some(saved.coin + " not placed")
     else None
 
-  final case class OpenOrder(oid: Long, coin: String, size: BigDecimal)
+  final case class OpenOrder(
+      oid: Long,
+      coin: String,
+      size: BigDecimal,
+      side: Side,
+      limit: BigDecimal
+  )
 
-  // The openOrders reply. It carries no client id, so orders are matched by oid.
+  // The openOrders reply. It carries no client id, so orders are matched by oid, and an order
+  // with no oid yet by its market, side, limit and size.
   def openOrders(reply: Option[ujson.Value]): Option[Vector[OpenOrder]] =
     reply.flatMap(j =>
       Try {
         j.arr.toVector.map { o =>
-          OpenOrder(VenueOrders.wholeLong(o("oid")).get, o("coin").str, BigDecimal(o("sz").str))
+          val side = o("side").str match
+            case "B" => Side.Buy
+            case "A" => Side.Sell
+          OpenOrder(
+            VenueOrders.wholeLong(o("oid")).get,
+            o("coin").str,
+            BigDecimal(o("sz").str),
+            side,
+            BigDecimal(o("limitPx").str)
+          )
         }
       }.toOption
     )

@@ -42,7 +42,9 @@ class LimitPanelSpec extends munit.FunSuite:
           "XMR canceled $16.38 at 546.09 (Prop limit: not enough stables)",
           13L,
           "Canceled $16.38 #13"
-        )
+        ),
+        ("XMR resting $16.38 at 546.09 after release", 15L, "Resting $16.38 #15"),
+        ("XMR filled $19.99 at 546.09 after release", 16L, "Filled $19.99 #16")
       )
     do
       val shown = notice(raw, number)

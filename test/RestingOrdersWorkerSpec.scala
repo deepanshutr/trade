@@ -1335,6 +1335,131 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       Wait.until("order not settled as not found")(f.resting.isEmpty)
       assertEquals(f.worker.view.outcome, Some("XMR $21.84 at 546.09 not found at the venue"))
       assertEquals(f.worker.view.notFoundOrders, 1L)
+      // An order settled as not found is not remembered, so its later fill is named and counted.
+      f.push(ws(f.seeded.head, "filled", "0", venueTime))
+      Wait.until("late fill of a not found order not counted")(
+        f.worker.view.ignoredOrderUpdates == 1L
+      )
+      assertEquals(f.worker.view.outcome, Some("XMR filled $21.84 at 546.09 after release"))
+    }
+  }
+
+  // Test 11b: a lost post only order.
+
+  // Presses a limit buy at 546.09 whose reply is lost and walks it to its release: past the
+  // margin, an open orders read that misses it, then three unknownOid answers ten seconds apart.
+  // The open orders read lists only the given orders.
+  private def releaseLost(
+      f: Fixture,
+      listedOrders: Vector[ujson.Value] = Vector.empty
+  ): SavedOrder =
+    f.ready()
+    f.lostOrders = true
+    assert(f.press(f.priced(Side.Buy, "546.09")))
+    Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+    val pending = f.journal.pending.get
+    assert(pending.post)
+    // A refresh sees the order before time moves on, as one does every second.
+    f.refreshes()
+    f.openOrders = Some(ujson.Arr.from(listedOrders))
+    // Past the signed expiry plus the margin and 65 s after the reservation.
+    f.clock.set(pending.expiresAfter + Exchange.ExpiryMarginMs + 1)
+    Wait.until("open orders not read past the margin")(f.openReads.get() >= 1)
+    f.refreshes()
+    f.refreshes()
+    assertEquals(f.journal.pending.map(_.id), Some(pending.id), "released on one unknownOid")
+    f.clock.addAndGet(10000L)
+    f.refreshes()
+    assertEquals(f.journal.pending.map(_.id), Some(pending.id), "released on two unknownOid")
+    f.clock.addAndGet(10000L)
+    Wait.until("lost post only order not released")(f.journal.pending.isEmpty)
+    assertEquals(f.worker.view.outcome, Some("XMR not placed"))
+    pending
+
+  test("a lost post only order waits for the resting bound and its late fill is named") {
+    // A Desk order resting at the same price and size is not the lost one, so its listing
+    // does not hold the lost order back.
+    using(new Fixture(Vector(Seed(Side.Buy, "0.183", "546.09", 5L)))) { f =>
+      val pending = releaseLost(f, Vector(listed(f.seeded.head, "0.183")))
+      assertEquals(f.resting.map(_.id), Vector(f.seeded.head.id))
+      assertEquals(f.worker.view.ignoredOrderUpdates, 0L)
+      f.push(ws(pending.id, Side.Buy, "546.09", "0.183", 4242L, "filled", "0", venueTime))
+      Wait.until("late fill not counted")(f.worker.view.ignoredOrderUpdates == 1L)
+      assertEquals(f.worker.view.outcome, Some("XMR filled $19.99 at 546.09 after release"))
+      assert(
+        f.worker.view.fills
+          .contains(Fill("XMR", Side.Buy, venueTime, BigDecimal("546.09"), BigDecimal("0.183")))
+      )
+      assertEquals(f.resting.map(_.id), Vector(f.seeded.head.id))
+    }
+  }
+
+  test("an open orders read listing a lost post only order holds its release") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+      val pending = f.journal.pending.get
+      f.refreshes()
+      // A partly filled order lists a smaller size, and still holds the release.
+      f.openOrders = Some(ujson.Arr(listed(pending.copy(oid = Some(4242L)), "0.1")))
+      f.clock.set(pending.expiresAfter + Exchange.ExpiryMarginMs + 1)
+      Wait.until("open orders not read past the margin")(f.openReads.get() >= 1)
+      for _ <- 1 to 4 do
+        f.refreshes()
+        f.clock.addAndGet(10000L)
+      f.refreshes()
+      assertEquals(f.journal.pending.map(_.id), Some(pending.id))
+    }
+  }
+
+  test("an open orders read before the margin does not count toward the release") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+      val pending = f.journal.pending.get
+      f.refreshes()
+      // A socket open reads the open orders well before the margin. The order is missing.
+      f.clock.set(20000L)
+      f.opened()
+      Wait.until("open orders not read on the socket open")(f.openReads.get() == 1)
+      // Past the margin the next minute read comes at 80000, so the counting starts there.
+      f.clock.set(75001L)
+      f.refreshes()
+      f.refreshes()
+      f.clock.set(85001L)
+      Wait.until("minute read missing")(f.openReads.get() == 2)
+      f.refreshes()
+      f.clock.set(95001L)
+      f.refreshes()
+      f.refreshes()
+      assertEquals(f.journal.pending.map(_.id), Some(pending.id))
+      f.clock.set(105001L)
+      Wait.until("lost post only order not released")(f.journal.pending.isEmpty)
+      assertEquals(f.worker.view.outcome, Some("XMR not placed"))
+    }
+  }
+
+  test("a late open update for a released order rests again in the list and the journal") {
+    using(new Fixture()) { f =>
+      val pending = releaseLost(f)
+      f.push(ws(pending.id, Side.Buy, "546.09", "0.183", 4242L, "open", "0.15", venueTime))
+      Wait.until("late open order not adopted")(f.resting.size == 1)
+      val adopted = f.resting.head
+      assertEquals(
+        (adopted.id, adopted.oid, adopted.remaining, adopted.post),
+        (pending.id, Some(4242L), Some("0.15"), true)
+      )
+      assertEquals(f.worker.view.outcome, Some("XMR resting $16.38 at 546.09 after release"))
+      assertEquals(f.worker.view.ignoredOrderUpdates, 1L)
+      // From here its updates apply as any resting order's.
+      f.push(ws(adopted, "filled", "0", venueTime + 1))
+      Wait.until("adopted order fill not applied")(f.resting.isEmpty)
+      assertEquals(f.worker.view.outcome, Some("XMR filled $16.38 at 546.09"))
+      assertEquals(f.worker.view.ignoredOrderUpdates, 1L)
     }
   }
 

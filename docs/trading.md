@@ -299,6 +299,11 @@ the signed `expiresAfter` plus a fixed 60-second margin. Before then it stays sa
 because an action still in flight may not show in the lookup yet. After the margin,
 an order with an `err` reply releases as rejected without owner and role checks.
 Any other order releases as "not placed" under the owner and role checks below.
+A limit order may rest, so it releases as "not placed" only on the bound a resting
+order has. An open orders read past the margin must list no order at its market, side
+and limit with no more than its size, other than Desk's own resting orders. Then three
+`unknownOid` answers at least ten seconds apart must follow, each past the margin with
+the role proven. The read runs once a minute, so this takes two to three minutes.
 Desk remembers which order got the `err` reply only in memory, so a restart
 applies the normal saved-order rules. Both time releases rely on four assumptions:
 the local clock is within the margin of the venue's clock; the venue refuses an
@@ -467,7 +472,13 @@ A fill update can arrive before the reply to the order itself. Desk holds it unt
 order rests, then applies it, so no row shows twice. A fill update also settles an
 order whose reply was lost. An update for an order Desk did not place is ignored and
 counted in diagnostics. A count above zero means another tool places orders on the
-account.
+account, or that the venue still held an order Desk let go.
+
+Desk lets an order go when it releases it as "not placed" or settles it as not found.
+It keeps such orders in memory, up to 200, until it quits. A later update for one is
+counted the same way and named with "after release", such as "XMR filled $19.99 at
+546.09 after release". An open one rests again on the axis and in the saved order file,
+and Desk follows it from then on.
 
 Updates are missed while the connection is down, so Desk keeps a safety net. When it
 starts, it looks up each resting order once. After every connection opens, and once

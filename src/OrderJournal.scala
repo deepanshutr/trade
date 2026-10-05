@@ -192,6 +192,15 @@ final class OrderJournal private (
     order
   }
 
+  // An order the venue shows resting after Desk let it go. It rests again with its venue oid and
+  // size, as it was reserved.
+  def adopt(order: SavedOrder): Unit = synchronized {
+    require(order.id.matches("0x[0-9a-f]{32}") && order.nonce <= lastNonce)
+    require(order.oid.exists(_ >= 0) && order.remaining.nonEmpty)
+    require(!held.exists(_.id == order.id) && !saved.exists(_.id == order.id))
+    persist(lastNonce, saved, held :+ order)
+  }
+
   def remaining(id: String, size: String): Unit = synchronized {
     require(held.exists(_.id == id), "resting order does not match")
     persist(
