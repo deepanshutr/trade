@@ -425,8 +425,9 @@ final class DeskController(
           case Command.Close =>
             act(DeskAction.Close, shortcut = true)
             true
+          // t acts only through the order type button the frame drew, as a click does.
           case Command.OrderType =>
-            toggle()
+            act(DeskAction.OrderType, shortcut = true)
             true
           case Command.Orders =>
             focus()

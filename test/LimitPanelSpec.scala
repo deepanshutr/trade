@@ -914,6 +914,41 @@ class LimitPanelSpec extends munit.FunSuite:
     assert(band(l)(5).endsWith("1 on BTC") && band(l)(10).startsWith("[Enter Place]"))
   }
 
+  test("t follows the order type button, off while pending, with a ticket or a confirmation") {
+    val calm = limit.copy(ticket = None, actionNotice = None)
+    def controller(panel: PanelView): DeskController =
+      new DeskController(panel, () => now, (_, _) => Left("unused"), _ => false, _ => Right(()))
+    // The key and a click on the button, each on its own controller, from the same frame.
+    def both(view: TradingView, panel: PanelView): (PanelView, PanelView) =
+      val drawn = frame(view, panel)
+      val button = drawn.controls.find(_.action == DeskAction.OrderType).get
+      val keyed = controller(panel)
+      keyed.publish(drawn)
+      val _ = keyed.handle(Command.OrderType, pinned, view, (100, 30), false)
+      val clicked = controller(panel)
+      clicked.publish(drawn)
+      val _ =
+        clicked.handle(Command.PointerPress(button.x, button.y, 0), pinned, view, (100, 30), false)
+      val _ = clicked.handle(Command.Pointer(button.x, button.y, 0), pinned, view, (100, 30), false)
+      (keyed.panel, clicked.panel)
+    for (name, view, panel) <- Vector(
+        ("pending", live.copy(pending = true), calm),
+        ("ticket", live, calm.copy(ticket = limit.ticket)),
+        ("confirmation", live, calm.copy(modeReview = Some("PROP")))
+      )
+    do
+      val drawn = frame(view, panel)
+      assert(drawn.disabledButtons.exists(_.action == DeskAction.OrderType), name)
+      assert(!drawn.shortcuts.contains(DeskAction.OrderType), name)
+      val (keyed, clicked) = both(view, panel)
+      assertEquals(keyed.orderMode, OrderMode.Limit, name)
+      assertEquals(keyed, clicked, name)
+    // With the button on, t switches the type, as the click does.
+    val (keyed, clicked) = both(live, calm)
+    assertEquals(keyed.orderMode, OrderMode.Market)
+    assertEquals(keyed, clicked)
+  }
+
   test("Orders, the order type and Place light only when they can act") {
     val elsewhere =
       live.copy(resting = Vector(order("b2", Side.Buy, "95000", "0.001", coin = "BTC")))

@@ -497,7 +497,8 @@ object Workspace:
       val orderType =
         keyed(Bind.OrderType, if panel.orderMode == OrderMode.Limit then "Limit" else "Market")
       val orders = keyed(Bind.Orders, "Orders")
-      button(5, 0, orderType, DeskAction.OrderType, choosing && trades)
+      // The order type waits while a ticket is open, since the ticket is already a limit order.
+      button(5, 0, orderType, DeskAction.OrderType, choosing && trades && ticket.isEmpty)
       button(5, orderType.length + 3, orders, DeskAction.Orders, trades && resting.nonEmpty)
       // A row too wide drops the count first and then the sound.
       val sound = keyed(Bind.Sound, if panel.muted then "Muted" else "Sound")

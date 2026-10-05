@@ -159,7 +159,9 @@ on Solarized light, Solarized dark, white and black.
 
 `t` switches the order type between market and limit. It starts as market every
 session and stays the same when you switch between live and prop. Row 6 shows it as
-`[t Market]` or `[t Limit]`.
+`[t Market]` or `[t Limit]`. The button is faint while an order is pending, a ticket
+is open or a mode confirmation shows, and `t` then answers as a click on it does,
+without a switch.
 
 In market mode a trade key or a click on a trade button sends the order at once.
 There is no separate Send step. Mouse submission requires a press and release on the
