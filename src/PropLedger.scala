@@ -214,12 +214,14 @@ final class PropLedger private[desk] (
         healthy = false
         Left("Prop storage failed. Restart to recover")
 
-  // An order rests only on the market prop holds, or on any market while it holds none, so it
-  // never rests to be cancelled at its fill. A buy rests only when its value and maker fee fit
-  // the cash that other resting buys leave.
+  // Orders rest on one market at a time: the one prop holds, or the one where orders already
+  // rest. So none rests only to be cancelled at its fill. A buy rests only when its value and
+  // maker fee fit the cash that other resting buys leave.
   def checkResting(order: PropOrder, snapshot: PropAccount): Either[String, Unit] =
     val others = PropLedger.without(snapshot, order.id)
-    snapshot.positions.keys.find(_ != order.coin) match
+    snapshot.positions.keys
+      .find(_ != order.coin)
+      .orElse(others.resting.map(_.coin).find(_ != order.coin)) match
       case Some(held) => Left(PropLedger.holds(held))
       case None       =>
         if order.side == Side.Sell || PropLedger.reservation(order) <= PropLedger.usable(others)

@@ -15,16 +15,21 @@ class PropRestingSpec extends TempDirectorySuite:
     TradeTerms(TradeSizes(d(dollars), d(dollars), d(dollars)), Trading.defaultSlippage)
   private def id(n: Int): String = "0x%032x".format(n)
 
-  private final class Fixture(cash: String = "10000", memory: Boolean = false):
+  // Resting orders given here start in a memory ledger, as a wallet an older build saved.
+  private final class Fixture(
+      cash: String = "10000",
+      memory: Boolean = false,
+      resting: Vector[PropOrder] = Vector.empty
+  ):
     val wall = new AtomicLong(start)
     val mono = new AtomicLong(start)
     private val bookTime = new AtomicLong(start)
     val directory: Path = tempDirectory("prop-resting-")
     // A memory ledger skips the disk where a test saves hundreds of times.
     val ledger =
-      if memory then
+      if memory || resting.nonEmpty then
         new PropLedger(
-          PropAccount(d(cash), deposit = d(cash)),
+          PropAccount(d(cash), deposit = d(cash), resting = resting),
           d("0.0005"),
           _ => (),
           new AutoCloseable { def close(): Unit = () }
@@ -571,13 +576,11 @@ class PropRestingSpec extends TempDirectorySuite:
   }
 
   test("a trade fills only orders on its own market") {
-    withFixture() { f =>
-      val btc = PropOrder(id(1), "BTC", Side.Buy, d("60000"), d("0.001"), false, start)
-      assertEquals(
-        f.ledger.rest(btc, f.ledger.account.count),
-        Right("BTC resting $60.00 at 60000")
-      )
-      val xmr = f.place(Side.Buy, "546.00", "109.20")
+    // Prop now rests on one market at a time, so only an older wallet holds orders on two.
+    val btc = PropOrder(id(1), "BTC", Side.Buy, d("60000"), d("0.001"), false, start)
+    val xmr = PropOrder(id(2), "XMR", Side.Buy, d("546.00"), d("0.2"), false, start)
+    val f = new Fixture(resting = Vector(btc, xmr))
+    try
       f.trades(f.trade("546.05", 1))
       assertEquals(f.ledger.account.resting, Vector(btc, xmr))
       f.worker.observe(
@@ -586,7 +589,7 @@ class PropRestingSpec extends TempDirectorySuite:
       assertEquals(f.ledger.account.resting, Vector(btc, xmr))
       f.trades(f.trade("545.90", 3))
       assertEquals(f.ledger.account.resting, Vector(btc))
-    }
+    finally f.close()
   }
 
   test("while prop holds another market a posted order is refused at preview and at rest") {
@@ -613,6 +616,22 @@ class PropRestingSpec extends TempDirectorySuite:
       // Back on the market it holds, a posted order rests as before.
       f.worker.select("XMR")
       f.book()
+      f.place(Side.Buy, "546.00", "109.20")
+      assertEquals(f.ledger.account.resting.map(_.coin), Vector("XMR"))
+    }
+  }
+
+  test("while orders rest on another market a posted order is refused at preview and at rest") {
+    withFixture() { f =>
+      val btc = PropOrder(id(1), "BTC", Side.Buy, d("60000"), d("0.001"), false, start)
+      assertEquals(f.ledger.rest(btc, f.ledger.account.count), Right("BTC resting $60.00 at 60000"))
+      val held = Left("Prop holds BTC. Return to that market")
+      assertEquals(f.preview(Side.Buy, Some("546.00"), "109.20"), held)
+      val xmr = PropOrder(id(2), "XMR", Side.Buy, d("546"), d("0.2"), false, start)
+      assertEquals(f.ledger.rest(xmr, f.ledger.account.count), held)
+      assertEquals(f.ledger.account.resting, Vector(btc))
+      // Once the BTC order is cancelled, XMR takes posted orders again.
+      assert(f.worker.cancel(Vector(btc.id)))
       f.place(Side.Buy, "546.00", "109.20")
       assertEquals(f.ledger.account.resting.map(_.coin), Vector("XMR"))
     }

@@ -570,9 +570,9 @@ trades:
   and never while Desk uses backup prices.
 - One trade through two orders fills the nearest first.
 - An order on another market fills only once that market is selected.
-- Prop holds one market at a time. While it holds tokens of one market, a limit order
-  on another market is refused at the ticket and at Enter with "Prop holds XMR. Return
-  to that market".
+- Prop rests limit orders on one market at a time. While it holds tokens of one market,
+  or orders rest on one market, a limit order on another market is refused at the ticket
+  and at Enter with "Prop holds XMR. Return to that market".
 - A buy checks the cash when it rests. Its value and maker fee must fit the cash left
   after the other resting buys, else "Not enough stables for order and fee". `Usable`
   on the panel is that figure. A buy whose cash an immediate buy spent later is
