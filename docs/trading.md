@@ -129,9 +129,9 @@ Desk stops its live worker, which releases the saved-order lock so the key scree
 switch keys. While an order is pending, Desk refuses with "Wait for the pending order".
 A live worker that does not stop shows "Trading did not stop. Restart Desk" and no
 child runs. Resting orders stay at the venue while a child runs. Desk sees no fill
-until the child ends, then looks each order up. The child's own prompts and refusals stay on the terminal. When it exits,
-Desk prints "Press Enter to return to Desk." A step that fails shows "The step did not
-complete (exit N)".
+until the child ends, then looks each order up. The child's own prompts and refusals
+stay on the terminal. When it exits, Desk prints "Press Enter to return to Desk." A
+step that fails shows "The step did not complete (exit N)".
 
 Control C during a child stops the child, not Desk. Control backslash prints a list of
 Desk's threads on the terminal and Desk keeps running. Do not press Control Z at an
@@ -250,9 +250,9 @@ order. Select 5x for that market at the venue. A market whose maximum leverage i
 below 5x cannot trade live. Desk preserves the observed margin mode and never signs
 a leverage change. The margin mode and leverage are captured with each order and
 rechecked before sending. Changing them at the venue invalidates a captured order.
-A resting order keeps the size it was placed with. A leverage change at the venue while
-orders rest is outside Desk's control. Missing or stale position data remains unavailable and is never interpreted as a
-flat account.
+A resting order keeps the size it was placed with. A leverage change at the venue
+while orders rest is outside Desk's control. Missing or stale position data remains
+unavailable and is never interpreted as a flat account.
 
 A new account may already read five times on XMR. An anonymous read on 2026-10-02
 for an address that had never traded showed XMR at 5x and BTC at 20x. That is an
@@ -391,7 +391,8 @@ Every order action acts only through the screen that drew it.
 
 A resting order sits on the price axis in its side's colour with the money it puts up,
 and the status row reads "Resting $19.99 #9". LONG and SHORT stay free while orders
-rest. While Desk sends an order or a cancel, the next press waits for it.
+rest. While Desk sends an order or a cancel, a new press is refused with "Order
+pending".
 
 ### Both sides
 
@@ -485,9 +486,9 @@ check. A cancel waits while an order is pending, with "Wait for the pending orde
 needs neither the selected market nor fresh prices. Desk sends no cancel you did not
 pick on the axis, and a market change cancels nothing.
 
-While prop or view is selected, or while settings run a key or owner step, the live
-worker does not run and live fills are not seen. They show when live runs again, after
-Desk looks the orders up.
+While prop or view is selected, or while settings run a key or owner step, Desk does
+not follow live orders and live fills are not seen. They show when live runs again,
+after Desk looks the orders up.
 
 ### CLOSE and resting orders
 
