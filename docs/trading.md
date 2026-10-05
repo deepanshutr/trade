@@ -505,6 +505,12 @@ pending, with "Wait for the pending order". It needs neither the selected market
 fresh prices. Desk sends no cancel you did not pick on the axis, and a market change
 cancels nothing.
 
+When the venue refuses an order or a cancel, the order result log keeps the venue's own
+words after Desk's text, such as "XMR order rejected | venue: Order has insufficient
+margin". Desk keeps their first line, at most 160 characters. The status row shows only
+Desk's short word, such as `Not sent` or `Cancel refused`. Record these words when you
+run the rollout checks of the venue assumptions.
+
 CLOSE pressed in live while a row cancel runs goes next. Desk finishes the cancel it
 is sending, sends none of the others and reads `Close goes after this cancel` on the
 status row. CLOSE is then sent as soon as live is ready again, as if pressed at that

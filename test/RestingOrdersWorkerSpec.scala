@@ -587,7 +587,12 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       f.ready()
       f.orderError = Some("Post only order would have immediately matched, bbo was 546.09@546.10")
       assert(f.press(f.priced(Side.Buy, "546.09")))
-      Wait.until("rejection not shown")(f.worker.view.outcome.contains("XMR order rejected"))
+      Wait.until("rejection not shown")(
+        f.worker.view.outcome.contains(
+          "XMR order rejected | venue: Post only order would have immediately matched, " +
+            "bbo was 546.09@546.10"
+        )
+      )
       assertEquals(f.journal.pending, None)
       assertEquals(f.resting.size, 1)
       f.ready()
@@ -595,7 +600,8 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       assert(f.press(OrderIntent(Side.Sell, OrderKind.Close)))
       Wait.until("close rejection not shown")(
         f.worker.view.outcome.contains(
-          "XMR order rejected. Resting reduce orders may block it, press o"
+          "XMR order rejected. Resting reduce orders may block it, press o | venue: " +
+            "Reduce only order would increase position"
         )
       )
       assertEquals(f.cancelPosts, Vector.empty)
@@ -614,7 +620,10 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       f.orderError = Some("Post only order would have immediately matched")
       assert(f.press(ticket))
       Wait.until("rejection not shown")(f.worker.view.outcome.nonEmpty)
-      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
+      assertEquals(
+        f.worker.view.outcome,
+        Some("XMR order rejected | venue: Post only order would have immediately matched")
+      )
     }
     // An immediate CLOSE with an entry resting here and a reduce only order on another market.
     val seeds = Vector(
@@ -628,7 +637,10 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       f.orderError = Some("Reduce only order would increase position")
       assert(f.press(OrderIntent(Side.Sell, OrderKind.Close)))
       Wait.until("rejection not shown")(f.worker.view.outcome.nonEmpty)
-      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
+      assertEquals(
+        f.worker.view.outcome,
+        Some("XMR order rejected | venue: Reduce only order would increase position")
+      )
     }
   }
 
@@ -1762,12 +1774,13 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       Wait.until("cancel request never finished")(!f.worker.view.pending)
       assertEquals(f.lookups.drop(2), Vector(a.id))
       assertEquals(f.resting.map(_.id), Vector(b.id))
-      assertEquals(f.worker.view.outcome, Some("XMR canceled $21.60 at 540"))
+      val named = " | venue: Something the docs never named"
+      assertEquals(f.worker.view.outcome, Some("XMR canceled $21.60 at 540" + named))
       assert(f.worker.cancel(Vector(b.id)))
       Wait.until("cancel request never finished")(!f.worker.view.pending)
       assertEquals(f.lookups.drop(2), Vector(a.id, b.id))
       assertEquals(f.resting.map(_.id), Vector(b.id))
-      assertEquals(f.worker.view.outcome, Some("XMR cancel rejected"))
+      assertEquals(f.worker.view.outcome, Some("XMR cancel rejected" + named))
     }
   }
 
@@ -1911,6 +1924,68 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       assertEquals(f.cancelPosts.map(_("action")("cancels")(0)("cloid").str), Vector(a.id))
       assertEquals(f.resting.map(_.id), Vector(b.id, c.id))
     }
+  }
+
+  test("the venue's own rejection words reach the order result log line") {
+    using(new Fixture(Vector(Seed(Side.Buy, "0.2", "540", 5L)))) { f =>
+      f.ready()
+      val drawnReady = TradingView("XMR", message = "Ready", ready = true)
+      var log = Vector.empty[(Long, String)]
+      var rows = Vector.empty[String]
+      lazy val controller: DeskController = new DeskController(
+        PanelView(mode = "LIVE"),
+        () => f.clock.get(),
+        f.worker.preview,
+        f.worker.submitReviewed,
+        _ => Left("no mode switch"),
+        result = (number, text) => {
+          log :+= ((number, text))
+          val frame = Workspace.draw(
+            Snapshot.initial("XMR", 0L),
+            drawnReady,
+            controller.panel,
+            100,
+            30,
+            0L,
+            java.time.ZoneOffset.UTC,
+            Style.mono
+          )
+          rows :+= Chart.plain(frame.lines(30 - 12 + 3)).take(38).trim
+        }
+      )
+      controller.orders(f.worker.view)
+      f.orderError = Some("Order has insufficient margin, not enough to fill")
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("rejection not shown")(f.worker.view.outcome.nonEmpty)
+      controller.orders(f.worker.view)
+      f.ready()
+      val order = f.seeded.head
+      f.cancels = _ => Some(cancelReply(ujson.Obj("error" -> "Order was never placed, or filled.")))
+      f.statuses.put(order.id, lookupReply(order, "open", "0.2"))
+      assert(f.worker.cancel(Vector(order.id)))
+      Wait.until("cancel request never finished")(!f.worker.view.pending)
+      controller.orders(f.worker.view)
+      assertEquals(
+        log,
+        Vector(
+          (1L, "XMR order rejected | venue: Order has insufficient margin, not enough to fill"),
+          (2L, "XMR cancel rejected | venue: Order was never placed, or filled.")
+        )
+      )
+      // The status row keeps Desk's own word, whatever the venue said.
+      assertEquals(rows, Vector("Not sent #1", "Cancel refused #2"))
+    }
+  }
+
+  test("the venue's words are the first line, free of control bytes and at most 160 long") {
+    assertEquals(TradingWorker.venueWords(""), "")
+    assertEquals(TradingWorker.venueWords("  \nsecond"), "")
+    val clear = 27.toChar.toString + "[2J"
+    assertEquals(
+      TradingWorker.venueWords(s"Bad ${clear}price\nsecond line"),
+      " | venue: Bad price"
+    )
+    assertEquals(TradingWorker.venueWords("x" * 300), " | venue: " + "x" * 160)
   }
 
   // Diagnostics.

@@ -217,8 +217,12 @@ object Workspace:
     else ""
 
   private def orderStatus(view: TradingView, panel: PanelView): String =
-    val raw =
+    // The venue's own words after the mark go to the order result log only.
+    val full =
       if view.pending then view.message else view.block.orElse(panel.actionNotice).getOrElse("")
+    val raw = full.indexOf(TradingWorker.venueMark) match
+      case -1 => full
+      case at => full.take(at)
     if effect(raw) then return if panel.focus.nonEmpty then raw else ""
     val unsaved = raw.toLowerCase.matches("order result #[0-9]+ not saved")
     val lower = raw.toLowerCase

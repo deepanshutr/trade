@@ -59,6 +59,13 @@ object TradingWorker:
   val cancelPendingMessage: String = "Wait for the pending order"
   val closeNextMessage: String = "Close goes after this cancel"
   val closeWithdrawnMessage: String = "Close withdrawn"
+  // The venue's own words follow Desk's text in the order result log, after this mark. The status
+  // row reads only the part before it. They are the first line, free of control bytes, cut to
+  // 160 characters.
+  val venueMark: String = " | venue: "
+  private[desk] def venueWords(text: String): String =
+    val words = Workspace.safeText(text).takeWhile(_ != '\n').trim.take(160)
+    if words.isEmpty then "" else venueMark + words
   val waitingDepthMessage: String = "Waiting for fresh depth"
   // Two fatal texts. Each fits the 38 column panel, where a ticket shows it on its size row.
   val storageFailedMessage: String = "Order state failed. Restart to recover"
@@ -218,6 +225,8 @@ final class TradingWorker private[desk] (
   // Monotonic time at which this process first saw the saved order.
   private var savedSeenAt = 0L
   private var errOrder = Option.empty[String]
+  // The venue's words of that err reply.
+  private var errWords = ""
   // Monotonic time at which the last reduce-only order completed.
   private var reducedAt = Option.empty[Long]
   private var journal = Option.empty[OrderJournal]
@@ -695,7 +704,13 @@ final class TradingWorker private[desk] (
       wakeAccount()
 
   // Removes a resting order the venue no longer holds and says why.
-  private def settle(order: SavedOrder, gone: Gone, at: Option[Long], reduced: Boolean): Unit =
+  private def settle(
+      order: SavedOrder,
+      gone: Gone,
+      at: Option[Long],
+      reduced: Boolean,
+      venue: String = ""
+  ): Unit =
     journalChange { j =>
       j.resting.find(_.id == order.id).map { r =>
         j.settle(r.id)
@@ -703,7 +718,7 @@ final class TradingWorker private[desk] (
       }
     }.foreach { r =>
       synchronized {
-        announce(goneText(r, gone))
+        announce(goneText(r, gone) + venue)
         if gone == Gone.Venue("filled") then
           at.foreach(time => addFill(Fill(r.coin, r.side, time, BigDecimal(r.limit), left(r))))
           if reduced then reducedAt = Some(monotonic())
@@ -839,14 +854,15 @@ final class TradingWorker private[desk] (
       r: SavedOrder,
       reply: Option[ujson.Value],
       lookupAt: Long,
-      counting: Boolean
+      counting: Boolean,
+      venue: String = ""
   ): Unit =
     VenueOrders.lookup(reply) match
       case Some(VenueOrders.Lookup.Open(_, size)) if Exchange.sameOrder(reply, r) =>
         synchronized { checks -= r.id }
         shrink(r, size, None, facing(None, r.side))
       case Some(VenueOrders.Lookup.Settled(status, _)) if Exchange.sameOrder(reply, r) =>
-        settle(r, Gone.Venue(status), None, reduced = true)
+        settle(r, Gone.Venue(status), None, reduced = true, venue)
       case Some(VenueOrders.Lookup.Unknown) if counting =>
         val gone = synchronized {
           val proven = roleGeneration.contains(generation) && fresh(roleAt, 60000L)
@@ -988,7 +1004,13 @@ final class TradingWorker private[desk] (
       val response = Try(exchange.post(request.get)).toOption.flatten
       if Exchange.isErrReply(response) then
         synchronized {
-          if saved.contains(p) then errOrder = Some(p.id)
+          if saved.contains(p) then
+            errOrder = Some(p.id)
+            errWords = response
+              .flatMap(_.objOpt)
+              .flatMap(_.get("response"))
+              .flatMap(_.strOpt)
+              .fold("")(TradingWorker.venueWords)
         }
       Exchange.placed(response, p) match
         case Some(VenueOrders.Placed.Resting(oid)) =>
@@ -1002,14 +1024,14 @@ final class TradingWorker private[desk] (
             s"${p.coin} filled ${dollars(quantity, price)} at ${priceText(price)}"
           )
           complete(p, text, fill = Some(Fill(p.coin, p.side, wall(), price, quantity)))
-        case Some(VenueOrders.Placed.Rejected(_)) =>
+        case Some(VenueOrders.Placed.Rejected(reason)) =>
           // Resting reduce only orders can block only a CLOSE sent at once on their market.
           val blocked = synchronized(restingOrders.exists(r => r.coin == p.coin && r.reduceOnly))
           complete(
             p,
-            if press.plan.kind == OrderKind.Close && !p.post && blocked then
-              p.coin + " order rejected. Resting reduce orders may block it, press o"
-            else p.coin + " order rejected"
+            (if press.plan.kind == OrderKind.Close && !p.post && blocked then
+               p.coin + " order rejected. Resting reduce orders may block it, press o"
+             else p.coin + " order rejected") + TradingWorker.venueWords(reason)
           )
         case None =>
           synchronized { message = p.coin + " waiting for order result" }
@@ -1058,6 +1080,10 @@ final class TradingWorker private[desk] (
       ).toOption
       val reply = request.flatMap(body => Try(exchange.post(body)).toOption.flatten)
       val success = request.nonEmpty && VenueOrders.cancelOutcome(reply).contains(Right(()))
+      val venue = VenueOrders
+        .cancelOutcome(reply)
+        .flatMap(_.left.toOption)
+        .fold("")(TradingWorker.venueWords)
       if request.isEmpty then synchronized { announce(r.coin + " cancel not sent") }
       else if success then settle(r, Gone.Venue("canceled"), None, reduced = false)
       else
@@ -1065,13 +1091,15 @@ final class TradingWorker private[desk] (
         // reply is settled only from one status lookup. An order still open was not canceled,
         // and an order the lookup cannot place stays for the next reconciliation.
         val status = lookup(r)
-        looked(r, status, wall(), counting = false)
+        looked(r, status, wall(), counting = false, venue)
         val open = VenueOrders.lookup(status) match
           case Some(VenueOrders.Lookup.Open(_, _)) => Exchange.sameOrder(status, r)
           case _                                   => false
         synchronized {
           if restingOrders.exists(_.id == r.id) then
-            announce(r.coin + (if open then " cancel rejected" else " cancel result unknown"))
+            announce(
+              r.coin + (if open then " cancel rejected" else " cancel result unknown") + venue
+            )
         }
       success
     }
@@ -1196,7 +1224,7 @@ final class TradingWorker private[desk] (
                 synchronized(roleGeneration.contains(g) && fresh(roleAt, 60000L)),
               errReply = gotErrReply
             )
-            if gotErrReply then past.foreach(text => complete(p, text))
+            if gotErrReply then past.foreach(text => complete(p, text + synchronized(errWords)))
             else if !p.post then past.foreach(text => complete(p, text, release = true))
             else
               // A posted order may rest, so it takes the bound of a resting order: a miss in an

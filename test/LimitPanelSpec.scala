@@ -124,6 +124,23 @@ class LimitPanelSpec extends munit.FunSuite:
       frame(live.copy(block = Some(refused)), PanelView(mode = "LIVE"))
     assertEquals(row(blocked, 4), "Close refused. Press o for orders")
     assertEquals(statusOf("XMR order rejected", 6L), "Not sent #6")
+    // The venue's words after the mark never change the status row, whatever they say.
+    assertEquals(
+      statusOf("XMR order rejected | venue: Order filled $5 with funds", 7L),
+      "Not sent #7"
+    )
+    assertEquals(
+      statusOf(refused + " | venue: canceled $5", 8L),
+      "Close refused. Press o for orders #8"
+    )
+    assertEquals(
+      statusOf("XMR cancel result unknown | venue: already canceled $3, or filled ", 9L),
+      "Confirming result #9"
+    )
+    assertEquals(
+      statusOf("XMR canceled $16.38 at 546.09 | venue: Order sell filled $9 ", 10L),
+      "Canceled $16.38 #10"
+    )
   }
 
   test("a cancel reads Canceling while it runs and Cancel refused when the venue refuses it") {
