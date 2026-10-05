@@ -85,9 +85,13 @@ class LimitControllerSpec extends munit.FunSuite:
     var refusal = Option.empty[String]
     var reshape: OrderPlan => OrderPlan = identity
     var switched = Vector.empty[String]
+    var clock = now
+    // Whether a live row cancel runs, and how often CLOSE asked it to stop.
+    var cancelRuns = false
+    var stops = 0
     val controller = new DeskController(
       PanelView(mode = mode, bigOrder = big),
-      () => now,
+      () => clock,
       (intent, terms) => {
         planned :+= intent
         refusal
@@ -111,7 +115,11 @@ class LimitControllerSpec extends munit.FunSuite:
       },
       review => { sent :+= review; accept },
       name => { switched :+= name; Right(()) },
-      cancel = ids => { cancelled :+= ids; true }
+      cancel = ids => { cancelled :+= ids; true },
+      closeFirst = () => {
+        if cancelRuns then stops += 1
+        cancelRuns
+      }
     )
     private def buttons(actions: Vector[DeskAction], row: Int): Vector[DeskButton] =
       actions.zipWithIndex.map((a, i) => DeskButton(a.toString, a, i * 12, row, 11))
@@ -1005,6 +1013,52 @@ class LimitControllerSpec extends munit.FunSuite:
     assertEquals(f.notice, Some("flip $22.08 XMR if filled"))
     Vector.fill(4)(Command.ZoomOut).foreach(f.key)
     assertEquals(f.notice, Some("void"))
+  }
+
+  test("CLOSE pressed while a live cancel runs goes once live is ready, within 30 s") {
+    val running = rested.copy(pending = true, ready = false, message = "XMR canceling 1 of 3")
+    val faint = Vector[DeskAction](DeskAction.Close)
+    def pressed(): Fixture =
+      val f = new Fixture(start = running)
+      f.cancelRuns = true
+      f.frame(trade - DeskAction.Close, faint)
+      f.key(Command.Close)
+      assertEquals(f.stops, 1)
+      assertEquals(f.notice, None)
+      f.frame(trade - DeskAction.Close, faint)
+      f.nothingSent()
+      f
+    val f = pressed()
+    f.clock += TradingWorker.maximumReviewLifetimeMs
+    f.cancelRuns = false
+    f.view = rested
+    f.frame()
+    assertEquals(f.planned, Vector(close))
+    assertEquals(f.sent.map(_.intent), Vector(close))
+    f.frame()
+    assertEquals(f.sent.size, 1)
+    // Still pending a moment past the review lifetime, it is dropped with the refusal.
+    val late = pressed()
+    late.clock += TradingWorker.maximumReviewLifetimeMs + 1
+    late.frame(trade - DeskAction.Close, faint)
+    assertEquals(late.notice, Some("Order pending"))
+    late.view = rested
+    late.frame()
+    late.nothingSent()
+    // A market change drops it.
+    val moved = pressed()
+    moved.controller.resetMarket()
+    moved.view = rested
+    moved.frame()
+    moved.nothingSent()
+    // With no cancel running, CLOSE while pending is refused as before and never sent later.
+    val busy = new Fixture(start = running)
+    busy.frame(trade - DeskAction.Close, faint)
+    busy.key(Command.Close)
+    assertEquals(busy.notice, Some("Order pending"))
+    busy.view = rested
+    busy.frame()
+    busy.nothingSent()
   }
 
   test("CLOSE in limit mode sends an immediate close and opens no ticket") {

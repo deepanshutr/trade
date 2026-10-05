@@ -13,7 +13,8 @@ final class DeskController(
     switchMode: String => Either[String, Unit],
     mute: Boolean => Unit = _ => (),
     result: (Long, String) => Unit = (_, _) => (),
-    cancel: Vector[String] => Boolean = _ => false
+    cancel: Vector[String] => Boolean = _ => false,
+    closeFirst: () => Boolean = () => false
 ):
   private var current = initial
   private var shown = Option.empty[WorkspaceFrame]
@@ -26,11 +27,24 @@ final class DeskController(
   // The orders and entry the axis rows are made of, as last seen.
   private var made = (Vector.empty[(String, BigDecimal)], Option.empty[BigDecimal])
   private val orderUpdates = new OrderUpdates
+  // A CLOSE pressed while a live row cancel runs, with its market and the time of the press. The
+  // cancels stop and CLOSE is sent once live is ready again, within a review's lifetime.
+  private var closeNext = Option.empty[(String, Long)]
   def panel: PanelView = synchronized(current)
   // The render pass calls this before it draws, so a frame shows the orders seen here. Orders that
   // change after a frame was drawn hold the axis keys until the next frame.
   def orders(view: TradingView): Unit = synchronized {
     orderUpdates.collect(view)(addMessage("order", _))
+    closeNext.foreach { (coin, at) =>
+      if current.mode != "LIVE" || view.coin != coin ||
+        wall() - at > TradingWorker.maximumReviewLifetimeMs
+      then
+        closeNext = None
+        addMessage("order", refusal(view))
+      else if view.ready && !view.pending then
+        closeNext = None
+        val _ = send(view, coin, closing(view))
+    }
     val now = (
       view.resting.filter(_.coin == view.coin).map(o => (o.id, o.price)),
       view.position.filter(_ != 0).flatMap(_ => view.portfolio.entry)
@@ -59,6 +73,7 @@ final class DeskController(
   def invalidate(): Unit = synchronized { shown = None }
   // A ticket or a cursor never carries one market's price or row to another.
   def resetMarket(): Unit = synchronized {
+    closeNext = None
     current = current.copy(
       modeReview = None,
       outlook = Outlook.empty(""),
@@ -156,6 +171,52 @@ final class DeskController(
       else "void"
     }
 
+  private def refusal(view: TradingView): String =
+    if view.pending then "Order pending"
+    else view.block.getOrElse("Not sent: price or account changed")
+
+  // Live sends only at the leverage and margin mode the account confirmed.
+  private def settled(view: TradingView): Boolean = current.mode != "LIVE" || (view.leverage
+    .exists(n => n > 0 && view.rules.exists(r => n <= r.maxLeverage)) &&
+    view.marginMode.exists(m => m == "cross" || m == "isolated"))
+
+  private def submitPlan(view: TradingView, intent: OrderIntent, plan: OrderPlan): Boolean =
+    val at = wall()
+    val order = OrderReview(
+      intent,
+      plan,
+      current.terms,
+      at,
+      Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
+      view.leverage,
+      view.marginMode
+    )
+    val sent = submit(order)
+    if sent then current = current.copy(actionNotice = Some("Sending"))
+    else addMessage("order", refusal(view))
+    sent
+
+  private def send(view: TradingView, coin: String, intent: OrderIntent): Boolean =
+    if !settled(view) then
+      addMessage("order", refusal(view))
+      false
+    else
+      preview(intent, current.terms) match
+        case Right(plan) if plan.coin == coin => submitPlan(view, intent, plan)
+        case Left(reason)                     =>
+          addMessage("order", reason)
+          false
+        case _ =>
+          addMessage("order", refusal(view))
+          false
+
+  // A Close carries no amount. It sells a long and buys a short. On a flat or unknown position it
+  // asks for a buy, which the plan or the worker refuses. Prop is long only, so its close always
+  // sells.
+  private def closing(view: TradingView): OrderIntent =
+    val sells = current.mode == "PROP" || view.position.exists(_ > 0)
+    OrderIntent(if sells then Side.Sell else Side.Buy, OrderKind.Close)
+
   private val small = BigDecimal("0.01")
   private val large = BigDecimal("0.1")
 
@@ -201,12 +262,7 @@ final class DeskController(
       !snapshot.quit && !promptOpen && snapshot.prompt.isEmpty &&
         snapshot.marketPending.isEmpty && view.coin == snapshot.coin
     )
-    def refuse(): Unit =
-      addMessage(
-        "order",
-        if view.pending then "Order pending"
-        else view.block.getOrElse("Not sent: price or account changed")
-      )
+    def refuse(): Unit = addMessage("order", refusal(view))
     // The axis as the shown frame drew it. Without it the axis keys do nothing, as a press does
     // without a frame.
     val drawn = available.flatMap(_.axis)
@@ -258,43 +314,16 @@ final class DeskController(
       )
       val visible = seen.exists(_.buttons.exists(_.action == action))
       val fromKey = shortcut && seen.exists(_.shortcuts.contains(action))
-      if seen.exists(_.disabledButtons.exists(_.action == action)) then
+      val faint = seen.exists(_.disabledButtons.exists(_.action == action))
+      // CLOSE pressed through a frame that drew it, while a live row cancel runs, goes next.
+      if action == DeskAction.Close && (visible || fromKey || faint) &&
+        current.mode == "LIVE" && current.modeReview.isEmpty && view.pending && closeFirst()
+      then closeNext = Some((snapshot.coin, wall()))
+      else if faint then
         if view.ready && !view.pending && view.block.isEmpty then
           addMessage("order", "Not sent: controls changed")
         else refuse()
       else if visible || fromKey then
-        // Live sends only at the leverage and margin mode the account confirmed.
-        def settled: Boolean = current.mode != "LIVE" || (view.leverage
-          .exists(n => n > 0 && view.rules.exists(r => n <= r.maxLeverage)) &&
-          view.marginMode.exists(m => m == "cross" || m == "isolated"))
-        def submitPlan(intent: OrderIntent, plan: OrderPlan): Boolean =
-          val at = wall()
-          val order = OrderReview(
-            intent,
-            plan,
-            current.terms,
-            at,
-            Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
-            view.leverage,
-            view.marginMode
-          )
-          val sent = submit(order)
-          if sent then current = current.copy(actionNotice = Some("Sending"))
-          else refuse()
-          sent
-        def send(intent: OrderIntent): Boolean =
-          if !settled then
-            refuse()
-            false
-          else
-            preview(intent, current.terms) match
-              case Right(plan) if plan.coin == snapshot.coin => submitPlan(intent, plan)
-              case Left(reason)                              =>
-                addMessage("order", reason)
-                false
-              case _ =>
-                refuse()
-                false
         // A ticket sends one post only order at its own price, exactly the order it showed. A
         // fresh preview of any other order takes the ticket's place and waits for the frame that
         // shows it. A preview not post only at the ticket's price is never kept or sent.
@@ -307,7 +336,7 @@ final class DeskController(
           def drew(plan: OrderPlan): Boolean = ticket.plan.exists(_.sameOrder(plan))
           val next =
             if ticket.coin != snapshot.coin || !view.ready || view.pending || crossing.isEmpty ||
-              !settled
+              !settled(view)
             then
               refuse()
               kept
@@ -328,7 +357,7 @@ final class DeskController(
                     case Right(plan) if !drew(plan) =>
                       addMessage("order", DeskController.orderChanged)
                       Some(ticket.copy(plan = Some(plan), notice = None))
-                    case Right(plan) => if submitPlan(intent, plan) then None else kept
+                    case Right(plan) => if submitPlan(view, intent, plan) then None else kept
           current = current.copy(ticket = next)
         action match
           case DeskAction.Prepare(intent)
@@ -336,7 +365,7 @@ final class DeskController(
                 current.modeReview.isEmpty && current.ticket.isEmpty &&
                 intent.kind == OrderKind.Hard && intent.big == current.bigOrder =>
             if current.orderMode == OrderMode.Market then
-              val _ = send(intent)
+              val _ = send(view, snapshot.coin, intent)
             else
               // A limit order starts at the touch on its own side.
               val touch: Option[BigDecimal] = if intent.side == Side.Buy then view.bid else view.ask
@@ -344,14 +373,10 @@ final class DeskController(
                 case Some(price) => open(snapshot.coin, intent, price, view)
                 case None        => refuse()
           case DeskAction.Place if current.mode != "VIEW" => current.ticket.foreach(place)
-          // A Close carries no amount. It sells a long and buys a short. On a flat or unknown
-          // position it asks for a buy, which the plan or the worker refuses. Prop is long only,
-          // so its close always sells.
           case DeskAction.Close
               if view.ready && !view.pending && current.mode != "VIEW" &&
                 current.modeReview.isEmpty =>
-            val sells = current.mode == "PROP" || view.position.exists(_ > 0)
-            val _ = send(OrderIntent(if sells then Side.Sell else Side.Buy, OrderKind.Close))
+            val _ = send(view, snapshot.coin, closing(view))
           // The order type switches only in the state its button is on in, whatever frame
           // the press came through.
           case DeskAction.OrderType

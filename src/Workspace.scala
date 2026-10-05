@@ -172,6 +172,7 @@ object Workspace:
     "A limit order takes a sized press",
     Trading.restingCapText,
     TradingWorker.cancelPendingMessage,
+    TradingWorker.closeNextMessage,
     "Read the trading key first. Press r"
   )
 

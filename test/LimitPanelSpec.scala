@@ -135,6 +135,14 @@ class LimitPanelSpec extends munit.FunSuite:
     assertEquals(statusOf("XMR canceled $16.38 at 546.09", 9L), "Canceled $16.38 #9")
   }
 
+  test("a CLOSE waiting on a cancel says so on the status row") {
+    val waiting = live.copy(pending = true, message = TradingWorker.closeNextMessage)
+    assertEquals(
+      row(frame(waiting, limit.copy(ticket = None, actionNotice = None)), 4),
+      "Close goes after this cancel"
+    )
+  }
+
   test("a cancel refused while an order is pending says to wait, not Sending") {
     val shown = text(
       drawn(
@@ -866,7 +874,8 @@ class LimitPanelSpec extends munit.FunSuite:
       TradingWorker.signingFailedMessage,
       Workspace.closeRefused,
       Workspace.canceling,
-      Workspace.cancelRefused
+      Workspace.cancelRefused,
+      TradingWorker.closeNextMessage
     )
     // Prop market fills on the status row, at the largest amount a prop wallet can hold, whole.
     val fills = Vector(

@@ -146,6 +146,8 @@ final class ExecutionRouter(
     if selected == "PROP" then propWorker().cancel(ids)
     else selected == "LIVE" && live.cancel(ids)
   }
+  // Only live runs a row cancel long enough for CLOSE to wait on it.
+  def closeFirst(): Boolean = synchronized(selected == "LIVE" && liveEnabled && live.closeFirst())
   def livePending: Boolean = synchronized(live.view.pending)
   // Stops the live worker for a child and waits for it, as close does. A worker that has not
   // retired in time may still hold the journal lock, so no child may start.

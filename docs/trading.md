@@ -485,9 +485,18 @@ the row's amount is faint. A success reads `Canceled $16.38 #9` on the status ro
 no clear reply is settled only from one status lookup. An order the lookup finds still
 open stays, and the status row reads `Cancel refused`, with "XMR cancel rejected" in
 the log. An order the lookup cannot place stays for the next check, and the status row
-reads `Confirming result`, with "XMR cancel result unknown" in the log. A cancel waits while an order is pending, with "Wait for the pending order". It
-needs neither the selected market nor fresh prices. Desk sends no cancel you did not
-pick on the axis, and a market change cancels nothing.
+reads `Confirming result`, with "XMR cancel result unknown" in the log. Desk stops at
+the first cancel the venue does not answer with a clear success. The orders after it
+stay, and the next Enter on the row cancels them. A cancel waits while an order is
+pending, with "Wait for the pending order". It needs neither the selected market nor
+fresh prices. Desk sends no cancel you did not pick on the axis, and a market change
+cancels nothing.
+
+CLOSE pressed in live while a row cancel runs goes next. Desk finishes the cancel it
+is sending, sends none of the others and reads `Close goes after this cancel` on the
+status row. CLOSE is then sent as soon as live is ready again, as if pressed at that
+moment. If live is not ready within 30 seconds, CLOSE is not sent and the status row
+says why. A market change before then drops it too.
 
 While prop or view is selected, or while settings run a key or owner step, Desk does
 not follow live orders and live fills are not seen. They show when live runs again,

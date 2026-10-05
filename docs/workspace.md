@@ -139,6 +139,7 @@ The status row names Desk's own outcomes with their dollars and a result number:
 | `XMR canceled $16.38 at 546.09`, or a cancel by the venue | `Canceled $16.38 #10` |
 | `XMR canceled before sending` | `Not sent #11` |
 | `XMR canceling 1 of 3`, while a cancel runs | `Canceling` |
+| CLOSE pressed while a cancel runs | `Close goes after this cancel` |
 | `XMR cancel rejected` | `Cancel refused #12` |
 | `XMR order rejected. Resting reduce orders may block it, press o` | `Close refused. Press o for orders #13` |
 
@@ -280,8 +281,9 @@ the position puts up, for example `x Close $21.84`, or `x Close --` while the le
 is unknown. On a narrow row the label drops the amount. It is enabled in live and prop
 with ready account data and a fresh nonzero position, while no order is pending or
 saved, no mode confirmation or market prompt is open, no market change is pending,
-and the heading fits the row. Otherwise it reads `x Close` and is faint. With ready
-account data and no position, `x` shows "Not sent: controls changed". A close that
+and the heading fits the row. Otherwise it reads `x Close` and is faint. In live, `x`
+pressed while a row cancel runs still acts: CLOSE goes after the current cancel. With
+ready account data and no position, `x` shows "Not sent: controls changed". A close that
 fills in part leaves the rest open. Press CLOSE again. In prop, CLOSE sells the whole
 holding at once with the prop fee. CLOSE never cancels a resting order. See
 [CLOSE and resting orders](trading.md#close-and-resting-orders). In view `x` answers

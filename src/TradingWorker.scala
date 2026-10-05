@@ -53,6 +53,7 @@ object TradingWorker:
   val openingPauseMs: Long = 2000L
   val openingPausedMessage: String = "Opening paused for 2 s after closing"
   val cancelPendingMessage: String = "Wait for the pending order"
+  val closeNextMessage: String = "Close goes after this cancel"
   val waitingDepthMessage: String = "Waiting for fresh depth"
   // Two fatal texts. Each fits the 38 column panel, where a ticket shows it on its size row.
   val storageFailedMessage: String = "Order state failed. Restart to recover"
@@ -217,6 +218,10 @@ final class TradingWorker private[desk] (
   // The journal's resting orders, read again after every change to them.
   private var restingOrders = Vector.empty[SavedOrder]
   private var cancelling = Option.empty[String]
+  // A row cancel runs from its request to the end of its loop. A CLOSE pressed meanwhile stops
+  // the loop before its next order, so CLOSE goes next.
+  private var cancelRunning = false
+  private var closeWanted = false
   private var fills = Vector.empty[Fill]
   private var finished = Vector.empty[String]
   private var ignoredUpdates = 0L
@@ -382,10 +387,21 @@ final class TradingWorker private[desk] (
     else if known.isEmpty || !busy.compareAndSet(false, true) then false
     else
       outcome = None
-      if requests.offer(Request.Cancel(known)) then true
+      if requests.offer(Request.Cancel(known)) then
+        cancelRunning = true
+        closeWanted = false
+        true
       else
         busy.set(false)
         false
+  }
+
+  // True when a row cancel runs. It then stops before its next order, so CLOSE goes next.
+  def closeFirst(): Boolean = synchronized {
+    if cancelRunning then
+      closeWanted = true
+      message = TradingWorker.closeNextMessage
+    cancelRunning
   }
 
   def select(next: String): Unit = synchronized {
@@ -901,6 +917,8 @@ final class TradingWorker private[desk] (
           synchronized { message = p.coin + " waiting for order result" }
 
   // Cancels run on the orders thread, one signed action per order, each under the account gate.
+  // The loop stops at the first cancel whose reply is not a clear success, and before its next
+  // order once CLOSE is pressed. The rest wait for the next Enter.
   private def executeCancel(ids: Vector[String]): Unit =
     executing.set(true)
     try
@@ -908,14 +926,15 @@ final class TradingWorker private[desk] (
       ids.zipWithIndex.foreach { (id, index) =>
         // A cancel names only an order the journal holds, never an id from outside it.
         val order =
-          if stopped || synchronized(disabled.get() || closed.get() || fatal) then None
+          if stopped || synchronized(closeWanted || disabled.get() || closed.get() || fatal) then
+            None
           else journal.flatMap(_.resting.find(_.id == id))
         order.foreach { r =>
           synchronized {
             message = s"${r.coin} canceling ${index + 1} of ${ids.size}"
             cancelling = Some(r.id)
           }
-          try orderPermission(() => cancelOne(r))
+          try orderPermission(() => if !cancelOne(r) then stopped = true)
           catch
             case _: Exception =>
               stopped = true
@@ -927,17 +946,22 @@ final class TradingWorker private[desk] (
       }
     finally
       executing.set(false)
-      synchronized { if !fatal then busy.set(false) }
+      synchronized {
+        cancelRunning = false
+        closeWanted = false
+        if !fatal then busy.set(false)
+      }
 
-  private def cancelOne(r: SavedOrder): Unit =
-    journalChange(j => Some(j.nextNonce(wall()))).foreach { nonce =>
+  // True only when the venue answered the cancel with a clear success.
+  private def cancelOne(r: SavedOrder): Boolean =
+    journalChange(j => Some(j.nextNonce(wall()))).exists { nonce =>
       val request = Try(
         signed(VenueOrders.cancelAction(r.asset, r.id), nonce, Some(Math.addExact(wall(), 5000L)))
       ).toOption
       val reply = request.flatMap(body => Try(exchange.post(body)).toOption.flatten)
+      val success = request.nonEmpty && VenueOrders.cancelOutcome(reply).contains(Right(()))
       if request.isEmpty then synchronized { announce(r.coin + " cancel not sent") }
-      else if VenueOrders.cancelOutcome(reply).contains(Right(())) then
-        settle(r, Gone.Venue("canceled"), None, reduced = false)
+      else if success then settle(r, Gone.Venue("canceled"), None, reduced = false)
       else
         // The venue documents no error text for a cancel by cloid, so any error or unclear
         // reply is settled only from one status lookup. An order still open was not canceled,
@@ -951,6 +975,7 @@ final class TradingWorker private[desk] (
           if restingOrders.exists(_.id == r.id) then
             announce(r.coin + (if open then " cancel rejected" else " cancel result unknown"))
         }
+      success
     }
 
   private def initializeSigning(): Unit =

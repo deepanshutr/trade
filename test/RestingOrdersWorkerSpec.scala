@@ -1299,11 +1299,9 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     using(new Fixture(seeds)) { f =>
       val Vector(a, b, c) = f.seeded
       f.ready()
-      f.statuses.put(b.id, lookupReply(b, "canceled", "0.15"))
-      f.cancels = cloid =>
-        if cloid == a.id then Some(cancelReply("success"))
-        else if cloid == b.id then Some(cancelReply(gone))
-        else None
+      f.statuses.put(c.id, lookupReply(c, "canceled", "0.2"))
+      f.cancels =
+        cloid => if cloid == c.id then Some(cancelReply(gone)) else Some(cancelReply("success"))
       val hold = new Hold
       f.cancelHolds.put(b.id, hold)
       val entries = f.gateEntries.get()
@@ -1320,9 +1318,97 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       assert(sent.forall(_("cancels").arr.size == 1))
       assertEquals(f.postedInGate, Vector(true, true, true))
       assertEquals(f.gateEntries.get() - entries, 3)
-      assertEquals(f.lookups.drop(3), Vector(b.id, c.id))
-      assertEquals(f.resting.map(_.id), Vector(c.id))
+      assertEquals(f.lookups.drop(3), Vector(c.id))
+      assertEquals(f.resting, Vector.empty)
       assertEquals(f.worker.view.resting.filter(_.cancelling), Vector.empty)
+    }
+  }
+
+  test("a row cancel stops at the first cancel without a clear success and leaves the rest") {
+    val seeds = Vector(
+      Seed(Side.Buy, "0.2", "540", 5L),
+      Seed(Side.Buy, "0.15", "541", 6L),
+      Seed(Side.Buy, "0.2", "542", 7L)
+    )
+    using(new Fixture(seeds)) { f =>
+      val Vector(a, b, c) = f.seeded
+      Wait.until("start lookups missing")(f.lookups.size == 3)
+      f.ready()
+      // The venue answers b with an error and its lookup finds it canceled. The loop still
+      // stops, since the reply itself was not a clear success.
+      f.statuses.put(b.id, lookupReply(b, "canceled", "0.15"))
+      f.cancels =
+        cloid => if cloid == b.id then Some(cancelReply(gone)) else Some(cancelReply("success"))
+      assert(f.worker.cancel(Vector(a.id, b.id, c.id)))
+      Wait.until("cancel request never finished")(!f.worker.view.pending)
+      def cloids = f.cancelPosts.map(_("action")("cancels")(0)("cloid").str)
+      assertEquals(cloids, Vector(a.id, b.id))
+      assertEquals(f.resting.map(_.id), Vector(c.id))
+      // No reply at all stops it the same way.
+      f.cancels = _ => None
+      f.ready()
+      assert(f.worker.cancel(Vector(c.id)))
+      Wait.until("cancel request never finished")(!f.worker.view.pending)
+      assertEquals(f.worker.view.outcome, Some("XMR cancel result unknown"))
+      assertEquals(f.resting.map(_.id), Vector(c.id))
+      f.cancels = _ => Some(cancelReply("success"))
+      f.ready()
+      assert(f.worker.cancel(Vector(c.id)))
+      Wait.until("the next Enter did not cancel the rest")(f.resting.isEmpty)
+      assertEquals(cloids, Vector(a.id, b.id, c.id, c.id))
+    }
+  }
+
+  test("a CLOSE pressed during a three order cancel is sent after the current cancel") {
+    val seeds = Vector(
+      Seed(Side.Buy, "0.1", "540", 5L),
+      Seed(Side.Buy, "0.1", "541", 6L),
+      Seed(Side.Buy, "0.1", "542", 7L)
+    )
+    using(new Fixture(seeds)) { f =>
+      val Vector(a, b, c) = f.seeded
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      val controller = new DeskController(
+        PanelView(mode = "LIVE", terms = f.terms),
+        () => f.clock.get(),
+        f.worker.preview,
+        f.worker.submitReviewed,
+        _ => Left("no mode switch"),
+        cancel = f.worker.cancel,
+        closeFirst = f.worker.closeFirst
+      )
+      val hold = new Hold
+      f.cancelHolds.put(a.id, hold)
+      assert(f.worker.cancel(Vector(a.id, b.id, c.id)))
+      hold.await()
+      val running = f.worker.view
+      assert(running.pending && !running.ready)
+      // The frame drawn while the cancel runs shows CLOSE faint, as the panel draws it.
+      val close = DeskButton("x Close", DeskAction.Close, 0, 23, 9)
+      controller.publish(
+        WorkspaceFrame(Vector.empty, Vector.empty, "XMR", 120, 40, "LIVE", None, Vector(close))
+      )
+      val snapshot = Snapshot.initial("XMR", f.clock.get())
+      assert(controller.handle(Command.Close, snapshot, running, (120, 40), false))
+      assertEquals(f.worker.view.message, TradingWorker.closeNextMessage)
+      assertEquals(f.orderPosts, Vector.empty)
+      hold.open()
+      // The render pass hands each view to the controller, which sends CLOSE once live is ready.
+      Wait.until("CLOSE was not sent after the current cancel") {
+        controller.orders(f.worker.view)
+        f.orderPosts.nonEmpty
+      }
+      Wait.until("CLOSE did not finish")(!f.worker.view.pending)
+      assertEquals(f.posts.map(_("action")("type").str), Vector("cancelByCloid", "order"))
+      assertEquals(f.cancelPosts.map(_("action")("cancels")(0)("cloid").str), Vector(a.id))
+      val sent = f.orderPosts.head("action")("orders")(0)
+      assertEquals(sent("b").bool, false)
+      assertEquals(sent("r").bool, true)
+      assertEquals(sent("s").str, "0.2")
+      assertEquals(sent("t")("limit")("tif").str, "Ioc")
+      assertEquals(f.resting.map(_.id), Vector(b.id, c.id))
     }
   }
 
