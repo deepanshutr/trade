@@ -352,7 +352,12 @@ final class DeskController(
                 current.modeReview.isEmpty =>
             val sells = current.mode == "PROP" || view.position.exists(_ > 0)
             val _ = send(OrderIntent(if sells then Side.Sell else Side.Buy, OrderKind.Close))
-          case DeskAction.OrderType if current.mode != "VIEW"                           => toggle()
+          // The order type switches only in the state its button is on in, whatever frame
+          // the press came through.
+          case DeskAction.OrderType
+              if current.mode != "VIEW" && !view.pending && current.ticket.isEmpty &&
+                current.modeReview.isEmpty =>
+            toggle()
           case DeskAction.Orders if current.mode != "VIEW"                              => focus()
           case DeskAction.OrderSize(big) if !view.pending && current.modeReview.isEmpty =>
             current = current.copy(bigOrder = big, actionNotice = None)
@@ -373,9 +378,10 @@ final class DeskController(
                 current = current.copy(modeReview = None)
                 addMessage("mode", reason)
             shown = None
-          case DeskAction.Cancel                                           => dismiss()
-          case DeskAction.Prepare(_) | DeskAction.Close | DeskAction.Place => refuse()
-          case _                                                           => ()
+          case DeskAction.Cancel => dismiss()
+          case DeskAction.Prepare(_) | DeskAction.Close | DeskAction.Place | DeskAction.OrderType =>
+            refuse()
+          case _ => ()
     // Enter on the row the frame drew under the cursor. The entry row is key x. An order row
     // cancels exactly the ids the frame drew there. A row whose orders have all gone answers so.
     def choose(): Unit =

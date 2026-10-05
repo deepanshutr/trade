@@ -1032,6 +1032,17 @@ class LimitPanelSpec extends munit.FunSuite:
     assertEquals(keyed, clicked)
   }
 
+  test("t does not switch through a frame drawn before an order went pending") {
+    val calm = limit.copy(ticket = None, actionNotice = None)
+    val controller =
+      new DeskController(calm, () => now, (_, _) => Left("unused"), _ => false, _ => Right(()))
+    controller.publish(frame(live, calm))
+    val _ =
+      controller.handle(Command.OrderType, pinned, live.copy(pending = true), (100, 30), false)
+    assertEquals(controller.panel.orderMode, OrderMode.Limit)
+    assertEquals(controller.panel.actionNotice, Some("Order pending"))
+  }
+
   test("Orders, the order type and Place light only when they can act") {
     val elsewhere =
       live.copy(resting = Vector(order("b2", Side.Buy, "95000", "0.001", coin = "BTC")))
