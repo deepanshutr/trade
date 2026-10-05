@@ -388,7 +388,8 @@ queue.
 
 Desk holds at most 20 resting orders for each key, across markets. A limit press past
 that answers "20 orders rest. Cancel one first". The cap applies to limit presses
-only, so market presses and CLOSE still work.
+only, so market presses and CLOSE still work. It governs new orders only, so an order
+Desk takes back after a release can take the list past 20.
 
 What is sent is what the ticket showed. Enter previews the order again and sends it
 only when the fresh preview is the same order: the same market, side, kind, size,
