@@ -51,7 +51,7 @@ class WorkspaceSpec extends munit.FunSuite:
       "XMR recovered marginCanceled" -> "Not sent",
       "XMR canceled before sending" -> "Not sent",
       "XMR filled 0.5 at 300" -> "Filled",
-      "Saved order state failed. Restart to recover" -> "Saved order state failed. Restart to recover",
+      "Order state failed. Restart to recover" -> "Order state failed. Restart to recover",
       submitting -> "Sending"
     )
     messages.foreach { (message, expected) =>

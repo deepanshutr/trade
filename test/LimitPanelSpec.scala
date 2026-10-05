@@ -696,9 +696,19 @@ class LimitPanelSpec extends munit.FunSuite:
     assertEquals(row(free, 4), "Signer does not match the configured")
     assertEquals(row(free, 8), "owner")
     // A ticket keeps its rows, so the status shows its first line alone.
-    val held = frame(live.copy(block = Some("Saved order state failed. Restart to recover")))
-    assertEquals(row(held, 4), "Saved order state failed. Restart to")
+    val held = frame(mismatch)
+    assertEquals(row(held, 4), "Signer does not match the configured")
     assertEquals(row(held, 8), "SELL LIMIT XMR reduce only")
+    // The failed order state fits its row whole while a ticket is open.
+    val failed = frame(live.copy(block = Some(TradingWorker.storageFailedMessage)))
+    assertEquals(row(failed, 4), "Order state failed. Restart to recover")
+    assertEquals(row(failed, 8), "SELL LIMIT XMR reduce only")
+  }
+
+  test("the worker's two fatal texts show whole on the ticket's size row") {
+    for text <- Vector(TradingWorker.storageFailedMessage, TradingWorker.signingFailedMessage) do
+      val refused = ticketAt("546.10").copy(notice = Some(text))
+      assertEquals(row(frame(panel = limit.copy(ticket = Some(refused))), 10), text)
   }
 
   test("the ticket shows the size of the plan it holds, or the refusal its preview gave") {
@@ -801,7 +811,9 @@ class LimitPanelSpec extends munit.FunSuite:
       "Not sent: controls changed",
       "no further step",
       DeskController.orderChanged,
-      SessionKey.unavailable
+      SessionKey.unavailable,
+      TradingWorker.storageFailedMessage,
+      TradingWorker.signingFailedMessage
     )
     for text <- planned.flatten ++ others do assert(text.length <= 38, s"${text.length}: $text")
   }
