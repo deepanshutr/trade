@@ -137,6 +137,20 @@ class LimitPanelSpec extends munit.FunSuite:
     assertEquals(statusOf("XMR canceled $16.38 at 546.09", 9L), "Canceled $16.38 #9")
   }
 
+  test("prop and view show the live orders still resting on the mode row, within its width") {
+    for mode <- Vector("PROP", "VIEW"); count <- Vector(3, 20) do
+      val shown = row(frame(live.copy(liveResting = count), PanelView(mode = mode)), 12)
+      assertEquals(shown, s"[p Prop] [l Live] m Market $count live", mode)
+    assertEquals(
+      row(frame(live.copy(liveResting = 3), PanelView(mode = "LIVE")), 12),
+      "[p Prop] [l Live] m Market c Chart"
+    )
+    assertEquals(
+      row(frame(live, PanelView(mode = "PROP")), 12),
+      "[p Prop] [l Live] m Market c Chart"
+    )
+  }
+
   test("a CLOSE waiting on a cancel says so on the status row") {
     val waiting = live.copy(pending = true, message = TradingWorker.closeNextMessage)
     assertEquals(

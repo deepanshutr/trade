@@ -29,7 +29,9 @@ final case class TradingView(
     ignoredOrderUpdates: Long = 0L,
     notFoundOrders: Long = 0L,
     // The last outcomes with their ids, oldest first. The newest is outcome with outcomeId.
-    outcomes: Vector[(Long, String)] = Vector.empty
+    outcomes: Vector[(Long, String)] = Vector.empty,
+    // In prop and view, the live orders resting when the last live worker retired.
+    liveResting: Int = 0
 ):
   def reference(side: Side): Option[BigDecimal] =
     if side == Side.Buy then ask else bid
@@ -1400,6 +1402,8 @@ final class TradingWorker private[desk] (
   private[desk] def disable(): Unit = disabled.set(true)
 
   private[desk] def isRetired: Boolean = retired.get()
+
+  private[desk] def restingCount: Int = synchronized(restingOrders.size)
 
   private def finishRetirement(): Unit = synchronized {
     if !retired.get() && workers.forall(!_.isAlive) then

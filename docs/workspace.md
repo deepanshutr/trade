@@ -126,7 +126,7 @@ Size $10.98 of $21.84 held  fee $0.01
 | 6 | The order type, the orders on the axis, the sound and Desk's resting orders on other markets, such as `1 on BTC` |
 | 7 | The two trade buttons |
 | 8 to 11 | The ticket or the mode confirmation. Otherwise a long status wraps onto them |
-| 12 | The mode keys, the market key and the chart key |
+| 12 | The mode keys, the market key and the chart key. In prop and view, the live orders still resting when live last ran, such as `3 live`, in place of the chart key |
 
 A long key name on row 6 drops the count first, then the sound.
 

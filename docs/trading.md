@@ -511,7 +511,8 @@ says why. A market change before then drops it too.
 
 While prop or view is selected, or while settings run a key or owner step, Desk does
 not follow live orders and live fills are not seen. They show when live runs again,
-after Desk looks the orders up.
+after Desk looks the orders up. Live orders keep resting and can fill after Desk quits
+or while prop or view is selected.
 
 ### CLOSE and resting orders
 
