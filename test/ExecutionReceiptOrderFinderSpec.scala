@@ -15,7 +15,7 @@ class ExecutionReceiptOrderFinderSpec extends munit.FunSuite:
       bid = Some(BigDecimal(99)),
       ask = Some(BigDecimal(101))
     )
-    val fill = "PROP XMR buy filled 1 at 100\nFee $0.05 | #1 offline"
+    val fill = "PROP XMR buy filled $100.00 at 100\nFee $0.05 | #1 offline"
     val completed =
       pending.copy(pending = false, ready = true, outcome = Some(fill), outcomeId = 1L)
     val controller = new DeskController(

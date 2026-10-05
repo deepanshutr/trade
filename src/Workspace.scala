@@ -185,8 +185,8 @@ object Workspace:
     then word("Canceled")
     else if lower.contains("partial") || lower.contains("part filled") then word("Part filled")
     else if lower.contains(" filled ") then
-      if lower.contains(" buy ") then "Bought"
-      else if lower.contains(" sell ") then "Sold"
+      if lower.contains(" buy ") then word("Bought")
+      else if lower.contains(" sell ") then word("Sold")
       else word("Filled")
     else if lower.contains(" resting $") then word("Resting")
     else if lower.contains("no fill") then "No fill"

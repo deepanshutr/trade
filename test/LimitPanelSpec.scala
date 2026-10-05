@@ -64,10 +64,36 @@ class LimitPanelSpec extends munit.FunSuite:
     assert(!shown.contains("Filled $5.46"), shown)
   }
 
-  test("a prop market fill keeps its side word and never shows the fee as its amount") {
-    val shown = notice("PROP XMR buy filled 1 at 100\nFee $0.05 | #2 2026-09-30T00:00:00Z", 2L)
-    assert(shown.contains("Bought #2"), shown)
-    assert(!shown.contains("$0.05"), shown)
+  // A prop market fill as the ledger writes it, at one times leverage.
+  private def propFill(side: Side, quantity: String, filled: String, price: String): String =
+    val p = BigDecimal(price)
+    val q = BigDecimal(filled)
+    val plan = OrderPlan(
+      "XMR",
+      0,
+      side,
+      OrderKind.Hard,
+      BigDecimal(quantity),
+      p,
+      p,
+      q,
+      q * p,
+      Some(p),
+      q,
+      false
+    )
+    PropLedger.fillText(plan, q * p * BigDecimal("0.0005"), 2L, now)
+
+  test("a prop market fill names its side and its dollars, never the fee") {
+    for (raw, expected) <- Vector(
+        (propFill(Side.Buy, "1", "1", "100"), "Bought $100.00 #2"),
+        (propFill(Side.Sell, "0.183", "0.183", "546.09"), "Sold $99.93 #2"),
+        (propFill(Side.Buy, "3", "1.5", "100"), "Part filled $150.00 #2")
+      )
+    do
+      val shown = notice(raw, 2L)
+      assert(shown.linesIterator.exists(_.take(38).trim == expected), s"$raw\n$shown")
+      assert(!shown.contains("Fee"), shown)
   }
 
   test("refusals from the ticket, the axis and the worker pass through whole on the status row") {
@@ -815,7 +841,21 @@ class LimitPanelSpec extends munit.FunSuite:
       TradingWorker.storageFailedMessage,
       TradingWorker.signingFailedMessage
     )
-    for text <- planned.flatten ++ others do assert(text.length <= 38, s"${text.length}: $text")
+    // Prop market fills on the status row, at the largest amount a prop wallet can hold, whole.
+    val fills = Vector(
+      (propFill(Side.Buy, "1000000", "1000000", "1000"), "Bought $"),
+      (propFill(Side.Sell, "1000000", "1000000", "1000"), "Sold $"),
+      (propFill(Side.Buy, "1000000", "999999.999", "1000"), "Part filled $")
+    ).map { (raw, word) =>
+      val shown = row(
+        frame(live, PanelView(mode = "PROP", actionNotice = Some(raw), actionNumber = 999999L)),
+        4
+      )
+      assert(shown.startsWith(word) && shown.endsWith(" #999999"), shown)
+      shown
+    }
+    for text <- planned.flatten ++ others ++ fills do
+      assert(text.length <= 38, s"${text.length}: $text")
   }
 
   test("no control byte reaches the status row from a pass through, fallback, block or dollar") {

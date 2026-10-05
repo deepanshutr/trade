@@ -2,7 +2,7 @@
 """Offline playback through Main.run and a real pseudo terminal, using the standard library."""
 
 import argparse
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 import errno
 import fcntl
 import hashlib
@@ -236,20 +236,24 @@ def validate_wallet(saved, results, fixture_book):
                 assert expected_side == "sell" and held == 0, "impossible empty-wallet refusal"
             refused.append(receipt)
             continue
-        match = re.fullmatch(r"PROP XMR (buy|sell) filled ([0-9.]+) at ([^\n]+)\nFee \$([0-9.]+) \| #(\d+) .+", receipt)
+        # A fill names the money it put up at one times leverage, its filled value in cents.
+        match = re.fullmatch(r"PROP XMR (buy|sell) filled (\$[0-9.]+) at ([^\n]+)\nFee \$([0-9.]+) \| #(\d+) .+", receipt)
         assert match, "invalid fill receipt"
-        side, quantity, shown, fee, count = match.groups()
+        side, dollars, shown, fee, count = match.groups()
         assert side == expected_side, "fill side differs from clicked button"
-        quantity, fee = Decimal(quantity), Decimal(fee)
+        fee = Decimal(fee)
         levels = fixture_book["levels"][1 if side == "buy" else 0]
         requested = (Decimal(500) / Decimal(levels[0]["px"]) // Decimal("0.001")) * Decimal("0.001")
-        assert quantity > 0 and quantity == (requested if side == "buy" else min(requested, held)), "wrong filled quantity"
+        quantity = requested if side == "buy" else min(requested, held)
+        assert quantity > 0, "wrong filled quantity"
         remaining, value = quantity, Decimal(0)
         for level in levels:
             take = min(remaining, Decimal(level["sz"]))
             value += take * Decimal(level["px"])
             remaining -= take
         assert remaining == 0, "fill exceeded known depth"
+        # The fixture's fills stay under a thousand dollars, so the text keeps both decimals.
+        assert dollars == "$" + str(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)), "dollars differ from the filled value"
         assert fee == value * Decimal("0.0005"), "fee differs from fixed-book filled value"
         approximate = shown.startswith("~")
         price = Decimal(shown.lstrip("~"))

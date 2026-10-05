@@ -59,6 +59,16 @@ object PropLedger:
     "$" + Trading.money(quantity, order.price, Some(1)).fold("--")(_.bigDecimal.toPlainString)
 
   // The price keeps the tick decimals it was placed with, so 552.00 reads as placed.
+  // A market fill names the money it put up at the fill price, as a live fill does, then its
+  // fee and its count. Prop trades at one times leverage, so that money is the filled value.
+  private[desk] def fillText(plan: OrderPlan, cost: BigDecimal, count: Long, at: Long): String =
+    val q = plan.estimatedQuantity
+    val price = plan.estimatedValue / q
+    val status = if q < plan.quantity then "partial" else "filled"
+    val money =
+      Trading.dollars(Some(plan.estimatedValue.setScale(2, BigDecimal.RoundingMode.HALF_UP)), 0)
+    s"PROP ${plan.coin} ${plan.side.toString.toLowerCase} $status $money at ${Trading.display(price)}\nFee $$${Trading.format(cost)} | #$count ${java.time.Instant.ofEpochMilli(at)}"
+
   private def text(order: PropOrder, words: String, amount: String): String =
     s"${order.coin} $words $amount at ${order.price.bigDecimal.toPlainString}"
 
@@ -180,14 +190,8 @@ final class PropLedger private[desk] (
       Left("Prop canceled: account changed after review")
     else
       PropLedger.project(saved, fee, plan).flatMap { projected =>
-        val q = plan.estimatedQuantity
-        val price = plan.estimatedValue / q
         val cost = PropLedger.multiply(plan.estimatedValue, fee)
-        val status = if q < plan.quantity then "partial" else "filled"
-        val count = Math.addExact(saved.count, 1L)
-        val result =
-          s"PROP ${plan.coin} ${plan.side.toString.toLowerCase} $status ${Trading.format(q)} at ${Trading.display(price)}\nFee $$${Trading.format(cost)} | #$count ${java.time.Instant.ofEpochMilli(at)}"
-        save(projected, result)
+        save(projected, PropLedger.fillText(plan, cost, Math.addExact(saved.count, 1L), at))
       }
   }
 
