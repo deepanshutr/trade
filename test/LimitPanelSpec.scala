@@ -884,6 +884,22 @@ class LimitPanelSpec extends munit.FunSuite:
     assertEquals(plot(Vector(btc)), plot(Vector.empty))
   }
 
+  test("a live short draws its liquidation above the range in the buy colour") {
+    val short = live.copy(
+      position = Some(BigDecimal("-0.2")),
+      portfolio = live.portfolio.copy(
+        tokenValue = Some(BigDecimal("-109.22")),
+        liquidation = Some(BigDecimal("600"))
+      ),
+      resting = Vector.empty
+    )
+    val coloured = frame(short, limit.copy(ticket = None), style = Style.colour)
+    assert(
+      coloured.lines(1).startsWith(Style.colour.bid + "          600.00," + Screen.reset),
+      coloured.lines(1)
+    )
+  }
+
   test("a live long draws its liquidation price on the axis and the range stays as it was") {
     val plain = live.copy(resting = Vector(order("s1", Side.Sell, "552.00", "0.1")))
     val liquidated =

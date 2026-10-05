@@ -514,3 +514,26 @@ class OrdersAxisSpec extends munit.FunSuite:
     // No colour and no weight, so the row carries no style at all.
     assertEquals(mono(8), "          500.00'")
   }
+
+  test("a short's liquidation never takes a sell's row on a full upper side") {
+    val sells = Vector("546.50", "547.50", "548.50", "549.50", "550.50", "551.50").zipWithIndex
+      .map((p, i) => order(s"s$i", Side.Sell, p, "0.1"))
+    val placed = place(resting = sells, ticket = None, liquidation = Some((Side.Buy, d("549.00"))))
+    assertEquals(placed, place(resting = sells, ticket = None))
+    assertEquals((placed.above, placed.below), (0, 0))
+  }
+
+  test("without a current price a full axis leaves the liquidation off, uncounted") {
+    val nine = (0 until 9).toVector.map(i =>
+      order(s"o$i", if i < 4 then Side.Buy else Side.Sell, (544 + i).toString + ".00", "0.1")
+    )
+    val placed =
+      place(
+        current = None,
+        resting = nine,
+        ticket = None,
+        liquidation = Some((Side.Sell, d("547.50")))
+      )
+    assertEquals(placed, place(current = None, resting = nine, ticket = None))
+    assertEquals(placed.below, 0)
+  }

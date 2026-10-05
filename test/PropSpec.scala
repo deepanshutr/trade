@@ -63,6 +63,13 @@ class PropSpec extends TempDirectorySuite:
     finally ledger.close()
   }
 
+  test("a prop fill of a thousand dollars or more names them in the live compact form") {
+    def first(p: OrderPlan): String =
+      PropLedger.fillText(p, BigDecimal(1), 1L, 0L).takeWhile(_ != '\n')
+    assertEquals(first(plan(Side.Buy, "2", "1000")), "PROP XMR buy filled $2000 at 1000")
+    assertEquals(first(plan(Side.Buy, "1", "1234.56")), "PROP XMR buy filled $~1234 at 1234.56")
+  }
+
   test("partial fills use actual depth quantity and reject excess exposure without mutation") {
     val ledger = PropLedger.open(
       tempDirectory("desk-prop-test"),
