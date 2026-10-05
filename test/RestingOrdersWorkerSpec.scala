@@ -598,6 +598,36 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     }
   }
 
+  test("the CLOSE refusal is shown only for an immediate CLOSE while reduce only orders rest") {
+    // A REDUCE ticket whose free remainder is under $10 becomes a posted plan of kind Close.
+    using(new Fixture(Vector(Seed(Side.Sell, "0.01", "560", 5L, reduceOnly = true)))) { f =>
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      val ticket = f.priced(Side.Sell, "546.20")
+      val plan = f.worker.preview(ticket, f.terms).toOption.get
+      assertEquals((plan.kind, plan.post, plan.reduceOnly), (OrderKind.Close, true, true))
+      f.orderError = Some("Post only order would have immediately matched")
+      assert(f.press(ticket))
+      Wait.until("rejection not shown")(f.worker.view.outcome.nonEmpty)
+      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
+    }
+    // An immediate CLOSE with an entry resting here and a reduce only order on another market.
+    val seeds = Vector(
+      Seed(Side.Buy, "0.183", "540", 5L),
+      Seed(Side.Sell, "0.001", "99000", 6L, coin = "BTC", reduceOnly = true)
+    )
+    using(new Fixture(seeds)) { f =>
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      f.orderError = Some("Reduce only order would increase position")
+      assert(f.press(OrderIntent(Side.Sell, OrderKind.Close)))
+      Wait.until("rejection not shown")(f.worker.view.outcome.nonEmpty)
+      assertEquals(f.worker.view.outcome, Some("XMR order rejected"))
+    }
+  }
+
   test("a resting reply of a reduce-only order starts no pause") {
     using(new Fixture()) { f =>
       f.position = "0.2"

@@ -527,10 +527,11 @@ after it. Four consequences follow:
 2. Resting reduce only orders left with nothing to reduce are expected to be cancelled
    by the venue, shown as "XMR canceled by the venue $16.38 at 546.09
    (reduceOnlyCanceled)".
-3. If the venue refuses the CLOSE while reduce only orders rest, the status row reads
-   `Close refused. Press o for orders`. The order result log keeps "XMR order rejected.
-   Resting reduce orders may block it, press o". Cancel them from the axis, then press
-   CLOSE again.
+3. If the venue refuses a CLOSE sent at once while reduce only orders rest on its
+   market, the status row reads `Close refused. Press o for orders`. The order result
+   log keeps "XMR order rejected. Resting reduce orders may block it, press o". Cancel
+   them from the axis, then press CLOSE again. Any other refusal, such as a posted
+   REDUCE that became a close, reads `Not sent` with "XMR order rejected" in the log.
 4. After a CLOSE or a REDUCE to flat, an entry resting on the far side without the
    reduce only flag stays on the axis in its side's colour. It opens a new position
    with no press when the market reaches it. Cancel it from the axis if you do not

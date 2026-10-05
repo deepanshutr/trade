@@ -989,9 +989,11 @@ final class TradingWorker private[desk] (
           )
           complete(p, text, fill = Some(Fill(p.coin, p.side, wall(), price, quantity)))
         case Some(VenueOrders.Placed.Rejected(_)) =>
+          // Resting reduce only orders can block only a CLOSE sent at once on their market.
+          val blocked = synchronized(restingOrders.exists(r => r.coin == p.coin && r.reduceOnly))
           complete(
             p,
-            if press.plan.kind == OrderKind.Close then
+            if press.plan.kind == OrderKind.Close && !p.post && blocked then
               p.coin + " order rejected. Resting reduce orders may block it, press o"
             else p.coin + " order rejected"
           )
