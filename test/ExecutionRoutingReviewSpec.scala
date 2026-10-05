@@ -764,6 +764,12 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
         assert(f.worker.cancel(Vector(id)))
         assert(f.entered.await(5, java.util.concurrent.TimeUnit.SECONDS), mode)
         assertEquals(route.closeFirst(), mode == "LIVE", mode)
+        route.withdrawClose()
+        assertEquals(
+          f.worker.view.message == TradingWorker.closeWithdrawnMessage,
+          mode == "LIVE",
+          mode
+        )
       finally
         route.close()
         f.close()

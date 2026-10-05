@@ -127,7 +127,8 @@ object WorkspaceApp:
       mute,
       result,
       worker.cancel,
-      worker.closeFirst
+      worker.closeFirst,
+      worker.withdrawClose
     )
 
   private[desk] def drawFrame(

@@ -159,6 +159,15 @@ class LimitPanelSpec extends munit.FunSuite:
     )
   }
 
+  test("a withdrawn CLOSE says so on the status row, while the cancel runs and after") {
+    val withdrawn = live.copy(pending = true, message = TradingWorker.closeWithdrawnMessage)
+    assertEquals(
+      row(frame(withdrawn, limit.copy(ticket = None, actionNotice = None)), 4),
+      "Close withdrawn"
+    )
+    assertEquals(statusOf(TradingWorker.closeWithdrawnMessage, 8L), "Close withdrawn #8")
+  }
+
   test("a cancel refused while an order is pending says to wait, not Sending") {
     val shown = text(
       drawn(
@@ -892,6 +901,7 @@ class LimitPanelSpec extends munit.FunSuite:
       Workspace.canceling,
       Workspace.cancelRefused,
       TradingWorker.closeNextMessage,
+      TradingWorker.closeWithdrawnMessage,
       PropLedger.holds("PAXG")
     )
     // Prop market fills on the status row, at the largest amount a prop wallet can hold, whole.

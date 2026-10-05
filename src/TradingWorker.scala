@@ -58,6 +58,7 @@ object TradingWorker:
   val openingPausedMessage: String = "Opening paused for 2 s after closing"
   val cancelPendingMessage: String = "Wait for the pending order"
   val closeNextMessage: String = "Close goes after this cancel"
+  val closeWithdrawnMessage: String = "Close withdrawn"
   val waitingDepthMessage: String = "Waiting for fresh depth"
   // Two fatal texts. Each fits the 38 column panel, where a ticket shows it on its size row.
   val storageFailedMessage: String = "Order state failed. Restart to recover"
@@ -420,6 +421,12 @@ final class TradingWorker private[desk] (
       closeWanted = true
       message = TradingWorker.closeNextMessage
     cancelRunning
+  }
+
+  // Esc or settings took the CLOSE back. The cancels after the current one stay for the next
+  // Enter, as when the loop stops on an unclear reply.
+  def withdrawClose(): Unit = synchronized {
+    if cancelRunning then message = TradingWorker.closeWithdrawnMessage
   }
 
   def select(next: String): Unit = synchronized {

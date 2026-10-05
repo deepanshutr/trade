@@ -14,7 +14,8 @@ final class DeskController(
     mute: Boolean => Unit = _ => (),
     result: (Long, String) => Unit = (_, _) => (),
     cancel: Vector[String] => Boolean = _ => false,
-    closeFirst: () => Boolean = () => false
+    closeFirst: () => Boolean = () => false,
+    withdrawClose: () => Unit = () => ()
 ):
   private var current = initial
   private var shown = Option.empty[WorkspaceFrame]
@@ -115,9 +116,17 @@ final class DeskController(
     if kind == "order" then result(number, safe)
   }
 
-  // Esc closes the ticket, then the mode review, then the axis focus.
+  // Esc and settings take back a CLOSE waiting on a cancel, and say so.
+  private def withdraw(): Unit =
+    closeNext = None
+    withdrawClose()
+    addMessage("order", TradingWorker.closeWithdrawnMessage)
+
+  // Esc takes back a waiting CLOSE, else closes the ticket, then the mode review, then the axis
+  // focus.
   private def dismiss(): Unit =
-    if current.ticket.nonEmpty then current = current.copy(ticket = None)
+    if closeNext.nonEmpty then withdraw()
+    else if current.ticket.nonEmpty then current = current.copy(ticket = None)
     else if current.modeReview.nonEmpty then current = current.copy(modeReview = None)
     else point(Vector.empty, None)
     shown = None
@@ -512,6 +521,7 @@ final class DeskController(
           // The keys thread opens settings after this returns. No ticket, mode review or cursor
           // stays open behind them.
           case Command.Settings =>
+            if closeNext.nonEmpty then withdraw()
             current = current.copy(modeReview = None, ticket = None)
             point(Vector.empty, None)
             shown = None

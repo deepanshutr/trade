@@ -141,6 +141,7 @@ The status row names Desk's own outcomes with their dollars and a result number:
 | `XMR canceled before sending` | `Not sent #11` |
 | `XMR canceling 1 of 3`, while a cancel runs | `Canceling` |
 | CLOSE pressed while a cancel runs | `Close goes after this cancel` |
+| Esc or settings while that CLOSE waits | `Close withdrawn` |
 | `XMR cancel rejected` | `Cancel refused #12` |
 | `XMR order rejected. Resting reduce orders may block it, press o` | `Close refused. Press o for orders #13` |
 

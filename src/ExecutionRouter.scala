@@ -153,6 +153,9 @@ final class ExecutionRouter(
   }
   // Only live runs a row cancel long enough for CLOSE to wait on it.
   def closeFirst(): Boolean = synchronized(selected == "LIVE" && liveEnabled && live.closeFirst())
+  def withdrawClose(): Unit = synchronized {
+    if selected == "LIVE" && liveEnabled then live.withdrawClose()
+  }
   def livePending: Boolean = synchronized(live.view.pending)
   // Stops the live worker for a child and waits for it, as close does. A worker that has not
   // retired in time may still hold the journal lock, so no child may start.

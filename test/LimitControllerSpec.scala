@@ -89,6 +89,7 @@ class LimitControllerSpec extends munit.FunSuite:
     // Whether a live row cancel runs, and how often CLOSE asked it to stop.
     var cancelRuns = false
     var stops = 0
+    var withdrawals = 0
     val controller = new DeskController(
       PanelView(mode = mode, bigOrder = big),
       () => clock,
@@ -119,7 +120,8 @@ class LimitControllerSpec extends munit.FunSuite:
       closeFirst = () => {
         if cancelRuns then stops += 1
         cancelRuns
-      }
+      },
+      withdrawClose = () => withdrawals += 1
     )
     private def buttons(actions: Vector[DeskAction], row: Int): Vector[DeskButton] =
       actions.zipWithIndex.map((a, i) => DeskButton(a.toString, a, i * 12, row, 11))
@@ -1059,6 +1061,27 @@ class LimitControllerSpec extends munit.FunSuite:
     busy.view = rested
     busy.frame()
     busy.nothingSent()
+  }
+
+  test("Esc and opening settings withdraw a CLOSE waiting on a cancel and say so") {
+    val running = rested.copy(pending = true, ready = false, message = "XMR canceling 1 of 3")
+    val faint = Vector[DeskAction](DeskAction.Close)
+    for withdraw <- Vector(Command.Cancel, Command.Settings) do
+      val f = new Fixture(start = running)
+      f.cancelRuns = true
+      f.frame(trade - DeskAction.Close, faint)
+      f.key(Command.Close)
+      assertEquals(f.stops, 1)
+      f.key(withdraw)
+      assertEquals(f.withdrawals, 1, withdraw.toString)
+      assertEquals(f.notice, Some("Close withdrawn"), withdraw.toString)
+      f.cancelRuns = false
+      f.view = rested
+      f.frame()
+      f.nothingSent()
+      // With nothing waiting, Esc and settings withdraw nothing.
+      f.key(withdraw)
+      assertEquals(f.withdrawals, 1, withdraw.toString)
   }
 
   test("CLOSE in limit mode sends an immediate close and opens no ticket") {

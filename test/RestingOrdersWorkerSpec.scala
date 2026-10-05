@@ -1867,6 +1867,52 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     }
   }
 
+  test("Esc withdraws a CLOSE waiting on a cancel, and the other cancels stay unsent") {
+    val seeds = Vector(
+      Seed(Side.Buy, "0.1", "540", 5L),
+      Seed(Side.Buy, "0.1", "541", 6L),
+      Seed(Side.Buy, "0.1", "542", 7L)
+    )
+    using(new Fixture(seeds)) { f =>
+      val Vector(a, b, c) = f.seeded
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      val controller = new DeskController(
+        PanelView(mode = "LIVE", terms = f.terms),
+        () => f.clock.get(),
+        f.worker.preview,
+        f.worker.submitReviewed,
+        _ => Left("no mode switch"),
+        cancel = f.worker.cancel,
+        closeFirst = f.worker.closeFirst,
+        withdrawClose = f.worker.withdrawClose
+      )
+      val hold = new Hold
+      f.cancelHolds.put(a.id, hold)
+      assert(f.worker.cancel(Vector(a.id, b.id, c.id)))
+      hold.await()
+      val close = DeskButton("x Close", DeskAction.Close, 0, 23, 9)
+      controller.publish(
+        WorkspaceFrame(Vector.empty, Vector.empty, "XMR", 120, 40, "LIVE", None, Vector(close))
+      )
+      val snapshot = Snapshot.initial("XMR", f.clock.get())
+      assert(controller.handle(Command.Close, snapshot, f.worker.view, (120, 40), false))
+      assertEquals(f.worker.view.message, TradingWorker.closeNextMessage)
+      assert(controller.handle(Command.Cancel, snapshot, f.worker.view, (120, 40), false))
+      assertEquals(f.worker.view.message, TradingWorker.closeWithdrawnMessage)
+      hold.open()
+      Wait.until("cancel did not finish")(!f.worker.view.pending)
+      f.refreshes()
+      f.ready()
+      controller.orders(f.worker.view)
+      controller.orders(f.worker.view)
+      assertEquals(f.orderPosts, Vector.empty)
+      assertEquals(f.cancelPosts.map(_("action")("cancels")(0)("cloid").str), Vector(a.id))
+      assertEquals(f.resting.map(_.id), Vector(b.id, c.id))
+    }
+  }
+
   // Diagnostics.
 
   private class Memory extends Diagnostics.Sink:

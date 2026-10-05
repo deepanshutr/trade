@@ -509,7 +509,9 @@ CLOSE pressed in live while a row cancel runs goes next. Desk finishes the cance
 is sending, sends none of the others and reads `Close goes after this cancel` on the
 status row. CLOSE is then sent as soon as live is ready again, as if pressed at that
 moment. If live is not ready within 30 seconds, CLOSE is not sent and the status row
-says why. A market change before then drops it too.
+says why. A market change before then drops it too. Esc or opening settings withdraws
+it, and the status row reads `Close withdrawn`. The orders after the current cancel stay
+for the next Enter.
 
 While prop or view is selected, or while settings run a key or owner step, Desk does
 not follow live orders and live fills are not seen. They show when live runs again,
