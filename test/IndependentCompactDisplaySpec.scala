@@ -5,9 +5,12 @@ import java.time.ZoneOffset
 class IndependentCompactDisplaySpec extends munit.FunSuite:
   import CompactDisplayFixtures.*
 
+  // The right pane of the gauges, which fill the band's right region after the panel and its bar.
   private def correlation(frame: WorkspaceFrame): Vector[String] =
-    val width = (Layout.workspaceMarketWidth(frame.cols) - 1) / 2
-    frame.lines.takeRight(12).map(line => Chart.plain(line).slice(width + 1, width * 2 + 1).trim)
+    val width = (Layout.regions(frame.cols, frame.rows).bandRight - 1) / 2
+    frame.lines
+      .takeRight(12)
+      .map(line => Chart.plain(line).drop(39).slice(width + 1, width * 2 + 1).trim)
 
   for (cols, rows) <- sizes do
     test(s"moving correlation endpoints retain every exact paired count at $cols x $rows") {
@@ -117,7 +120,7 @@ class IndependentCompactDisplaySpec extends munit.FunSuite:
         for coin <- references do
           val first = plain.indexWhere(_.startsWith(if coin == "BTC" then "BTC " else "PAXG ("))
           assert(first > 0, coin + " missing")
-          assert(first + 3 <= rows - 15, "reference crosses trade controls")
+          assert(first + 3 <= rows - 12, "reference crosses trade controls")
           val actual = plain.slice(first, first + 3).map(_.slice(30, 38).trim)
           val factor = if coin == "BTC" then 1.0 else 10.0
           val wanted =
@@ -145,7 +148,7 @@ class IndependentCompactDisplaySpec extends munit.FunSuite:
           assert(
             !plain.drop(1).exists(_.startsWith(if selected == "BTC" then "BTC " else "PAXG ("))
           )
-        assert(plain(rows - 15).contains("PROP " + selected))
+        assert(plain(rows - 12).startsWith("PROP " + selected))
         assertEquals(plain.size, rows)
         assert(plain.forall(_.length == cols))
     }

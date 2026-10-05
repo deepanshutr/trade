@@ -232,7 +232,7 @@ class TradingSpec extends munit.FunSuite:
   }
 
   test("an opening order under ten dollars of position value is refused") {
-    val floor = Left("Requested order must reach ten dollars at the quote and limit")
+    val floor = Left("Order must be at least $10")
     val intent = OrderIntent(Side.Buy, OrderKind.Hard)
     assertEquals(result(intent, amounts = sizes.copy(small = d("1.9")), leverage = 5), floor)
     val p = accepted(result(intent, amounts = sizes.copy(small = d("2")), leverage = 5))
@@ -731,7 +731,7 @@ class TradingSpec extends munit.FunSuite:
   test("a priced order that would take liquidity or miss the precision is refused") {
     assertEquals(
       priced(Side.Buy, "546.10", "546.10").swap.toOption,
-      Some("Price would take liquidity. Move it below the ask")
+      Some("Takes liquidity. Move below the ask")
     )
     val sellBook = Book(Vector(Level("546.09", "20", 1)), Vector(Level("546.20", "20", 1)), 1L)
     val sell = Trading.plan(
@@ -745,7 +745,7 @@ class TradingSpec extends munit.FunSuite:
       5,
       Trading.defaultSlippage
     )
-    assertEquals(sell.swap.toOption, Some("Price would take liquidity. Move it above the bid"))
+    assertEquals(sell.swap.toOption, Some("Takes liquidity. Move above the bid"))
     assertEquals(
       priced(Side.Buy, "546.095", "546.10").swap.toOption,
       Some("Price does not match market precision")
@@ -756,18 +756,54 @@ class TradingSpec extends munit.FunSuite:
     assertEquals(Trading.crossing(Side.Buy, d("546.09"), d("546.00"), d("546.10")), None)
     assertEquals(
       Trading.crossing(Side.Buy, d("546.11"), d("546.00"), d("546.10")),
-      Some("Price would take liquidity. Move it below the ask")
+      Some("Takes liquidity. Move below the ask")
     )
     assertEquals(Trading.crossing(Side.Sell, d("546.11"), d("546.00"), d("546.10")), None)
     assertEquals(
       Trading.crossing(Side.Sell, d("546.00"), d("546.00"), d("546.10")),
-      Some("Price would take liquidity. Move it above the bid")
+      Some("Takes liquidity. Move above the bid")
     )
+  }
+
+  test("sameOrder holds only when every field that changes what is sent is equal") {
+    val drawn = OrderPlan(
+      "XMR",
+      7,
+      Side.Sell,
+      OrderKind.Hard,
+      d("0.183"),
+      d("546.10"),
+      d("546.10"),
+      d("0"),
+      d("0"),
+      None,
+      d("1.0"),
+      reduceOnly = true,
+      post = true
+    )
+    // Equal value at another scale, and the fields that are not sent, keep the same order.
+    assert(drawn.sameOrder(drawn.copy(quantity = d("0.1830"), limit = d("546.100"))))
+    assert(drawn.sameOrder(drawn.copy(positionAfter = d("0.817"), estimatedValue = d("1"))))
+    val changed = Vector(
+      "coin" -> drawn.copy(coin = "BTC"),
+      "asset" -> drawn.copy(asset = 8),
+      "side" -> drawn.copy(side = Side.Buy),
+      "kind" -> drawn.copy(kind = OrderKind.Close),
+      "quantity" -> drawn.copy(quantity = d("0.184")),
+      "limit" -> drawn.copy(limit = d("546.11")),
+      "reduceOnly" -> drawn.copy(reduceOnly = false),
+      "post" -> drawn.copy(post = false)
+    )
+    for (field, other) <- changed do
+      assert(!drawn.sameOrder(other), field)
+      assert(!other.sameOrder(drawn), field)
   }
 
   test("the fee and the resting cap are fixed") {
     assertEquals(Trading.baseMakerFee, d("0.00015"))
     assertEquals(Trading.restingCap, 20)
+    // One cap text for live and prop, short enough for the status row while a ticket is open.
+    assertEquals(Trading.restingCapText, "20 orders rest. Cancel one first")
   }
 
   private def sellPlan(
@@ -797,7 +833,7 @@ class TradingSpec extends munit.FunSuite:
     assert(capped.reduceOnly)
     assertEquals(
       sellPlan("20", 5, "0.2", "0.2").swap.toOption,
-      Some("Resting orders already reduce the whole position")
+      Some("Resting orders cover the position")
     )
   }
 
@@ -874,7 +910,7 @@ class TradingSpec extends munit.FunSuite:
     assert(capped.reduceOnly)
     assertEquals(
       priced(Side.Sell, "546.20", "546.00", "20", 5, "0.2", "0.2").swap.toOption,
-      Some("Resting orders already reduce the whole position")
+      Some("Resting orders cover the position")
     )
   }
 

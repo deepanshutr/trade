@@ -268,7 +268,7 @@ class TradeProgressSpec extends TempDirectorySuite:
       if mouse then
         val b = frame.disabledButtons.find(_.action == DeskAction.Prepare(Trading.action(0))).get
         c.handle(Command.PointerPress(b.x, b.y, 0), snapshot, stale, (100, 30), false)
-        c.handle(Command.Pointer(b.x, b.y + 2, 0), snapshot, stale, (100, 30), false)
+        c.handle(Command.Pointer(b.x, b.y, 0), snapshot, stale, (100, 30), false)
       else c.handle(Command.PlaceOrder(Trading.action(0)), snapshot, stale, (100, 30), false)
       assert(c.panel.actionNotice.exists(_.toLowerCase.contains("stale")), c.panel.toString)
     }

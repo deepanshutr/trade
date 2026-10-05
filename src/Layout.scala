@@ -22,7 +22,6 @@ object Layout:
   val volRows = 1
   val referenceRows = 3
   val candleW = 4
-  def workspaceMarketWidth(cols: Int): Int = (cols * 3 / 5).min(cols - 47)
   val outlookWidth = 38
   def workspaceChartWidth(cols: Int): Int = cols - outlookWidth - 1
   // A line draws two dot columns in a cell and a candle takes four cells.

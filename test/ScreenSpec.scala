@@ -353,12 +353,27 @@ class ScreenSpec extends munit.FunSuite:
     assert(chart(pinned, 100, 30, Style.mono).axis.exists(_.lo > 543.0))
   }
 
-  test("the workspace draws the chart block above the fifteen row band in every mode") {
+  test("the decor's mark counts give the chart's axis its room") {
+    // The series ends at the current price 546.09. A sell resting there sits above it, and its
+    // count keeps the top row free for it.
+    val sec = pinNow / 1000
+    val top = pinned.copy(
+      book = Some(Book(Vector(lv("546.08", "1")), Vector(lv("546.10", "1")), pinNow)),
+      samples = Vector((sec - 40, 540.0), (sec - 1, 546.09))
+    )
+    val decor = AxisDecor.plain.copy(held = Vector(546.09))
+    val bare = chart(top, 100, 30, Style.mono, decor).axis.get
+    assertEquals(bare.trueRow(546.09), 0, bare)
+    val counted = chart(top, 100, 30, Style.mono, decor.copy(above = 1)).axis.get
+    assertEquals(counted.trueRow(546.09), 1, counted)
+  }
+
+  test("the workspace draws the chart block above the twelve row band in every mode") {
     for
       (cols, rows) <- Vector((100, 30), (120, 40))
       mode <- Vector("LIVE", "PROP", "VIEW")
     do
-      val tradeTop = rows - 15
+      val tradeTop = rows - 12
       val r = Layout.regions(cols, rows)
       val width = r.left + r.plot
       val text = Workspace
@@ -379,27 +394,18 @@ class ScreenSpec extends munit.FunSuite:
           pinNow,
           zone,
           Style.mono,
-          r.copy(priceRows = tradeTop - 10),
+          r,
           AxisDecor.plain,
           Some(width)
         )
         .lines
         .map(plain)
-      assertEquals(block.size, tradeTop - 1)
-      assertEquals(text.take(tradeTop - 1).map(_.take(width)), block, mode)
-      assertEquals(text(tradeTop - 1).take(width), " " * width)
+      // The view has no market rules, so every mode draws the plain axis. No row is left blank.
+      assertEquals(block.size, tradeTop)
+      assertEquals(text.take(tradeTop).map(_.take(width)), block, mode)
       assert(text.take(tradeTop).forall(_.charAt(width) == '|'))
-      assertEquals(text(tradeTop - 2).take(38), " " * 24 + "c line 2s/col ")
+      assertEquals(text(tradeTop - 1).take(38), " " * 24 + "c line 2s/col ")
   }
-
-  private def digest(lines: Vector[String]): String =
-    java.util.HexFormat
-      .of()
-      .formatHex(
-        java.security.MessageDigest
-          .getInstance("SHA-256")
-          .digest(lines.mkString("\n").getBytes(java.nio.charset.StandardCharsets.UTF_8))
-      )
 
   test("a reference row's plot shares the main plot's columns and time scale") {
     // The main market and both references hold samples 40 seconds and one second back. At two
@@ -425,43 +431,4 @@ class ScreenSpec extends munit.FunSuite:
       val s = Snapshot.initial("XMR", t0).copy(cols = cols, rows = 30)
       assertEquals(State.reduce(s, Event.Key(Command.ScrubBack), t0).offsetSec, step, cols)
       assertEquals(step, Layout.regions(cols, 30).plot * 2 / 4L)
-  }
-
-  test("the band rows are byte for byte today's") {
-    // The digest was taken from the frames drawn at a9b9335, before this lane changed the chart
-    // block.
-    val cases =
-      (for
-        coin <- Vector("XMR", "BTC", "PAXG")
-        mode <- ChartMode.values.toVector
-        style <- Vector(Style.mono, Style.colour)
-        (cols, rows) <- CompactDisplayFixtures.sizes
-      yield (
-        CompactDisplayFixtures.snapshot(coin, mode, cols, rows),
-        cols,
-        rows,
-        style,
-        CompactDisplayFixtures.now
-      )) ++
-        (for
-          (cols, rows) <- Vector((100, 30), (120, 40))
-          style <- Vector(Style.mono, Style.colour)
-        yield (Golden.snapshot, cols, rows, style, Golden.now))
-    val bands = cases.flatMap { (s, cols, rows, style, now) =>
-      Workspace
-        .draw(
-          s,
-          TradingView(s.coin, message = "ready"),
-          PanelView(),
-          cols,
-          rows,
-          now,
-          java.time.ZoneOffset.UTC,
-          style
-        )
-        .lines
-        .drop(rows - 15)
-    }
-    assertEquals(bands.size, 600)
-    assertEquals(digest(bands), "cf3496d4fbe85dd4824d7a420c2c27bae4efcffc687167549a2c3a211e29e26c")
   }

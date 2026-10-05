@@ -40,7 +40,13 @@ final case class OrderPlan(
     positionAfter: BigDecimal,
     reduceOnly: Boolean,
     post: Boolean = false
-)
+):
+  // Every field that changes what is sent. A ticket sends a fresh plan only when it is the same
+  // order as the one the ticket drew, so a new field that changes the order belongs here.
+  def sameOrder(other: OrderPlan): Boolean =
+    coin == other.coin && asset == other.asset && side == other.side && kind == other.kind &&
+      quantity == other.quantity && limit == other.limit && reduceOnly == other.reduceOnly &&
+      post == other.post
 
 final case class RestingOrder(
     id: String,
@@ -67,6 +73,8 @@ object Trading:
   val defaultSlippage: BigDecimal = BigDecimal("0.001")
   val baseMakerFee: BigDecimal = BigDecimal("0.00015")
   val restingCap: Int = 20
+  // Live and prop refuse a resting order past the cap with this text.
+  val restingCapText: String = s"$restingCap orders rest. Cancel one first"
   private val zero = BigDecimal("0")
   private val one = BigDecimal("1")
   private val ten = BigDecimal("10")
@@ -159,7 +167,7 @@ object Trading:
         case None      => tick
     }
 
-  private val takesLiquidity = "Price would take liquidity. Move it "
+  private val takesLiquidity = "Takes liquidity. Move "
 
   def crossing(side: Side, price: BigDecimal, bid: BigDecimal, ask: BigDecimal): Option[String] =
     if side == Side.Buy then if price >= ask then Some(takesLiquidity + "below the ask") else None
@@ -275,11 +283,11 @@ object Trading:
     for
       price <- decimal(level.px)
       quantity <- decimal(level.sz)
-      _ <- check(validPrice(price, rules), "Book price does not match market precision")
-      _ <- check(quantity > zero && level.n > 0, "Book quantity and order count must be positive")
+      _ <- check(validPrice(price, rules), "Book price is off the market's tick")
+      _ <- check(quantity > zero && level.n > 0, "Book sizes must be positive")
       _ <- check(
         quantity.bigDecimal.stripTrailingZeros().scale() <= rules.szDecimals,
-        "Book quantity does not match market precision"
+        "Book size is off the market's lot"
       )
     yield Quote(price, quantity)
 
@@ -295,7 +303,7 @@ object Trading:
       val ordered = values.zip(values.drop(1)).forall { (a, b) =>
         if ascending then a.price < b.price else a.price > b.price
       }
-      check(values.nonEmpty && ordered, "Book sides must be nonempty and strictly ordered")
+      check(values.nonEmpty && ordered, "Book sides are empty or out of order")
         .map(_ => values)
     }
 
@@ -379,7 +387,7 @@ object Trading:
       _ <- check(coin.nonEmpty, "Select a market")
       _ <- check(
         rules.asset >= 0 && validDecimals(rules) && rules.maxLeverage >= 1,
-        "Market rules contain invalid asset, precision or leverage limits"
+        "Market rules are invalid"
       )
       _ <- check(
         leverage >= 1 && leverage <= rules.maxLeverage,
@@ -387,12 +395,12 @@ object Trading:
       )
       _ <- check(
         sizes.small > zero && sizes.big >= sizes.small && sizes.target > zero,
-        "Dollar sizes must be positive and big must be at least small"
+        "Order sizes in settings are invalid"
       )
-      _ <- check(validPrice(reference, rules), "Captured quote does not match market precision")
+      _ <- check(validPrice(reference, rules), "Price is off the market's tick")
       _ <- check(
         position.bigDecimal.stripTrailingZeros().scale() <= rules.szDecimals,
-        "Position does not match market precision"
+        "Position is off the market's lot"
       )
       _ <- check(intent.kind != OrderKind.Close || reducing, "No position to close")
       bids <- levels(book.bids, rules, ascending = false)
@@ -413,7 +421,7 @@ object Trading:
         if intent.kind == OrderKind.Close then position.abs else subtract(position.abs, reserved)
       _ <- check(
         !reducing || intent.kind == OrderKind.Close || free > zero,
-        "Resting orders already reduce the whole position"
+        "Resting orders cover the position"
       )
       lot = power(-rules.szDecimals)
       side = if intent.side == Side.Buy then asks else bids
@@ -452,7 +460,7 @@ object Trading:
       kind = if closing then OrderKind.Close else intent.kind
       _ <- check(
         kind == OrderKind.Close || multiply(quantity, ref.min(limit)) >= ten,
-        "Requested order must reach ten dollars at the quote and limit"
+        "Order must be at least $10"
       )
       estimate = walk(eligible, quantity)
       (filled, value) = estimate

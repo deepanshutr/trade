@@ -49,7 +49,8 @@ object OrdersAxis:
         ids: Vector[String] = Vector.empty,
         cancelling: Boolean = false
     ): AxisMark =
-      val row = Math.floor((hi - price.toDouble) / (hi - lo) * rows).toInt.max(0).min(rows - 1)
+      // The chart's own row rule, so the current price sits on the chart's marker row.
+      val row = Axis(lo, hi, rows).trueRow(price.toDouble)
       AxisMark(price, amount, kind, ids, row, row, ' ', cancelling, side)
     val orders = Vector(Side.Buy -> AxisKind.Buy, Side.Sell -> AxisKind.Sell).flatMap {
       (side, kind) =>

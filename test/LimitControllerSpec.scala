@@ -156,8 +156,13 @@ class LimitControllerSpec extends munit.FunSuite:
     def panel: PanelView = controller.panel
     def notice: Option[String] = panel.actionNotice
     def ticket: Option[Ticket] = panel.ticket
+    // Nothing was submitted or cancelled. A ticket previews its priced press to hold its plan,
+    // so every preview that did happen carries a price.
     def nothingSent(): Unit =
-      assertEquals((planned, sent, cancelled), (Vector.empty, Vector.empty, Vector.empty))
+      assertEquals((sent, cancelled), (Vector.empty, Vector.empty))
+      assert(planned.forall(_.price.nonEmpty), planned)
+    // The ticket as opened, without the plan its preview gave.
+    def opened: Option[Ticket] = ticket.map(_.copy(plan = None))
     def limit(): Unit =
       if panel.orderMode != OrderMode.Limit then key(Command.OrderType)
       frame()
@@ -173,17 +178,44 @@ class LimitControllerSpec extends munit.FunSuite:
     val f = new Fixture
     f.open(buy)
     assertEquals(
-      f.ticket,
+      f.opened,
       Some(Ticket("XMR", buy.copy(price = Some(d("546.09"))), d("546.09"), d("0.01"), None, None))
     )
     val g = new Fixture
     g.open(sell)
     assertEquals(
-      g.ticket,
+      g.opened,
       Some(Ticket("XMR", sell.copy(price = Some(d("546.10"))), d("546.10"), d("0.01"), None, None))
     )
     f.nothingSent()
     g.nothingSent()
+  }
+
+  test("a ticket holds the preview of its press, refreshed by every price move") {
+    val f = new Fixture
+    f.open(buy)
+    def plannedAt(price: String): Boolean =
+      f.ticket.flatMap(_.plan).exists(p => p.post && p.limit == d(price))
+    assert(plannedAt("546.09"), f.ticket)
+    assertEquals(f.ticket.flatMap(_.notice), None)
+    f.key(Command.ZoomOut)
+    assert(plannedAt("546.08"), f.ticket)
+    assertEquals(f.planned.lastOption, Some(buy.copy(price = Some(d("546.08")))))
+    // Up twice reaches the ask, where the preview refuses a price that takes liquidity.
+    f.key(Command.ZoomIn)
+    f.key(Command.ZoomIn)
+    assertEquals(f.ticket.map(_.price), Some(d("546.10")))
+    assertEquals(f.ticket.flatMap(_.plan), None)
+    assertEquals(f.ticket.flatMap(_.notice), Some("Takes liquidity. Move below the ask"))
+    assertEquals(f.sent, Vector.empty)
+  }
+
+  test("a ticket whose preview fails holds the refusal and no plan") {
+    val f = new Fixture
+    f.refusal = Some(TradingWorker.openingPausedMessage)
+    f.open(buy)
+    assertEquals(f.ticket.map(t => (t.plan, t.notice)), Some((None, f.refusal)))
+    assertEquals(f.sent, Vector.empty)
   }
 
   test("the arrows move the ticket price and are consumed, and pass to the chart otherwise") {
@@ -217,12 +249,15 @@ class LimitControllerSpec extends munit.FunSuite:
     val f = new Fixture
     f.open(buy)
     f.key(Command.ZoomOut)
+    // Opening and the move each previewed the ticket. Enter adds its own preview.
+    val shown = f.planned.size
     f.key(Command.Confirm)
-    assertEquals(f.planned, Vector.empty, "nothing is sent at a price the ticket did not show")
+    assertEquals(f.planned.size, shown, "nothing is sent at a price the ticket did not show")
+    assertEquals(f.sent, Vector.empty)
     f.frame()
     f.key(Command.Confirm)
     val priced = OrderIntent(Side.Buy, OrderKind.Hard, price = Some(d("546.08")))
-    assertEquals(f.planned, Vector(priced))
+    assertEquals(f.planned.drop(shown), Vector(priced))
     assertEquals(f.sent.map(_.intent), Vector(priced))
     assertEquals(f.sent.map(r => (r.plan.post, r.plan.limit)), Vector((true, d("546.08"))))
     assertEquals(f.sent.map(_.terms), Vector(f.panel.terms))
@@ -320,11 +355,12 @@ class LimitControllerSpec extends munit.FunSuite:
     f.limit()
     f.key(Command.PlaceOrder(buy))
     assert(f.ticket.nonEmpty)
+    val shown = f.planned.size
     f.key(Command.Close)
     f.nothingSent()
     f.frame()
     f.key(Command.Close)
-    assertEquals(f.planned, Vector(close))
+    assertEquals(f.planned.drop(shown), Vector(close))
   }
 
   test("a second Enter after a refused place waits for the frame that draws the refusal") {
@@ -379,10 +415,11 @@ class LimitControllerSpec extends munit.FunSuite:
     changes.foreach { (name, change) =>
       val f = new Fixture
       f.open(buy)
+      val shown = f.planned.size
       change(f)
       f.frame()
       f.key(Command.Confirm)
-      assertEquals((f.planned, f.sent), (Vector.empty, Vector.empty), name)
+      assertEquals((f.planned.drop(shown), f.sent), (Vector.empty, Vector.empty), name)
       assert(f.ticket.nonEmpty, name)
     }
   }
@@ -397,12 +434,87 @@ class LimitControllerSpec extends munit.FunSuite:
     assertEquals(f.ticket.map(t => (t.price, t.notice)), Some((d("546.09"), f.notice)))
     val g = new Fixture
     g.open(buy)
-    g.refusal = Some("Resting orders already reduce the whole position")
+    val shown = g.planned.size
+    g.refusal = Some("Resting orders cover the position")
     g.key(Command.Confirm)
-    assertEquals(g.planned.size, 1)
+    assertEquals(g.planned.size, shown + 1)
     assertEquals(g.sent, Vector.empty)
     assertEquals(g.notice, g.refusal)
-    assertEquals(g.ticket.flatMap(_.notice), g.refusal)
+    // The ticket holds the fresh refusal in place of the plan it showed.
+    assertEquals(g.ticket.map(t => (t.plan, t.notice)), Some((None, g.refusal)))
+  }
+
+  test("Enter sends only the size the ticket showed, and a changed size waits for its frame") {
+    // A sell against a long of 0.2 closes the free position, so its plan follows the position.
+    val f = new Fixture(start = ready.copy(position = Some(d("0.2"))))
+    f.open(sell)
+    assertEquals(f.ticket.flatMap(_.plan).map(_.quantity), Some(d("0.2")))
+    // The position changes after the last move. The frame still draws the ticket at 0.2.
+    f.view = f.view.copy(position = Some(d("0.3")))
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent, Vector.empty)
+    assertEquals(f.ticket.flatMap(_.plan).map(_.quantity), Some(d("0.3")))
+    assertEquals(f.notice, Some(DeskController.orderChanged))
+    // Until a frame draws the new size, Enter sends nothing.
+    f.key(Command.Confirm)
+    assertEquals(f.sent, Vector.empty)
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent.map(r => (r.plan.quantity, r.plan.limit)), Vector((d("0.3"), d("546.10"))))
+    assertEquals(f.ticket, None)
+  }
+
+  test("Enter sends only the order the ticket showed, its reduce only flag included") {
+    // A $20 sell against a long of 1.0 reduces 0.183. Flat, the same 0.183 would open a short.
+    val f = new Fixture(start = ready.copy(position = Some(d("1.0"))))
+    f.controller.setTerms(TradeTerms(TradeSizes(d("20"), d("100"), d("100")), d("0.001")))
+    f.open(sell)
+    def shown = f.ticket.flatMap(_.plan).map(p => (p.quantity, p.reduceOnly))
+    assertEquals(shown, Some((d("0.183"), true)))
+    // The position goes flat after the last move. The frame still draws the reduce only plan.
+    f.view = f.view.copy(position = Some(d("0")))
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent, Vector.empty)
+    assertEquals(shown, Some((d("0.183"), false)))
+    assertEquals(f.notice, Some(DeskController.orderChanged))
+    f.key(Command.Confirm)
+    assertEquals(f.sent, Vector.empty)
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent.map(r => (r.plan.quantity, r.plan.reduceOnly)), Vector((d("0.183"), false)))
+  }
+
+  test("a preview that stops being post only is never sent, even after a redrawn frame") {
+    val f = new Fixture
+    f.open(buy)
+    f.reshape = _.copy(post = false)
+    f.key(Command.Confirm)
+    assertEquals(f.sent, Vector.empty)
+    f.frame()
+    f.key(Command.Confirm)
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent, Vector.empty)
+    assertEquals(f.notice, Some("Not sent: price or account changed"))
+  }
+
+  test("a ticket whose preview was refused sends at Enter only a plan a frame has shown") {
+    val f = new Fixture
+    f.refusal = Some(TradingWorker.openingPausedMessage)
+    f.open(buy)
+    assertEquals(f.ticket.flatMap(_.plan), None)
+    // The pause ends. Enter previews a clean plan, which no frame has drawn yet.
+    f.refusal = None
+    f.key(Command.Confirm)
+    assertEquals(f.sent, Vector.empty)
+    val fresh = f.ticket.flatMap(_.plan)
+    assert(fresh.exists(_.limit == d("546.09")), f.ticket)
+    assertEquals(f.notice, Some(DeskController.orderChanged))
+    f.frame()
+    f.key(Command.Confirm)
+    assertEquals(f.sent.map(_.plan), fresh.toVector)
   }
 
   test("a preview that is not a post only order at the ticket price is never submitted") {
@@ -411,9 +523,10 @@ class LimitControllerSpec extends munit.FunSuite:
     shapes.foreach { shape =>
       val f = new Fixture
       f.open(buy)
+      val shown = f.planned.size
       f.reshape = shape
       f.key(Command.Confirm)
-      assertEquals((f.planned.size, f.sent), (1, Vector.empty))
+      assertEquals((f.planned.size, f.sent), (shown + 1, Vector.empty))
       assertEquals(f.notice, Some("Not sent: price or account changed"))
       assertEquals(f.ticket.map(_.price), Some(d("546.09")))
     }
@@ -438,7 +551,7 @@ class LimitControllerSpec extends munit.FunSuite:
     f.key(Command.ZoomIn)
     f.frame()
     f.key(Command.Confirm)
-    assertEquals(f.notice, Some("Price would take liquidity. Move it below the ask"))
+    assertEquals(f.notice, Some("Takes liquidity. Move below the ask"))
     assertEquals(f.ticket.map(_.price), Some(d("546.10")))
     f.nothingSent()
     val g = new Fixture
@@ -446,7 +559,7 @@ class LimitControllerSpec extends munit.FunSuite:
     g.key(Command.ZoomOut)
     g.frame()
     g.key(Command.Confirm)
-    assertEquals(g.notice, Some("Price would take liquidity. Move it above the bid"))
+    assertEquals(g.notice, Some("Takes liquidity. Move above the bid"))
     g.nothingSent()
   }
 
@@ -785,9 +898,10 @@ class LimitControllerSpec extends munit.FunSuite:
     f.frame()
     f.key(Command.Place)
     assertEquals(
-      f.ticket,
+      f.opened,
       Some(Ticket("XMR", sell.copy(price = Some(d("548.00"))), d("548.00"), d("0.01"), None, None))
     )
+    assert(f.ticket.flatMap(_.plan).exists(_.limit == d("548.00")), f.ticket)
     assertEquals(f.panel.focus, None)
     assertEquals(f.panel.orderMode, OrderMode.Market)
     val g = new Fixture(start = rested)

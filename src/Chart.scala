@@ -63,12 +63,15 @@ final case class Axis(lo: Double, hi: Double, rows: Int):
 final case class PlotMark(col: Int, row: Int, glyph: Char, style: String)
 
 // What the chart draws beside and over the price rows: the prices the range must hold, the
-// label of 17 columns for each price row, the marks over the plot and a ticket row with its style.
+// label of 17 columns for each price row, the marks over the plot, a ticket row with its style,
+// and how many axis marks sit above and below the current price.
 final case class AxisDecor(
     held: Vector[Double],
     labels: Axis => Vector[String],
     marks: Axis => Vector[PlotMark],
-    ticketRow: Axis => Option[(Int, String)]
+    ticketRow: Axis => Option[(Int, String)],
+    above: Int = 0,
+    below: Int = 0
 )
 
 object AxisDecor:
@@ -189,12 +192,15 @@ object Chart:
       }
     }
 
-  // The held prices join the plotted lows and highs and the book before the pad is taken.
+  // The held prices join the plotted lows and highs and the book before the pad is taken. The
+  // counts are the marks the orders axis places above and below the current price.
   def axis(
       columns: Vector[Option[Column]],
       book: Option[Book],
       rows: Int,
-      held: Vector[Double] = Vector.empty
+      held: Vector[Double] = Vector.empty,
+      above: Int = 0,
+      below: Int = 0
   ): Option[Axis] =
     val marked = held.filter(_.isFinite)
     val prices = columns.flatten.flatMap(c => Vector(c.low, c.high)) ++
@@ -204,12 +210,10 @@ object Chart:
       val (lo, hi) = (prices.min, prices.max)
       val pad = if hi > lo then (hi - lo) * 0.05 else hi * 0.001
       val padded = Axis(lo - pad, hi + pad, rows)
-      Some(book.flatMap(_.mid).map(_.toDouble).fold(padded)(room(padded, _, marked)))
+      Some(book.flatMap(_.mid).map(_.toDouble).fold(padded)(room(padded, _, above, below)))
 
-  // A held price beyond a current price on an edge row would get no row, so that side grows.
-  private def room(a: Axis, current: Double, held: Vector[Double]): Axis =
-    val above = held.filter(_ > current).distinct.size
-    val below = held.filter(_ < current).distinct.size
+  // A mark beyond a current price on an edge row would get no row, so that side grows.
+  private def room(a: Axis, current: Double, above: Int, below: Int): Axis =
     val (up, down) = (a.hi - current, current - a.lo)
     val row = a.trueRow(current)
     if above + below + 1 > a.rows || up < 0 || down < 0 || a.hi <= a.lo then a

@@ -42,11 +42,11 @@ class SimpleExecutionSpec extends munit.FunSuite:
     )
   }
 
-  test("primary controls cover a large three-row target at minimum width") {
+  test("a primary control acts from every cell of its one row at minimum width") {
     val f = new Fixture
     val frame = f.draw()
     val buy = frame.buttons.find(_.action == DeskAction.Prepare(Trading.action(0))).get
-    assert(buy.width >= 20)
+    assertEquals((buy.height, buy.width), (1, buy.label.length + 2))
     for y <- buy.y until buy.y + buy.height; x <- buy.x until buy.x + buy.width do
       val before = f.sent.size
       f.key(Command.PointerPress(x, y, 0))
@@ -121,7 +121,7 @@ class SimpleExecutionSpec extends munit.FunSuite:
     f.key(Command.PointerPress(buy.x, buy.y, 0))
     f.controller.publish(frame.copy(buttons = frame.buttons.filterNot(_ == buy)))
     f.controller.publish(frame)
-    f.key(Command.Pointer(buy.x, buy.y + 2, 0))
+    f.key(Command.Pointer(buy.x, buy.y, 0))
     assertEquals(f.sent.size, 0)
   }
 

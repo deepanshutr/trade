@@ -310,7 +310,7 @@ class MainRuntimeSpec extends TempDirectorySuite:
     try
       worker.start()
       Wait.until("Live never showed why it is blocked")(
-        worker.view.block.contains("Protected signing key is unavailable or differs")
+        worker.view.block.contains(SessionKey.unavailable)
       )
       assertEquals(s.reads.size, 1)
     finally worker.close()
@@ -401,13 +401,13 @@ class MainRuntimeSpec extends TempDirectorySuite:
         )
       )
       Wait.until("Live never showed why it is blocked")(
-        worker.view.block.contains("Protected signing key is unavailable or differs")
+        worker.view.block.contains(SessionKey.unavailable)
       )
       Thread.sleep(300L)
       assert(!worker.view.ready)
       assertEquals(
         worker.view.block,
-        Some("Protected signing key is unavailable or differs")
+        Some(SessionKey.unavailable)
       )
     finally worker.close()
   }

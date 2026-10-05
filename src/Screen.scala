@@ -107,7 +107,7 @@ object Screen:
     val label = regions.left - Layout.barW
     val count = Layout.columnsIn(cells, s.chartMode)
     val columns = Chart.columns(s, count, now)
-    val axis = Chart.axis(columns, s.book, priceRows, decor.held)
+    val axis = Chart.axis(columns, s.book, priceRows, decor.held, decor.above, decor.below)
     val currentRow = for a <- axis; m <- s.book.flatMap(_.mid) yield a.trueRow(m.toDouble)
     val labels = axis.fold(Vector.fill(priceRows)(""))(decor.labels)
     val bars = Chart.depthBars(s.book, s.coarse, axis, priceRows, style)

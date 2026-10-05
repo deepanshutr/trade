@@ -2,6 +2,8 @@ package desk
 
 object DeskController:
   val viewOnly: String = "View only: p Prop or l Live to trade"
+  // Enter found an order other than the one the ticket showed. The ticket now shows the new one.
+  val orderChanged: String = "Order changed. Enter again to send"
 
 final class DeskController(
     initial: PanelView,
@@ -157,6 +159,18 @@ final class DeskController(
   private val small = BigDecimal("0.01")
   private val large = BigDecimal("0.1")
 
+  // A ticket at a price holds the preview of its priced press: the plan it would send, or the
+  // refusal in its place. The panel draws the size from that plan alone.
+  private def priced(ticket: Ticket, price: BigDecimal): Ticket =
+    val intent = ticket.intent.copy(price = Some(price))
+    val previewed = preview(intent, current.terms)
+    ticket.copy(
+      intent = intent,
+      price = price,
+      plan = previewed.toOption,
+      notice = previewed.left.toOption
+    )
+
   // A ticket holds a sized press at a chosen price. Its step starts as the move Up would make.
   private def open(coin: String, intent: OrderIntent, price: BigDecimal, view: TradingView): Unit =
     val step = view.rules
@@ -164,7 +178,7 @@ final class DeskController(
       .map(_ - price)
       .getOrElse(small)
     current = current.copy(
-      ticket = Some(Ticket(coin, intent.copy(price = Some(price)), price, step, None, None))
+      ticket = Some(priced(Ticket(coin, intent, price, step, None, None), price))
     )
     point(Vector.empty, None)
     // The ticket changes which controls the panel offers, so the frame without it is dropped.
@@ -227,12 +241,7 @@ final class DeskController(
     def move(ticket: Ticket, delta: BigDecimal, up: Boolean): Unit =
       axis.rules.flatMap(Trading.movePrice(ticket.price, _, delta, up)) match
         case Some(price) =>
-          val next = ticket.copy(
-            intent = ticket.intent.copy(price = Some(price)),
-            price = price,
-            step = (price - ticket.price).abs,
-            notice = None
-          )
+          val next = priced(ticket, price).copy(step = (price - ticket.price).abs)
           current = current.copy(ticket = Some(next))
         case None => addMessage("order", "no further step")
     def act(action: DeskAction, shortcut: Boolean = false): Unit =
@@ -254,59 +263,73 @@ final class DeskController(
           addMessage("order", "Not sent: controls changed")
         else refuse()
       else if visible || fromKey then
-        def send(intent: OrderIntent, fits: OrderPlan => Boolean = _ => true): Boolean =
-          val settings = current.mode != "LIVE" || (view.leverage
-            .exists(n => n > 0 && view.rules.exists(r => n <= r.maxLeverage)) &&
-            view.marginMode.exists(m => m == "cross" || m == "isolated"))
-          if !settings then
+        // Live sends only at the leverage and margin mode the account confirmed.
+        def settled: Boolean = current.mode != "LIVE" || (view.leverage
+          .exists(n => n > 0 && view.rules.exists(r => n <= r.maxLeverage)) &&
+          view.marginMode.exists(m => m == "cross" || m == "isolated"))
+        def submitPlan(intent: OrderIntent, plan: OrderPlan): Boolean =
+          val at = wall()
+          val order = OrderReview(
+            intent,
+            plan,
+            current.terms,
+            at,
+            Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
+            view.leverage,
+            view.marginMode
+          )
+          val sent = submit(order)
+          if sent then current = current.copy(actionNotice = Some("Sending"))
+          else refuse()
+          sent
+        def send(intent: OrderIntent): Boolean =
+          if !settled then
             refuse()
             false
           else
-            val terms = current.terms
-            preview(intent, terms) match
-              case Right(plan) if plan.coin == snapshot.coin && fits(plan) =>
-                val at = wall()
-                val order = OrderReview(
-                  intent,
-                  plan,
-                  terms,
-                  at,
-                  Math.addExact(at, TradingWorker.maximumReviewLifetimeMs),
-                  view.leverage,
-                  view.marginMode
-                )
-                val sent = submit(order)
-                if sent then current = current.copy(actionNotice = Some("Sending"))
-                else refuse()
-                sent
-              case Left(reason) =>
+            preview(intent, current.terms) match
+              case Right(plan) if plan.coin == snapshot.coin => submitPlan(intent, plan)
+              case Left(reason)                              =>
                 addMessage("order", reason)
                 false
               case _ =>
                 refuse()
                 false
-        // A ticket sends one post only order at its own price, or stays open with the reason.
+        // A ticket sends one post only order at its own price, exactly the order it showed. A
+        // fresh preview of any other order takes the ticket's place and waits for the frame that
+        // shows it. A preview not post only at the ticket's price is never kept or sent.
         def place(ticket: Ticket): Unit =
+          val intent = ticket.intent.copy(price = Some(ticket.price))
           val crossing = view.bid
             .zip(view.ask)
             .map((bid, ask) => Trading.crossing(ticket.intent.side, ticket.price, bid, ask))
-          val sent =
-            if ticket.coin != snapshot.coin || !view.ready || view.pending || crossing.isEmpty then
+          def kept: Option[Ticket] = Some(ticket.copy(notice = current.actionNotice))
+          def drew(plan: OrderPlan): Boolean = ticket.plan.exists(_.sameOrder(plan))
+          val next =
+            if ticket.coin != snapshot.coin || !view.ready || view.pending || crossing.isEmpty ||
+              !settled
+            then
               refuse()
-              false
+              kept
             else
               crossing.flatten match
                 case Some(text) =>
                   addMessage("order", text)
-                  false
+                  kept
                 case None =>
-                  send(
-                    ticket.intent.copy(price = Some(ticket.price)),
-                    plan => plan.post && plan.limit == ticket.price
-                  )
-          current = current.copy(ticket =
-            if sent then None else Some(ticket.copy(notice = current.actionNotice))
-          )
+                  preview(intent, current.terms) match
+                    case Left(reason) =>
+                      addMessage("order", reason)
+                      Some(ticket.copy(plan = None, notice = current.actionNotice))
+                    case Right(plan)
+                        if plan.coin != snapshot.coin || !plan.post || plan.limit != ticket.price =>
+                      refuse()
+                      kept
+                    case Right(plan) if !drew(plan) =>
+                      addMessage("order", DeskController.orderChanged)
+                      Some(ticket.copy(plan = Some(plan), notice = None))
+                    case Right(plan) => if submitPlan(intent, plan) then None else kept
+          current = current.copy(ticket = next)
         action match
           case DeskAction.Prepare(intent)
               if view.ready && !view.pending && current.mode != "VIEW" &&

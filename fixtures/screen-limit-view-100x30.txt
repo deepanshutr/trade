@@ -1,0 +1,29 @@
+                                      |
+          550.93                      |
+                                      |
+                 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿|
+          548.00                      |
+                           ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿|
+          546.10>⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇          |
+                 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇          |
+          544.09 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿|
+                               volume |
+BTC                             97050 |
+                                96000>|
+                                94950 |
+PAXG (token tied to gold)      2320.5 |
+                                 2310>|
+                               2299.5 |
+                        c line 2s/col |
+VIEW XMR --                           |
+Val       -- Open      -- Net      -- |
+Stables       --  Usable       --     |
+View only: p Prop or l Live to trade  |
+[$20 *] [$100] [x Close]              |
+[t Limit] [o Orders] v Sound          |
+[1 LONG $20] [3 SHORT $20]            |
+                                      |
+                                      |
+                                      |
+                                      |
+[p Prop] [l Live] m Market c Chart    |

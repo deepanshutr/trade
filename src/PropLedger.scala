@@ -34,10 +34,10 @@ object PropLedger:
   private[desk] val noStables =
     "Prop limit: not enough stables including fees. Lower order sizes in settings. " +
       "The change applies to the next order."
-  private[desk] val capText =
-    s"Cancel a resting order first. Desk holds at most ${Trading.restingCap}"
+  // A ticket meets this one, so it fits the panel's 38 columns.
+  private[desk] val restingNoStables = "Not enough stables for order and fee"
   private val changed = "Prop canceled: account changed after review"
-  private val unavailable = "Prop storage unavailable. Restart to recover"
+  private[desk] val unavailable = "Prop storage unavailable. Restart Desk"
   private val missing = "Prop order not found"
 
   private def valid(order: PropOrder): Boolean =
@@ -175,7 +175,7 @@ final class PropLedger private[desk] (
       at: Long,
       expectedCount: Option[Long] = None
   ): Either[String, String] = synchronized {
-    if !available then Left("Prop storage unavailable. Restart to recover")
+    if !available then Left(PropLedger.unavailable)
     else if expectedCount.exists(_ != saved.count) then
       Left("Prop canceled: account changed after review")
     else
@@ -215,12 +215,12 @@ final class PropLedger private[desk] (
     val others = PropLedger.without(snapshot, order.id)
     if order.side == Side.Sell || PropLedger.reservation(order) <= PropLedger.usable(others) then
       Right(())
-    else Left(PropLedger.noStables)
+    else Left(PropLedger.restingNoStables)
 
   def rest(order: PropOrder, expectedCount: Long): Either[String, String] = synchronized {
     if !available then Left(PropLedger.unavailable)
     else if expectedCount != saved.count then Left(PropLedger.changed)
-    else if saved.resting.size >= Trading.restingCap then Left(PropLedger.capText)
+    else if saved.resting.size >= Trading.restingCap then Left(Trading.restingCapText)
     else if !PropLedger.valid(order) || saved.resting.exists(_.id == order.id) then
       Left("Prop rejected: invalid order")
     else

@@ -17,22 +17,26 @@ class CompactWorkspaceSpec extends munit.FunSuite:
       assert(frame.lines.forall(_.length == cols))
   }
 
-  test("compact view keeps navigation below large trading controls") {
+  test("compact view keeps navigation below the one row trading controls") {
     val frame = Workspace.draw(market, view, PanelView(), 100, 30, now, ZoneOffset.UTC, Style.mono)
     assert(!frame.lines.exists(_.contains("Details")))
     assert(frame.lines.exists(_.contains("v Sound")))
     val buy = frame.disabledButtons
       .find(_.action == DeskAction.Prepare(OrderIntent(Side.Buy, OrderKind.Hard)))
       .get
-    assertEquals(buy.height, 5)
-    assert(frame.buttons.find(_.action == DeskAction.Mode("PROP")).get.y >= buy.y + buy.height)
-    assert(frame.lines(buy.y + 1).contains("1 BUY $500"))
+    assertEquals(buy.height, 1)
+    assert(frame.buttons.find(_.action == DeskAction.Mode("PROP")).get.y > buy.y)
+    assert(frame.lines(buy.y - 1).startsWith("[1 LONG $500] [3 SHORT $500]"))
     assert(!frame.lines.exists(_.contains("tokens")))
   }
 
   test("missing evidence is not presented as zero probability or a trading direction") {
     val frame = Workspace.draw(market, view, PanelView(), 120, 40, now, ZoneOffset.UTC, Style.mono)
-    val text = frame.lines.map(_.drop(Layout.workspaceMarketWidth(120) + 1)).mkString("\n")
+    // The outlook beside the chart block.
+    val text = frame.lines
+      .take(40 - 12)
+      .map(_.drop(Layout.workspaceChartWidth(120) + 1))
+      .mkString("\n")
     assert(text.contains("Waiting") || text.contains("No history"), text)
     assert(!text.contains("0%"), text)
     assert(!text.contains("↑") && !text.contains("↓"), text)

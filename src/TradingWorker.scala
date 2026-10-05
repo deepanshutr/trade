@@ -52,9 +52,8 @@ object TradingWorker:
   val maximumReviewLifetimeMs: Long = 30000L
   val openingPauseMs: Long = 2000L
   val openingPausedMessage: String = "Opening paused for 2 s after closing"
-  val restingCapMessage: String =
-    s"Cancel a resting order first. Desk holds at most ${Trading.restingCap}"
   val cancelPendingMessage: String = "Wait for the pending order"
+  val waitingDepthMessage: String = "Waiting for fresh depth"
   // Order updates waiting for the account thread, fills kept per market and the finished
   // client ids whose late updates are dropped without a count.
   private[desk] val updateLimit: Int = 256
@@ -453,9 +452,9 @@ final class TradingWorker private[desk] (
   // For a short time after a reduce-only order completes, only reduce-only plans pass. So a
   // press repeated on the reducing side cannot run through flat into the other side.
   private def estimate(intent: OrderIntent, terms: TradeTerms): Either[String, OrderPlan] =
-    if !marketReady then Left("Waiting for fresh selected-market depth")
+    if !marketReady then Left(TradingWorker.waitingDepthMessage)
     else if intent.price.nonEmpty && restingOrders.size >= Trading.restingCap then
-      Left(TradingWorker.restingCapMessage)
+      Left(Trading.restingCapText)
     else
       position
         .toRight("Position unknown")
@@ -959,7 +958,7 @@ final class TradingWorker private[desk] (
           java.util.Arrays.fill(loaded, 0.toByte)
           synchronized {
             fatal = true
-            message = "Protected signing key is unavailable or differs"
+            message = SessionKey.unavailable
           }
 
   private def receiveActive(
