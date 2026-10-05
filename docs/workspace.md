@@ -137,6 +137,9 @@ The status row names Desk's own outcomes with their dollars and a result number:
 | `XMR resting $19.99 at 546.09` | `Resting $19.99 #9` |
 | `XMR canceled $16.38 at 546.09`, or a cancel by the venue | `Canceled $16.38 #10` |
 | `XMR canceled before sending` | `Not sent #11` |
+| `XMR canceling 1 of 3`, while a cancel runs | `Canceling` |
+| `XMR cancel rejected` | `Cancel refused #12` |
+| `XMR order rejected. Resting reduce orders may block it, press o` | `Close refused. Press o for orders #13` |
 
 A prop market fill reads `Bought $20.00 #14` or `Sold $20.00 #15`, the money it put up
 at the fill price, and `Part filled` when the depth held less. Its full text, such as

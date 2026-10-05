@@ -160,6 +160,11 @@ object Workspace:
         if keep then scala.util.matching.Regex.quoteReplacement(m.matched) else ""
     )
 
+  // Short words for outcomes whose full text stays in the order result log.
+  private[desk] val closeRefused = "Close refused. Press o for orders"
+  private[desk] val canceling = "Canceling"
+  private[desk] val cancelRefused = "Cancel refused"
+
   // Refusals that already say what to do. The status row shows them as they are.
   private val unchanged = Vector(
     "Takes liquidity. Move ",
@@ -180,6 +185,9 @@ object Workspace:
     def word(name: String): String =
       name + "\\$\\S+".r.findFirstIn(safeText(raw).takeWhile(_ != '\n')).fold("")(" " + _)
     if unchanged.exists(raw.startsWith) then safeText(raw).takeWhile(_ != '\n')
+    // A refused CLOSE and a refused cancel name what happened, before the reject rule below.
+    else if lower.contains("may block it, press o") then closeRefused
+    else if lower.contains("cancel rejected") then cancelRefused
     else if (lower.contains("canceled $") || lower.contains("canceled by self-trade prevention") ||
         lower.contains("canceled by the venue")) && !lower.contains("before sending")
     then word("Canceled")
@@ -232,6 +240,7 @@ object Workspace:
           case stage(name, age)                       => name.capitalize + " " + age
           case _ if lower.contains("result")          => "Confirming result"
           case _ if raw == s"${view.coin} submitting" => "Sending"
+          case _ if lower.contains(" canceling ")     => canceling
           case _                                      => mappedOrderStatus(raw, panel, unsaved)
       else if raw == TradingWorker.setupMessage then raw
       else mappedOrderStatus(raw, panel, unsaved)

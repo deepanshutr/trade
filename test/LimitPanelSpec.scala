@@ -111,6 +111,30 @@ class LimitPanelSpec extends munit.FunSuite:
       assertEquals(f.lines(30 - 12 + 3).take(38).trim, s"$raw #4")
   }
 
+  // The status row of a notice, its panel columns only.
+  private def statusOf(raw: String, number: Long): String =
+    row(frame(live, limit.copy(ticket = None, actionNotice = Some(raw), actionNumber = number)), 4)
+
+  test("a refused CLOSE names its remedy on the status row, and a plain refusal stays Not sent") {
+    val refused = "XMR order rejected. Resting reduce orders may block it, press o"
+    assertEquals(statusOf(refused, 5L), "Close refused. Press o for orders #5")
+    val blocked =
+      frame(live.copy(block = Some(refused)), PanelView(mode = "LIVE"))
+    assertEquals(row(blocked, 4), "Close refused. Press o for orders")
+    assertEquals(statusOf("XMR order rejected", 6L), "Not sent #6")
+  }
+
+  test("a cancel reads Canceling while it runs and Cancel refused when the venue refuses it") {
+    val running = live.copy(pending = true, message = "XMR canceling 1 of 3")
+    assertEquals(
+      row(frame(running, limit.copy(ticket = None, actionNotice = None)), 4),
+      "Canceling"
+    )
+    assertEquals(statusOf("XMR cancel rejected", 7L), "Cancel refused #7")
+    assertEquals(statusOf("XMR cancel result unknown", 8L), "Confirming result #8")
+    assertEquals(statusOf("XMR canceled $16.38 at 546.09", 9L), "Canceled $16.38 #9")
+  }
+
   test("a cancel refused while an order is pending says to wait, not Sending") {
     val shown = text(
       drawn(
@@ -839,7 +863,10 @@ class LimitPanelSpec extends munit.FunSuite:
       DeskController.orderChanged,
       SessionKey.unavailable,
       TradingWorker.storageFailedMessage,
-      TradingWorker.signingFailedMessage
+      TradingWorker.signingFailedMessage,
+      Workspace.closeRefused,
+      Workspace.canceling,
+      Workspace.cancelRefused
     )
     // Prop market fills on the status row, at the largest amount a prop wallet can hold, whole.
     val fills = Vector(

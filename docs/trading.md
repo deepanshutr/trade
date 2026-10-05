@@ -477,12 +477,13 @@ seconds apart and all at least 60 seconds after the order was made, settles as
 "XMR $21.84 at 546.09 not found at the venue".
 
 Enter on an order row cancels each order at that price in turn, one signed cancel per
-order, by Desk's own client order id. The status row reads "XMR canceling 1 of 3"
-meanwhile, and the row's amount is faint. A success reads "XMR canceled $16.38 at
-546.09". A cancel that errors or gets no clear reply is settled only from one status
-lookup. An order the lookup finds still open reads "XMR cancel rejected" and stays. An
-order the lookup cannot place reads "XMR cancel result unknown" and stays for the next
-check. A cancel waits while an order is pending, with "Wait for the pending order". It
+order, by Desk's own client order id. The status row reads `Canceling` meanwhile, and
+the row's amount is faint. A success reads `Canceled $16.38 #9` on the status row and
+"XMR canceled $16.38 at 546.09" in the order result log. A cancel that errors or gets
+no clear reply is settled only from one status lookup. An order the lookup finds still
+open stays, and the status row reads `Cancel refused`, with "XMR cancel rejected" in
+the log. An order the lookup cannot place stays for the next check, and the status row
+reads `Confirming result`, with "XMR cancel result unknown" in the log. A cancel waits while an order is pending, with "Wait for the pending order". It
 needs neither the selected market nor fresh prices. Desk sends no cancel you did not
 pick on the axis, and a market change cancels nothing.
 
@@ -504,9 +505,10 @@ after it. Four consequences follow:
 2. Resting reduce only orders left with nothing to reduce are expected to be cancelled
    by the venue, shown as "XMR canceled by the venue $16.38 at 546.09
    (reduceOnlyCanceled)".
-3. If the venue refuses the CLOSE while reduce only orders rest, the status reads
-   "XMR order rejected. Resting reduce orders may block it, press o". Cancel them from
-   the axis, then press CLOSE again.
+3. If the venue refuses the CLOSE while reduce only orders rest, the status row reads
+   `Close refused. Press o for orders`. The order result log keeps "XMR order rejected.
+   Resting reduce orders may block it, press o". Cancel them from the axis, then press
+   CLOSE again.
 4. After a CLOSE or a REDUCE to flat, an entry resting on the far side without the
    reduce only flag stays on the axis in its side's colour. It opens a new position
    with no press when the market reaches it. Cancel it from the axis if you do not
