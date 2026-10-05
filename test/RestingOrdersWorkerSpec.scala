@@ -1926,6 +1926,148 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     }
   }
 
+  // R4j. A loop that ended leaves no cancel for a later CLOSE to wait on.
+  test("CLOSE waits on a cancel only while one runs") {
+    val seeds = Vector(Seed(Side.Buy, "0.1", "540", 5L), Seed(Side.Buy, "0.1", "541", 6L))
+    using(new Fixture(seeds)) { f =>
+      f.ready()
+      assert(!f.worker.closeFirst())
+      val hold = new Hold
+      f.cancelHolds.put(f.seeded(0).id, hold)
+      assert(f.worker.cancel(Vector(f.seeded(0).id)))
+      hold.await()
+      assert(f.worker.closeFirst())
+      hold.open()
+      Wait.until("cancel request never finished")(!f.worker.view.pending)
+      assert(!f.worker.closeFirst(), "a finished loop still took CLOSE")
+      f.ready()
+      assert(f.worker.cancel(Vector(f.seeded(1).id)))
+      Wait.until("second cancel not settled")(f.resting.isEmpty)
+      assert(!f.worker.closeFirst())
+    }
+  }
+
+  // R2e. The lookup that moves a lost order into resting at a smaller size found a part fill.
+  test("a lost order that rests at a smaller size starts the opening pause") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+      val pending = f.journal.pending.get
+      assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms).isRight)
+      f.statuses.put(pending.id, lookupReply(pending.copy(oid = Some(4242L)), "open", "0.1"))
+      Wait.until("venue size not applied")(
+        f.resting.headOption.exists(_.remaining.contains("0.1"))
+      )
+      assertEquals(
+        f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms),
+        Left(TradingWorker.openingPausedMessage)
+      )
+    }
+  }
+
+  // R3d. A listing starts the count of unknownOid answers again.
+  test("a listing after a counted answer starts the count of a lost posted order again") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+      val pending = f.journal.pending.get
+      f.refreshes()
+      f.clock.set(70001L)
+      Wait.until("minute read missing")(f.openReads.get() == 1)
+      f.refreshes()
+      // Past the margin the read misses it and the next lookup counts one answer.
+      f.clock.set(75001L)
+      Wait.until("open orders not read at the margin")(f.openReads.get() == 2)
+      f.refreshes()
+      // A socket open reads again, and this time the venue lists the order.
+      f.openOrders = Some(ujson.Arr(listed(pending.copy(oid = Some(4242L)), "0.183")))
+      f.opened()
+      Wait.until("open orders not read on the socket open")(f.openReads.get() == 3)
+      f.refreshes()
+      f.clock.set(85001L)
+      f.refreshes()
+      f.clock.set(95001L)
+      f.refreshes()
+      f.refreshes()
+      assertEquals(f.journal.pending.map(_.id), Some(pending.id))
+    }
+  }
+
+  // R3h. Only an order at the lost order's own limit can be it.
+  test("a listing at another limit does not hold a lost posted order") {
+    val elsewhere = ujson.Obj(
+      "coin" -> "XMR",
+      "limitPx" -> "546.08",
+      "oid" -> ujson.Num(999.0),
+      "side" -> "B",
+      "sz" -> "0.183",
+      "timestamp" -> ujson.Num(1699999990000.0)
+    )
+    using(new Fixture()) { f =>
+      val pending = releaseLost(f, Vector(elsewhere))
+      assertEquals(f.journal.pending, None)
+      assertEquals(f.worker.view.outcome, Some("XMR not placed"))
+      assert(pending.post)
+    }
+  }
+
+  // R3m. A late fill counts as any fill: one that faced the stamped position pauses.
+  test("a late fill of a released order that faced the position starts the pause") {
+    using(new Fixture(Vector(Seed(Side.Sell, "0.1", "550", 5L)))) { f =>
+      f.position = "0.2"
+      Wait.until("start lookup missing")(f.lookups.size == 1)
+      f.opened()
+      Wait.until("open orders not read")(f.openReads.get() == 1)
+      f.clock.set(20000L)
+      Wait.until("second lookup missing")(f.lookups.size == 2)
+      f.clock.set(70001L)
+      Wait.until("third lookup missing")(f.lookups.size == 3)
+      f.clock.set(80001L)
+      Wait.until("fourth lookup missing")(f.lookups.size == 4)
+      f.clock.set(90001L)
+      Wait.until("order not settled as not found")(f.resting.isEmpty)
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.book("546.09", "546.10", 5000L)
+      val opening = OrderIntent(Side.Buy, OrderKind.Hard)
+      assert(f.worker.preview(opening, f.terms).isRight)
+      f.push(ws(f.seeded.head, "filled", "0", venueTime))
+      Wait.until("late fill not counted")(f.worker.view.ignoredOrderUpdates == 1L)
+      assertEquals(f.worker.preview(opening, f.terms), Left(TradingWorker.openingPausedMessage))
+    }
+  }
+
+  // R3n. A lost order's count never carries into its life as a resting order.
+  test("a lost posted order that rests starts with no count") {
+    using(new Fixture()) { f =>
+      f.ready()
+      f.lostOrders = true
+      assert(f.press(f.priced(Side.Buy, "546.09")))
+      Wait.until("lost reply not kept")(f.worker.view.message == "XMR waiting for order result")
+      val pending = f.journal.pending.get
+      f.refreshes()
+      f.clock.set(75001L)
+      Wait.until("open orders not read past the margin")(f.openReads.get() >= 1)
+      f.refreshes()
+      f.refreshes()
+      f.clock.set(85001L)
+      f.refreshes()
+      assertEquals(f.journal.pending.map(_.id), Some(pending.id))
+      // Two answers counted. The order then turns up resting.
+      f.statuses.put(pending.id, lookupReply(pending.copy(oid = Some(4242L)), "open", "0.183"))
+      Wait.until("lost order did not rest")(f.resting.size == 1)
+      f.statuses.remove(pending.id)
+      f.clock.set(95001L)
+      f.refreshes()
+      f.refreshes()
+      assertEquals(f.resting.map(_.id), Vector(pending.id))
+      assertEquals(f.worker.view.notFoundOrders, 0L)
+    }
+  }
+
   test("the venue's own rejection words reach the order result log line") {
     using(new Fixture(Vector(Seed(Side.Buy, "0.2", "540", 5L)))) { f =>
       f.ready()

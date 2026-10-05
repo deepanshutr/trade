@@ -1063,6 +1063,48 @@ class LimitControllerSpec extends munit.FunSuite:
     busy.nothingSent()
   }
 
+  // R4g. A settle leaves the account stale, so a view no longer pending is not yet ready.
+  test("a waiting CLOSE waits for a ready view, not only one that is no longer pending") {
+    val running = rested.copy(pending = true, ready = false, message = "XMR canceling 1 of 3")
+    val faint = Vector[DeskAction](DeskAction.Close)
+    val f = new Fixture(start = running)
+    f.cancelRuns = true
+    f.frame(trade - DeskAction.Close, faint)
+    f.key(Command.Close)
+    assertEquals(f.stops, 1)
+    f.cancelRuns = false
+    f.view = rested.copy(ready = false, block = Some("account data stale"))
+    f.frame(trade - DeskAction.Close, faint)
+    f.frame(trade - DeskAction.Close, faint)
+    f.nothingSent()
+    f.view = rested
+    f.frame()
+    assertEquals(f.sent.map(_.intent), Vector(close))
+  }
+
+  // R4i. A switch to prop before live is ready drops the CLOSE, so prop never sends it.
+  test("a mode switch drops a waiting CLOSE") {
+    val running = rested.copy(pending = true, ready = false, message = "XMR canceling 1 of 3")
+    val faint = Vector[DeskAction](DeskAction.Close)
+    val f = new Fixture(start = running)
+    f.cancelRuns = true
+    f.frame(trade - DeskAction.Close, faint)
+    f.key(Command.Close)
+    assertEquals(f.stops, 1)
+    f.cancelRuns = false
+    f.view = rested.copy(ready = false, block = Some("account data stale"))
+    f.frame(trade - DeskAction.Close, faint)
+    f.key(Command.Mode("PROP"))
+    f.frame(trade - DeskAction.Close, faint)
+    f.key(Command.Confirm)
+    assertEquals(f.switched, Vector("PROP"))
+    assertEquals(f.panel.mode, "PROP")
+    f.view = rested
+    f.frame()
+    f.frame()
+    f.nothingSent()
+  }
+
   test("Esc and opening settings withdraw a CLOSE waiting on a cancel and say so") {
     val running = rested.copy(pending = true, ready = false, message = "XMR canceling 1 of 3")
     val faint = Vector[DeskAction](DeskAction.Close)
