@@ -64,10 +64,36 @@ class LimitPanelSpec extends munit.FunSuite:
     assert(!shown.contains("Filled $5.46"), shown)
   }
 
-  test("a prop market fill keeps its side word and never shows the fee as its amount") {
-    val shown = notice("PROP XMR buy filled 1 at 100\nFee $0.05 | #2 2026-09-30T00:00:00Z", 2L)
-    assert(shown.contains("Bought #2"), shown)
-    assert(!shown.contains("$0.05"), shown)
+  // A prop market fill as the ledger writes it, at one times leverage.
+  private def propFill(side: Side, quantity: String, filled: String, price: String): String =
+    val p = BigDecimal(price)
+    val q = BigDecimal(filled)
+    val plan = OrderPlan(
+      "XMR",
+      0,
+      side,
+      OrderKind.Hard,
+      BigDecimal(quantity),
+      p,
+      p,
+      q,
+      q * p,
+      Some(p),
+      q,
+      false
+    )
+    PropLedger.fillText(plan, q * p * BigDecimal("0.0005"), 2L, now)
+
+  test("a prop market fill names its side and its dollars, never the fee") {
+    for (raw, expected) <- Vector(
+        (propFill(Side.Buy, "1", "1", "100"), "Bought $100.00 #2"),
+        (propFill(Side.Sell, "0.183", "0.183", "546.09"), "Sold $99.93 #2"),
+        (propFill(Side.Buy, "3", "1.5", "100"), "Part filled $150.00 #2")
+      )
+    do
+      val shown = notice(raw, 2L)
+      assert(shown.linesIterator.exists(_.take(38).trim == expected), s"$raw\n$shown")
+      assert(!shown.contains("Fee"), shown)
   }
 
   test("refusals from the ticket, the axis and the worker pass through whole on the status row") {
@@ -83,6 +109,30 @@ class LimitPanelSpec extends munit.FunSuite:
       // Each fits the 38 column status row with its number, so a ticket hides none of it.
       val f = drawn(ready, PanelView(mode = "LIVE", actionNotice = Some(raw), actionNumber = 4))
       assertEquals(f.lines(30 - 12 + 3).take(38).trim, s"$raw #4")
+  }
+
+  // The status row of a notice, its panel columns only.
+  private def statusOf(raw: String, number: Long): String =
+    row(frame(live, limit.copy(ticket = None, actionNotice = Some(raw), actionNumber = number)), 4)
+
+  test("a refused CLOSE names its remedy on the status row, and a plain refusal stays Not sent") {
+    val refused = "XMR order rejected. Resting reduce orders may block it, press o"
+    assertEquals(statusOf(refused, 5L), "Close refused. Press o for orders #5")
+    val blocked =
+      frame(live.copy(block = Some(refused)), PanelView(mode = "LIVE"))
+    assertEquals(row(blocked, 4), "Close refused. Press o for orders")
+    assertEquals(statusOf("XMR order rejected", 6L), "Not sent #6")
+  }
+
+  test("a cancel reads Canceling while it runs and Cancel refused when the venue refuses it") {
+    val running = live.copy(pending = true, message = "XMR canceling 1 of 3")
+    assertEquals(
+      row(frame(running, limit.copy(ticket = None, actionNotice = None)), 4),
+      "Canceling"
+    )
+    assertEquals(statusOf("XMR cancel rejected", 7L), "Cancel refused #7")
+    assertEquals(statusOf("XMR cancel result unknown", 8L), "Confirming result #8")
+    assertEquals(statusOf("XMR canceled $16.38 at 546.09", 9L), "Canceled $16.38 #9")
   }
 
   test("a cancel refused while an order is pending says to wait, not Sending") {
@@ -696,9 +746,19 @@ class LimitPanelSpec extends munit.FunSuite:
     assertEquals(row(free, 4), "Signer does not match the configured")
     assertEquals(row(free, 8), "owner")
     // A ticket keeps its rows, so the status shows its first line alone.
-    val held = frame(live.copy(block = Some("Saved order state failed. Restart to recover")))
-    assertEquals(row(held, 4), "Saved order state failed. Restart to")
+    val held = frame(mismatch)
+    assertEquals(row(held, 4), "Signer does not match the configured")
     assertEquals(row(held, 8), "SELL LIMIT XMR reduce only")
+    // The failed order state fits its row whole while a ticket is open.
+    val failed = frame(live.copy(block = Some(TradingWorker.storageFailedMessage)))
+    assertEquals(row(failed, 4), "Order state failed. Restart to recover")
+    assertEquals(row(failed, 8), "SELL LIMIT XMR reduce only")
+  }
+
+  test("the worker's two fatal texts show whole on the ticket's size row") {
+    for text <- Vector(TradingWorker.storageFailedMessage, TradingWorker.signingFailedMessage) do
+      val refused = ticketAt("546.10").copy(notice = Some(text))
+      assertEquals(row(frame(panel = limit.copy(ticket = Some(refused))), 10), text)
   }
 
   test("the ticket shows the size of the plan it holds, or the refusal its preview gave") {
@@ -801,9 +861,28 @@ class LimitPanelSpec extends munit.FunSuite:
       "Not sent: controls changed",
       "no further step",
       DeskController.orderChanged,
-      SessionKey.unavailable
+      SessionKey.unavailable,
+      TradingWorker.storageFailedMessage,
+      TradingWorker.signingFailedMessage,
+      Workspace.closeRefused,
+      Workspace.canceling,
+      Workspace.cancelRefused
     )
-    for text <- planned.flatten ++ others do assert(text.length <= 38, s"${text.length}: $text")
+    // Prop market fills on the status row, at the largest amount a prop wallet can hold, whole.
+    val fills = Vector(
+      (propFill(Side.Buy, "1000000", "1000000", "1000"), "Bought $"),
+      (propFill(Side.Sell, "1000000", "1000000", "1000"), "Sold $"),
+      (propFill(Side.Buy, "1000000", "999999.999", "1000"), "Part filled $")
+    ).map { (raw, word) =>
+      val shown = row(
+        frame(live, PanelView(mode = "PROP", actionNotice = Some(raw), actionNumber = 999999L)),
+        4
+      )
+      assert(shown.startsWith(word) && shown.endsWith(" #999999"), shown)
+      shown
+    }
+    for text <- planned.flatten ++ others ++ fills do
+      assert(text.length <= 38, s"${text.length}: $text")
   }
 
   test("no control byte reaches the status row from a pass through, fallback, block or dollar") {
@@ -830,6 +909,51 @@ class LimitPanelSpec extends munit.FunSuite:
         .map(line => Chart.plain(line).drop(38))
     val btc = Fill("BTC", Side.Buy, now - 11_000, BigDecimal("95000"), BigDecimal("0.001"))
     assertEquals(plot(Vector(btc)), plot(Vector.empty))
+  }
+
+  test("a live short draws its liquidation above the range in the buy colour") {
+    val short = live.copy(
+      position = Some(BigDecimal("-0.2")),
+      portfolio = live.portfolio.copy(
+        tokenValue = Some(BigDecimal("-109.22")),
+        liquidation = Some(BigDecimal("600"))
+      ),
+      resting = Vector.empty
+    )
+    val coloured = frame(short, limit.copy(ticket = None), style = Style.colour)
+    assert(
+      coloured.lines(1).startsWith(Style.colour.bid + "          600.00," + Screen.reset),
+      coloured.lines(1)
+    )
+  }
+
+  test("a live long draws its liquidation price on the axis and the range stays as it was") {
+    val plain = live.copy(resting = Vector(order("s1", Side.Sell, "552.00", "0.1")))
+    val liquidated =
+      plain.copy(portfolio = plain.portfolio.copy(liquidation = Some(BigDecimal("500"))))
+    val panel = limit.copy(ticket = None)
+    val marked = frame(liquidated, panel)
+    val bare = frame(plain, panel)
+    // Far below the range, it sits on the bottom price row, shown above its true place.
+    assertEquals(Chart.plain(marked.lines(9)).take(17), "          500.00'")
+    // The scale, the depth bars and the plot beside every price row are as they were.
+    def beside(f: WorkspaceFrame): Vector[String] =
+      f.lines.slice(1, 10).map(Chart.plain(_).drop(17))
+    assertEquals(beside(marked), beside(bare))
+    assertEquals(
+      marked.axis.map(OrdersAxis.selectable),
+      bare.axis.map(OrdersAxis.selectable)
+    )
+    assert(marked.axis.exists(_.marks.exists(_.kind == AxisKind.Liquidation)), marked.axis)
+    // In colour it takes the sell colour of a long's close, marked no weight.
+    val coloured = frame(liquidated, panel, style = Style.colour)
+    assert(
+      coloured.lines(9).startsWith(Style.colour.ask + "          500.00'" + Screen.reset),
+      coloured.lines(9)
+    )
+    // View draws no liquidation, as it draws no entry.
+    val viewed = frame(liquidated, PanelView(mode = "VIEW"))
+    assert(!viewed.lines.exists(Chart.plain(_).contains("500.00")), viewed.lines.mkString("\n"))
   }
 
   test("the ticket's and the entry's prices widen the scale, and the ticket line takes its row") {
@@ -871,6 +995,52 @@ class LimitPanelSpec extends munit.FunSuite:
     def lower(f: WorkspaceFrame): Vector[DeskButton] = f.controls.filter(_.y >= 30 - 12 + 6)
     assertEquals(lower(p), lower(l))
     assert(band(l)(5).endsWith("1 on BTC") && band(l)(10).startsWith("[Enter Place]"))
+  }
+
+  test("t follows the order type button, off while pending, with a ticket or a confirmation") {
+    val calm = limit.copy(ticket = None, actionNotice = None)
+    def controller(panel: PanelView): DeskController =
+      new DeskController(panel, () => now, (_, _) => Left("unused"), _ => false, _ => Right(()))
+    // The key and a click on the button, each on its own controller, from the same frame.
+    def both(view: TradingView, panel: PanelView): (PanelView, PanelView) =
+      val drawn = frame(view, panel)
+      val button = drawn.controls.find(_.action == DeskAction.OrderType).get
+      val keyed = controller(panel)
+      keyed.publish(drawn)
+      val _ = keyed.handle(Command.OrderType, pinned, view, (100, 30), false)
+      val clicked = controller(panel)
+      clicked.publish(drawn)
+      val _ =
+        clicked.handle(Command.PointerPress(button.x, button.y, 0), pinned, view, (100, 30), false)
+      val _ = clicked.handle(Command.Pointer(button.x, button.y, 0), pinned, view, (100, 30), false)
+      (keyed.panel, clicked.panel)
+    for (name, view, panel) <- Vector(
+        ("pending", live.copy(pending = true), calm),
+        ("ticket", live, calm.copy(ticket = limit.ticket)),
+        ("confirmation", live, calm.copy(modeReview = Some("PROP")))
+      )
+    do
+      val drawn = frame(view, panel)
+      assert(drawn.disabledButtons.exists(_.action == DeskAction.OrderType), name)
+      assert(!drawn.shortcuts.contains(DeskAction.OrderType), name)
+      val (keyed, clicked) = both(view, panel)
+      assertEquals(keyed.orderMode, OrderMode.Limit, name)
+      assertEquals(keyed, clicked, name)
+    // With the button on, t switches the type, as the click does.
+    val (keyed, clicked) = both(live, calm)
+    assertEquals(keyed.orderMode, OrderMode.Market)
+    assertEquals(keyed, clicked)
+  }
+
+  test("t does not switch through a frame drawn before an order went pending") {
+    val calm = limit.copy(ticket = None, actionNotice = None)
+    val controller =
+      new DeskController(calm, () => now, (_, _) => Left("unused"), _ => false, _ => Right(()))
+    controller.publish(frame(live, calm))
+    val _ =
+      controller.handle(Command.OrderType, pinned, live.copy(pending = true), (100, 30), false)
+    assertEquals(controller.panel.orderMode, OrderMode.Limit)
+    assertEquals(controller.panel.actionNotice, Some("Order pending"))
   }
 
   test("Orders, the order type and Place light only when they can act") {

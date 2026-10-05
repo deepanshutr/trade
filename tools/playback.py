@@ -2,7 +2,7 @@
 """Offline playback through Main.run and a real pseudo terminal, using the standard library."""
 
 import argparse
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 import errno
 import fcntl
 import hashlib
@@ -128,6 +128,31 @@ def market_matches(frame, coin, midpoint):
     return matched is not None and float(matched[1]) <= 5
 
 
+# The band holds the last twelve rows. Its panel is the left 38 columns, with the mode heading on
+# its first row, the status on its fourth and the two trade buttons on its seventh.
+BAND, PANEL = 12, 38
+
+
+def panel(frame):
+    """The panel's twelve rows, each 38 columns wide."""
+    return [row[:PANEL].ljust(PANEL) for row in frame["lines"][-BAND:]]
+
+
+def prop_ready(frame):
+    """Prop on XMR is drawn and its status row is blank, so a click is taken."""
+    rows = panel(frame)
+    return len(rows) == BAND and rows[0].startswith("PROP XMR") and rows[3].strip() == ""
+
+
+def trade_clicks(frame):
+    """The terminal column and row, counted from one, at the middle of each trade button: the
+    buy button first, then the sell button."""
+    buttons = list(re.finditer(r"\[[^\]]*\]", panel(frame)[6]))
+    assert len(buttons) == 2, "the panel's seventh row lacks its two trade buttons"
+    row = len(frame["lines"]) - BAND + 6
+    return [((button.start() + button.end()) // 2 + 1, row + 1) for button in buttons]
+
+
 # The time axis row holds the caption in the left pane of 38 columns, then a tick at a round time
 # with its hh:mm:ss label after it, and the outlook of 39 columns closes every row above the band.
 def right_edge(frame):
@@ -211,20 +236,24 @@ def validate_wallet(saved, results, fixture_book):
                 assert expected_side == "sell" and held == 0, "impossible empty-wallet refusal"
             refused.append(receipt)
             continue
-        match = re.fullmatch(r"PROP XMR (buy|sell) filled ([0-9.]+) at ([^\n]+)\nFee \$([0-9.]+) \| #(\d+) .+", receipt)
+        # A fill names the money it put up at one times leverage, its filled value in cents.
+        match = re.fullmatch(r"PROP XMR (buy|sell) filled (\$[0-9.]+) at ([^\n]+)\nFee \$([0-9.]+) \| #(\d+) .+", receipt)
         assert match, "invalid fill receipt"
-        side, quantity, shown, fee, count = match.groups()
+        side, dollars, shown, fee, count = match.groups()
         assert side == expected_side, "fill side differs from clicked button"
-        quantity, fee = Decimal(quantity), Decimal(fee)
+        fee = Decimal(fee)
         levels = fixture_book["levels"][1 if side == "buy" else 0]
         requested = (Decimal(500) / Decimal(levels[0]["px"]) // Decimal("0.001")) * Decimal("0.001")
-        assert quantity > 0 and quantity == (requested if side == "buy" else min(requested, held)), "wrong filled quantity"
+        quantity = requested if side == "buy" else min(requested, held)
+        assert quantity > 0, "wrong filled quantity"
         remaining, value = quantity, Decimal(0)
         for level in levels:
             take = min(remaining, Decimal(level["sz"]))
             value += take * Decimal(level["px"])
             remaining -= take
         assert remaining == 0, "fill exceeded known depth"
+        # The fixture's fills stay under a thousand dollars, so the text keeps both decimals.
+        assert dollars == "$" + str(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)), "dollars differ from the filled value"
         assert fee == value * Decimal("0.0005"), "fee differs from fixed-book filled value"
         approximate = shown.startswith("~")
         price = Decimal(shown.lstrip("~"))
@@ -493,7 +522,7 @@ class Playback:
                                lambda f: len(f["lines"]) == 40 and market("XMR")(f))
             assert all(len(row) == 120 for row in wide["lines"])
         elif self.mode == "speed":
-            self.frame(lambda f: contains("PROP XMR")(f) and f["lines"][-11].split("|")[-1].strip() == "")
+            places = trade_clicks(self.frame(prop_ready))
             clicks = self.clicks
             began = time.monotonic_ns()
             for index in range(600):
@@ -501,7 +530,7 @@ class Playback:
                 while time.monotonic_ns() < deadline:
                     self.pump(max(0, min(0.01, (deadline - time.monotonic_ns()) / 1e9)))
                 self.command("quote", coin="XMR")
-                x, y = (65 if index % 2 == 0 else 89), 25
+                x, y = places[index % 2]
                 clicks.append(time.monotonic_ns())
                 self.write(ESC + f"[<0;{x};{y}M".encode() + ESC + f"[<0;{x};{y}m".encode())
                 self.pump(0)

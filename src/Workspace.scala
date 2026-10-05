@@ -160,6 +160,11 @@ object Workspace:
         if keep then scala.util.matching.Regex.quoteReplacement(m.matched) else ""
     )
 
+  // Short words for outcomes whose full text stays in the order result log.
+  private[desk] val closeRefused = "Close refused. Press o for orders"
+  private[desk] val canceling = "Canceling"
+  private[desk] val cancelRefused = "Cancel refused"
+
   // Refusals that already say what to do. The status row shows them as they are.
   private val unchanged = Vector(
     "Takes liquidity. Move ",
@@ -180,13 +185,16 @@ object Workspace:
     def word(name: String): String =
       name + "\\$\\S+".r.findFirstIn(safeText(raw).takeWhile(_ != '\n')).fold("")(" " + _)
     if unchanged.exists(raw.startsWith) then safeText(raw).takeWhile(_ != '\n')
+    // A refused CLOSE and a refused cancel name what happened, before the reject rule below.
+    else if lower.contains("may block it, press o") then closeRefused
+    else if lower.contains("cancel rejected") then cancelRefused
     else if (lower.contains("canceled $") || lower.contains("canceled by self-trade prevention") ||
         lower.contains("canceled by the venue")) && !lower.contains("before sending")
     then word("Canceled")
     else if lower.contains("partial") || lower.contains("part filled") then word("Part filled")
     else if lower.contains(" filled ") then
-      if lower.contains(" buy ") then "Bought"
-      else if lower.contains(" sell ") then "Sold"
+      if lower.contains(" buy ") then word("Bought")
+      else if lower.contains(" sell ") then word("Sold")
       else word("Filled")
     else if lower.contains(" resting $") then word("Resting")
     else if lower.contains("no fill") then "No fill"
@@ -232,6 +240,7 @@ object Workspace:
           case stage(name, age)                       => name.capitalize + " " + age
           case _ if lower.contains("result")          => "Confirming result"
           case _ if raw == s"${view.coin} submitting" => "Sending"
+          case _ if lower.contains(" canceling ")     => canceling
           case _                                      => mappedOrderStatus(raw, panel, unsaved)
       else if raw == TradingWorker.setupMessage then raw
       else mappedOrderStatus(raw, panel, unsaved)
@@ -294,22 +303,42 @@ object Workspace:
       def colour(side: Side): String = if side == Side.Buy then style.bid else style.ask
       // The ticket's size is the plan the controller holds from its preview, and nothing else.
       val plan = ticket.flatMap(_.plan)
-      def place(lo: Double, hi: Double, count: Int): Placed =
+      // The liquidation price, in the colour of the side that would close the position.
+      val liquidation = for
+        size <- held
+        price <- view.portfolio.liquidation
+      yield (if size > 0 then Side.Sell else Side.Buy, price)
+      def place(
+          lo: Double,
+          hi: Double,
+          count: Int,
+          liquidated: Option[(Side, BigDecimal)] = None
+      ): Placed =
         val ticketMark =
           ticket.map(t => (t.intent.side, t.price, plan.fold(BigDecimal(0))(_.quantity)))
-        val placed =
-          OrdersAxis.marks(current, entry, resting, ticketMark, view.leverage, lo, hi, count)
+        val placed = OrdersAxis.marks(
+          current,
+          entry,
+          resting,
+          ticketMark,
+          view.leverage,
+          lo,
+          hi,
+          count,
+          liquidated
+        )
         if plan.nonEmpty then placed
         else
           placed.copy(marks =
             placed.marks.map(m => if m.kind == AxisKind.Ticket then m.copy(amount = None) else m)
           )
       // With no rows every mark is counted, so this gives the marks above and below the price.
+      // The liquidation is left out, so it never widens the range.
       val counted = place(0, 1, 0)
       // The axis exactly as the labels drew it. Keys on the axis act on these rows.
       var drawn = Option.empty[Placed]
       def labels(rules: MarketRules)(a: Axis): Vector[String] =
-        val placed = place(a.lo, a.hi, a.rows)
+        val placed = place(a.lo, a.hi, a.rows, liquidation)
         drawn = Some(placed)
         val side = held.map(p => if p > 0 then Side.Buy else Side.Sell)
         OrdersAxis.lines(placed, panel.focus, rules, a.lo, a.hi, a.rows, view.stale, side, style)
@@ -477,7 +506,8 @@ object Workspace:
       val orderType =
         keyed(Bind.OrderType, if panel.orderMode == OrderMode.Limit then "Limit" else "Market")
       val orders = keyed(Bind.Orders, "Orders")
-      button(5, 0, orderType, DeskAction.OrderType, choosing && trades)
+      // The order type waits while a ticket is open, since the ticket is already a limit order.
+      button(5, 0, orderType, DeskAction.OrderType, choosing && trades && ticket.isEmpty)
       button(5, orderType.length + 3, orders, DeskAction.Orders, trades && resting.nonEmpty)
       // A row too wide drops the count first and then the sound.
       val sound = keyed(Bind.Sound, if panel.muted then "Muted" else "Sound")

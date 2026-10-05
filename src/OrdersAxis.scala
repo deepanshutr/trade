@@ -1,7 +1,7 @@
 package desk
 
 enum AxisKind:
-  case Current, Entry, Buy, Sell, Ticket
+  case Current, Entry, Buy, Sell, Ticket, Liquidation
 
 // One row of the orders axis. The side is the side of the orders or the ticket behind a mark,
 // so the ticket row can take its side's colour. The current price and the entry carry none.
@@ -39,7 +39,8 @@ object OrdersAxis:
       leverage: Option[Int],
       lo: Double,
       hi: Double,
-      rows: Int
+      rows: Int,
+      liquidation: Option[(Side, BigDecimal)] = None
   ): Placed =
     def mark(
         price: BigDecimal,
@@ -66,16 +67,35 @@ object OrdersAxis:
     ) ++ orders ++ ticket.map((side, price, quantity) =>
       mark(price, Trading.money(quantity, price, leverage), AxisKind.Ticket, Some(side))
     )
+    // The liquidation price never widens the range. One beyond an edge counts a row past it, so
+    // the passes put it on that edge row with the moved tie glyph. It shows the price alone, in
+    // the colour of the side that would close the position.
+    val liquidated = liquidation.map { (side, price) =>
+      val at = price.toDouble
+      val row = if at > hi then -1 else if at < lo then rows else Axis(lo, hi, rows).trueRow(at)
+      AxisMark(price, None, AxisKind.Liquidation, Vector.empty, row, row, ' ', false, Some(side))
+    }
+    // It joins a side only when the side has a row to spare, so it never takes an order's row
+    // and is never counted among the marks left off.
+    def spare(marks: Vector[AxisMark], room: Int, belongs: AxisMark => Boolean): Vector[AxisMark] =
+      marks ++ liquidated.filter(m => belongs(m) && marks.size < room)
     current match
       case None =>
-        val (down, below) = pass(others.sortBy(-_.price), -1, up = false, rows)
+        val all = spare(others, rows, _ => true)
+        val (down, below) = pass(all.sortBy(-_.price), -1, up = false, rows)
         Placed(down, 0, below)
       case Some(c) =>
         val centre = mark(c, None, AxisKind.Current).copy(tie = '>')
-        val (upper, lower) =
-          others.partition(m => m.price > c || m.price == c && m.side.contains(Side.Sell))
-        val (up, above) = pass(upper.sortBy(_.price), centre.row, up = true, rows)
-        val (down, below) = pass(lower.sortBy(-_.price), centre.row, up = false, rows)
+        def higher(m: AxisMark): Boolean = m.price > c || m.price == c && m.side.contains(Side.Sell)
+        val (upper, lower) = others.partition(higher)
+        val (up, above) =
+          pass(spare(upper, centre.row, higher).sortBy(_.price), centre.row, up = true, rows)
+        val (down, below) = pass(
+          spare(lower, rows - 1 - centre.row, !higher(_)).sortBy(-_.price),
+          centre.row,
+          up = false,
+          rows
+        )
         val shown = (up :+ centre) ++ down
         Placed(shown.filter(m => m.row >= 0 && m.row < rows).sortBy(_.row), above, below)
 
@@ -124,10 +144,12 @@ object OrdersAxis:
     (0 until rows).toVector.map { row =>
       byRow.get(row) match
         case Some(m) =>
-          val amount = if m.kind == AxisKind.Current then " " * 7 else Trading.dollars(m.amount, 7)
+          val priceOnly = m.kind == AxisKind.Current || m.kind == AxisKind.Liquidation
+          val amount = if priceOnly then " " * 7 else Trading.dollars(m.amount, 7)
           val rest = " " + right(Trading.priceText(m.price, rules)) + m.tie
           val ink = colour(if m.kind == AxisKind.Entry then positionSide else m.side)
-          val weight = if m.kind == AxisKind.Buy || m.kind == AxisKind.Sell then "" else Screen.bold
+          val plain = Set(AxisKind.Buy, AxisKind.Sell, AxisKind.Liquidation)
+          val weight = if plain(m.kind) then "" else Screen.bold
           if chosen.contains(row) then inverse + Screen.bold + amount + rest + Screen.reset
           else if stale || m.cancelling then
             style.wrap(ink + Screen.dim, amount) + style.wrap(ink + weight, rest)

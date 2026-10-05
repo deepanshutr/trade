@@ -921,7 +921,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
     val f = new Fixture(failJournalOpen = true)
     try
       Wait.until("journal failure missing")(
-        f.worker.view.message == "Saved order state failed. Restart to recover"
+        f.worker.view.message == "Order state failed. Restart to recover"
       )
       val reads = f.infoReads.get()
       f.worker.select("BTC")
@@ -1998,7 +1998,7 @@ class TradingWorkerSpec extends TempDirectorySuite:
       throw new IllegalStateException("test failure"))
     try
       Wait.until("signing preparation failure was not shown")(
-        f.worker.view.message == "Order signing could not be prepared. Restart to retry"
+        f.worker.view.message == "Signing not prepared. Restart to retry"
       )
       val stopped = accountThread.get()
       assert(

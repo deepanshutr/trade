@@ -237,9 +237,9 @@ class StatusPanelSpec extends munit.FunSuite:
 
   test("failed real order receipts name their own action in the smallest frame") {
     for receipt <- Vector(
-        "PROP XMR buy filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z",
-        "PROP XMR sell filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z",
-        "PROP XMR buy partial 0.5 at 100\nFee $0.03 | #1 2026-09-30T00:00:00Z",
+        "PROP XMR buy filled $100.00 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z",
+        "PROP XMR sell filled $100.00 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z",
+        "PROP XMR buy partial $50.00 at 100\nFee $0.03 | #1 2026-09-30T00:00:00Z",
         "Prop no fill: no depth inside reviewed limit",
         "XMR order rejected"
       )
@@ -347,12 +347,12 @@ class StatusPanelSpec extends munit.FunSuite:
     try
       controller.addMessage(
         "order",
-        "PROP XMR buy filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z"
+        "PROP XMR buy filled $100.00 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z"
       )
       assert(started.await(2, java.util.concurrent.TimeUnit.SECONDS))
       controller.addMessage(
         "order",
-        "PROP XMR sell filled 1 at 100\nFee $0.05 | #2 2026-09-30T00:00:00Z"
+        "PROP XMR sell filled $100.00 at 100\nFee $0.05 | #2 2026-09-30T00:00:00Z"
       )
       val newer = draw(
         TradingView("XMR", message = "Ready", ready = true),
@@ -360,7 +360,7 @@ class StatusPanelSpec extends munit.FunSuite:
         Layout.minCols,
         Layout.minRows
       )
-      assert(newer.lines.exists(_.contains("Sold #2")), newer.lines.mkString("\n"))
+      assert(newer.lines.exists(_.contains("Sold $100.00 #2")), newer.lines.mkString("\n"))
       release.countDown()
       assert(failed.await(2, java.util.concurrent.TimeUnit.SECONDS))
       val frame = draw(
@@ -399,7 +399,7 @@ class StatusPanelSpec extends munit.FunSuite:
     try
       controller.addMessage(
         "order",
-        "PROP XMR buy filled 1 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z"
+        "PROP XMR buy filled $100.00 at 100\nFee $0.05 | #1 2026-09-30T00:00:00Z"
       )
       assert(saved.await(2, java.util.concurrent.TimeUnit.SECONDS))
       val frame = draw(
@@ -409,7 +409,7 @@ class StatusPanelSpec extends munit.FunSuite:
         Layout.minRows
       )
       assert(!frame.lines.exists(_.contains("not saved")), frame.lines.mkString("\n"))
-      assert(frame.lines.exists(_.contains("Bought #1")), frame.lines.mkString("\n"))
+      assert(frame.lines.exists(_.contains("Bought $100.00 #1")), frame.lines.mkString("\n"))
     finally writer.close()
   }
 

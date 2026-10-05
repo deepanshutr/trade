@@ -18,7 +18,7 @@ def speed():
 
 def wallet_case():
     results = [{'id': index, 'kind': 'order', 'at': index,
-                'text': f'PROP XMR {"buy" if index % 2 else "sell"} filled 1 at 500\nFee $0.25 | #{index} offline'}
+                'text': f'PROP XMR {"buy" if index % 2 else "sell"} filled $500.00 at 500\nFee $0.25 | #{index} offline'}
                for index in range(1, 601)]
     saved = {'deposit': '10000', 'cash': '9850', 'fees': '150', 'realized': '0',
              'positions': {}, 'count': 600, 'orders': [result['text'] for result in results]}
@@ -35,7 +35,7 @@ class IndependentOracleReview(unittest.TestCase):
             if click == 2:
                 continue
             side = 'buy' if click % 2 else 'sell'
-            filled.append(f'PROP XMR {side} filled 1 at 500\nFee $0.25 | #{len(filled) + 1} offline')
+            filled.append(f'PROP XMR {side} filled $500.00 at 500\nFee $0.25 | #{len(filled) + 1} offline')
         completion = ['Order pending', filled[0]] + filled[1:]
         results = [{'kind': 'order', 'text': text} for text in completion]
         saved.update(cash='9350.25', fees='149.75', count=599,
@@ -105,7 +105,7 @@ class IndependentOracleReview(unittest.TestCase):
         saved, results, book = wallet_case()
         results[0]['text'] = 'No XMR to sell'
         for index in range(2, 601):
-            results[index - 1]['text'] = f'PROP XMR {"sell" if index % 2 else "buy"} filled 1 at 500\nFee $0.25 | #{index} offline'
+            results[index - 1]['text'] = f'PROP XMR {"sell" if index % 2 else "buy"} filled $500.00 at 500\nFee $0.25 | #{index} offline'
         saved.update(cash='9350.25', fees='149.75', count=599,
                      positions={'XMR': {'quantity': '1', 'entry': '500'}},
                      orders=[result['text'] for result in results[1:]])
@@ -150,7 +150,7 @@ class IndependentOracleReview(unittest.TestCase):
     def test_zero_quantity_cannot_be_counted_as_six_hundred_fills(self):
         saved, results, book = wallet_case()
         for result in results:
-            result['text'] = result['text'].replace('filled 1 ', 'filled 0 ').replace('Fee $0.25', 'Fee $0')
+            result['text'] = result['text'].replace('filled $500.00 ', 'filled $0.00 ').replace('Fee $0.25', 'Fee $0')
         saved.update(cash='10000', fees='0', orders=[result['text'] for result in results])
         with self.assertRaises(AssertionError):
             validate_wallet(saved, results, book)
@@ -158,7 +158,16 @@ class IndependentOracleReview(unittest.TestCase):
     def test_tiny_fills_cannot_stand_in_for_the_selected_five_hundred(self):
         saved, results, book = wallet_case()
         for result in results:
-            result['text'] = result['text'].replace('filled 1 ', 'filled 0.001 ').replace('Fee $0.25', 'Fee $0.00025')
+            result['text'] = result['text'].replace('filled $500.00 ', 'filled $0.50 ').replace('Fee $0.25', 'Fee $0.00025')
         saved.update(cash='9999.85', fees='0.15', orders=[result['text'] for result in results])
         with self.assertRaises(AssertionError):
             validate_wallet(saved, results, book)
+
+    def test_a_fill_must_name_the_dollars_of_the_selected_amount(self):
+        saved, results, book = wallet_case()
+        for wrong in ('filled $499.99 ', 'filled 1 ', 'filled $500 '):
+            with self.subTest(wrong=wrong):
+                candidate = [dict(result) for result in results]
+                candidate[0]['text'] = candidate[0]['text'].replace('filled $500.00 ', wrong)
+                with self.assertRaises(AssertionError):
+                    validate_wallet(dict(saved, orders=[r['text'] for r in candidate]), candidate, book)

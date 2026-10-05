@@ -163,7 +163,9 @@ class LimitControllerSpec extends munit.FunSuite:
       assert(planned.forall(_.price.nonEmpty), planned)
     // The ticket as opened, without the plan its preview gave.
     def opened: Option[Ticket] = ticket.map(_.copy(plan = None))
+    // t acts through the order type button a frame drew, so a frame comes first.
     def limit(): Unit =
+      frame()
       if panel.orderMode != OrderMode.Limit then key(Command.OrderType)
       frame()
     def open(intent: OrderIntent = buy): Unit =
@@ -533,16 +535,16 @@ class LimitControllerSpec extends munit.FunSuite:
   }
 
   test("a press while a ticket is open sends nothing and keeps the ticket") {
-    for orderMode <- Vector(OrderMode.Limit, OrderMode.Market) do
-      val f = new Fixture
-      f.open(buy)
-      if orderMode == OrderMode.Market then f.key(Command.OrderType)
-      f.frame()
-      assertEquals(f.panel.orderMode, orderMode)
-      val before = f.ticket
-      f.key(Command.PlaceOrder(sell))
-      assertEquals(f.ticket, before, orderMode.toString)
-      f.nothingSent()
+    val f = new Fixture
+    f.open(buy)
+    // The order type cannot change while a ticket is open, so the screen stays in limit mode.
+    f.key(Command.OrderType)
+    f.frame()
+    assertEquals(f.panel.orderMode, OrderMode.Limit)
+    val before = f.ticket
+    f.key(Command.PlaceOrder(sell))
+    assertEquals(f.ticket, before)
+    f.nothingSent()
   }
 
   test("Enter on a price that would take liquidity refuses with the fixed text and sends nothing") {

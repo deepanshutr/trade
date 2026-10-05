@@ -933,7 +933,7 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
         f.worker.view.fills,
         Vector(Fill("XMR", Side.Buy, venueTime, BigDecimal("546.09"), BigDecimal("0.183")))
       )
-      assert(!f.worker.view.block.exists(_.contains("Saved order state failed")))
+      assert(!f.worker.view.block.contains(TradingWorker.storageFailedMessage))
       Wait.until("busy never cleared")(!f.worker.view.pending)
     }
   }

@@ -54,6 +54,9 @@ object TradingWorker:
   val openingPausedMessage: String = "Opening paused for 2 s after closing"
   val cancelPendingMessage: String = "Wait for the pending order"
   val waitingDepthMessage: String = "Waiting for fresh depth"
+  // Two fatal texts. Each fits the 38 column panel, where a ticket shows it on its size row.
+  val storageFailedMessage: String = "Order state failed. Restart to recover"
+  val signingFailedMessage: String = "Signing not prepared. Restart to retry"
   // Order updates waiting for the account thread, fills kept per market and the finished
   // client ids whose late updates are dropped without a count.
   private[desk] val updateLimit: Int = 256
@@ -557,7 +560,7 @@ final class TradingWorker private[desk] (
   private def storageFailure(): Unit = synchronized {
     fatal = true
     busy.set(true)
-    message = "Saved order state failed. Restart to recover"
+    message = TradingWorker.storageFailedMessage
   }
 
   // Ends the order in flight. With an oid it moves into the resting list instead. The pause
@@ -1243,7 +1246,7 @@ final class TradingWorker private[desk] (
                 case _: Exception                =>
                   synchronized {
                     fatal = true
-                    message = "Order signing could not be prepared. Restart to retry"
+                    message = TradingWorker.signingFailedMessage
                   }
                   false
           if prepared then
