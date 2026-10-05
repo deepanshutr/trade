@@ -654,7 +654,9 @@ final class TradingWorker private[desk] (
   // the journal and on the axis, and a fill marks the chart and pauses as any fill does.
   private def late(o: SavedOrder, u: VenueOrders.OrderUpdate, sign: Option[Int]): Unit =
     if u.status == "open" then
-      val adopted = o.copy(oid = Some(u.oid), remaining = Some(Trading.format(u.remaining)))
+      // Like shrink, the venue's size never takes the order above what Desk placed.
+      val size = u.remaining.min(BigDecimal(o.quantity))
+      val adopted = o.copy(oid = Some(u.oid), remaining = Some(Trading.format(size)))
       journalChange { j =>
         Option.when(!j.resting.exists(_.id == o.id) && !j.pending.exists(_.id == o.id)) {
           j.adopt(adopted)

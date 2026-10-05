@@ -1525,6 +1525,14 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       assertEquals(f.worker.view.outcome, Some("XMR filled $16.38 at 546.09"))
       assertEquals(f.worker.view.ignoredOrderUpdates, 1L)
     }
+    // A venue size above the order's own never shows more than Desk placed.
+    using(new Fixture()) { f =>
+      val pending = releaseLost(f)
+      f.push(ws(pending.id, Side.Buy, "546.09", "0.183", 4242L, "open", "0.2", venueTime))
+      Wait.until("late open order not adopted")(f.resting.size == 1)
+      assertEquals(f.resting.head.remaining, Some("0.183"))
+      assertEquals(f.worker.view.outcome, Some("XMR resting $19.99 at 546.09 after release"))
+    }
   }
 
   test("a resting order of another owner blocks live") {
