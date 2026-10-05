@@ -62,8 +62,9 @@ The axis also lists Desk's orders on this market. Each kind of row has its colou
 
 The current price always sits on its own row. Other marks move around it when they
 would share a row. A mark shown above its true row carries `'` after its price, and
-one shown below carries `,`. The range always holds every marked price, so no order
-goes out of view. It widens so an order just beyond the current price keeps a row.
+one shown below carries `,`. The range always holds the current price and every
+order, entry and ticket price, so no order goes out of view. Only the liquidation
+price can lie beyond it. It widens so an order just beyond the current price keeps a row.
 Marks are packed back from an edge, so none is left off while its side has a free
 row. When a side has more prices than rows, the farthest are left off and the status
 row reads `2 more above` or `2 more below`. An amount is faint while the account data
@@ -331,7 +332,7 @@ the switch cannot overwrite the new selection. Up to 32 selected markets retain
 bounded chart history. A configured pool market remains view-only and has no
 history before observation began. See [market settings](trading.md).
 
-Prop trading starts with $10,000 and a 0.05 percent fee per fill. It uses
+Prop trading starts with $10,000 and a 0.05 percent fee per market fill. It uses
 fresh received depth, permits partial fills, and saves the account before
 reporting success. A newer quote can reduce known quantity without extending
 the age of the full depth. Delayed older depth cannot restore that quantity.
@@ -340,7 +341,7 @@ can support orders during stream recovery. Delayed or wrong-market replies canno
 restore readiness. A slow save shows Saving with elapsed seconds and blocks another
 order until the result is known. A failed save preserves the last confirmed account.
 Prop limit orders rest in the wallet and fill from the market's trades with the maker
-fee. See [prop limit orders](trading.md#prop-limit-orders).
+fee of 0.015 percent, not the prop fee. See [prop limit orders](trading.md#prop-limit-orders).
 
 The prop wallet holds one market at a time. Cash, fees, realized results and
 held tokens survive restarts. The latest 1,000 fills and lifetime count are retained.
