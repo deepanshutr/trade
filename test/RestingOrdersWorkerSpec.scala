@@ -789,6 +789,63 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     }
   }
 
+  test("a reducing partial fill refuses an opening preview for 2 seconds") {
+    // Long 0.2 with an unflagged sell of 0.5 resting, which reads flip. A sweep fills 0.3 of it.
+    using(new Fixture(Vector(Seed(Side.Sell, "0.5", "550", 5L)))) { f =>
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      f.push(ws(f.seeded.head, "open", "0.2", venueTime))
+      Wait.until("partial fill not applied")(f.resting.head.remaining.contains("0.2"))
+      val paused = Left(TradingWorker.openingPausedMessage)
+      assertEquals(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms), paused)
+      // The account now reads short 0.1, so a sell opens.
+      f.position = "-0.1"
+      Wait.until("short position not read")(
+        f.worker.view.position.contains(BigDecimal("-0.1"))
+      )
+      val opening = OrderIntent(Side.Sell, OrderKind.Hard)
+      assertEquals(f.worker.preview(opening, f.terms), paused)
+      f.clock.addAndGet(TradingWorker.openingPauseMs - 1)
+      f.book("546.09", "546.10", 3000L)
+      assertEquals(f.worker.preview(opening, f.terms), paused)
+      f.clock.addAndGet(1L)
+      f.book("546.09", "546.10", 3001L)
+      f.ready()
+      assert(f.worker.preview(opening, f.terms).isRight)
+    }
+  }
+
+  test("a lookup or an open orders read that shrinks a facing order starts the pause") {
+    val seed = Vector(Seed(Side.Sell, "0.5", "550", 5L))
+    using(new Fixture(seed, firstReadHeld = true)) { f =>
+      f.position = "0.2"
+      f.statuses.put(f.seeded.head.id, lookupReply(f.seeded.head, "open", "0.2"))
+      f.firstHold.open()
+      Wait.until("looked up size not applied")(
+        f.resting.headOption.exists(_.remaining.contains("0.2"))
+      )
+      f.ready()
+      assertEquals(
+        f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms),
+        Left(TradingWorker.openingPausedMessage)
+      )
+    }
+    using(new Fixture(seed)) { f =>
+      f.position = "0.2"
+      Wait.until("long position not read")(f.worker.view.position.contains(BigDecimal("0.2")))
+      f.ready()
+      assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms).isRight)
+      f.openOrders = Some(ujson.Arr(listed(f.seeded.head, "0.2")))
+      f.opened()
+      Wait.until("lower open size not applied")(f.resting.head.remaining.contains("0.2"))
+      assertEquals(
+        f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms),
+        Left(TradingWorker.openingPausedMessage)
+      )
+    }
+  }
+
   test("venue cancels settle with their own texts") {
     val seeds = Vector(
       Seed(Side.Buy, "0.183", "546.09", 5L),

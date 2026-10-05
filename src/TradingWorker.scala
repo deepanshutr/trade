@@ -632,7 +632,13 @@ final class TradingWorker private[desk] (
     }
 
   // Lowers a resting order's remaining size, never raises it, and names the part that filled.
-  private def shrink(order: SavedOrder, size: BigDecimal, at: Option[Long]): Unit =
+  // A part fill that reduced starts the opening pause, as a whole fill does.
+  private def shrink(
+      order: SavedOrder,
+      size: BigDecimal,
+      at: Option[Long],
+      reduced: Boolean
+  ): Unit =
     journalChange { j =>
       j.resting.find(_.id == order.id).filter(r => size > 0 && size < left(r)).map { r =>
         j.remaining(r.id, Trading.format(size))
@@ -647,6 +653,7 @@ final class TradingWorker private[desk] (
             s"${dollars(BigDecimal(r.quantity), limit)} at ${priceText(limit)}"
         )
         at.foreach(time => addFill(Fill(r.coin, r.side, time, limit, part)))
+        if reduced then reducedAt = Some(monotonic())
         mirror()
         accountChanged()
       }
@@ -720,7 +727,7 @@ final class TradingWorker private[desk] (
           // sends one with a smaller sz. The venue docs list the field without saying so. If it
           // were not, only the shown remaining size would be wrong, because shrink never raises
           // a size and sends nothing. The owner checks it on the first live partial fill.
-          if u.status == "open" then shrink(r, u.remaining, Some(u.at))
+          if u.status == "open" then shrink(r, u.remaining, Some(u.at), facing(item.sign, r.side))
           else if VenueOrders.terminal.contains(u.status) then
             settle(r, Gone.Venue(u.status), Some(u.at), facing(item.sign, r.side))
         case Route.Drop   => ()
@@ -733,6 +740,7 @@ final class TradingWorker private[desk] (
     )
 
   // Applies a status lookup of a resting order. Anything but a clear answer keeps the order.
+  // A lookup carries no stamped position, so a part fill it finds counts as a reduce.
   // An unknownOid answer counts toward the bound only for the spaced reconciliation lookups,
   // while the open orders read missed the order, after its creation plus the margin, with the
   // signer role proven.
@@ -745,7 +753,7 @@ final class TradingWorker private[desk] (
     VenueOrders.lookup(reply) match
       case Some(VenueOrders.Lookup.Open(_, size)) if Exchange.sameOrder(reply, r) =>
         synchronized { checks -= r.id }
-        shrink(r, size, None)
+        shrink(r, size, None, facing(None, r.side))
       case Some(VenueOrders.Lookup.Settled(status, _)) if Exchange.sameOrder(reply, r) =>
         settle(r, Gone.Venue(status), None, reduced = true)
       case Some(VenueOrders.Lookup.Unknown) if counting =>
@@ -797,7 +805,7 @@ final class TradingWorker private[desk] (
             listed.find(o => r.oid.contains(o.oid) && o.coin == r.coin) match
               case Some(o) =>
                 synchronized { checks -= r.id }
-                shrink(r, o.size, None)
+                shrink(r, o.size, None, facing(None, r.side))
               case None =>
                 synchronized {
                   checks =
@@ -1076,7 +1084,8 @@ final class TradingWorker private[desk] (
               s"${p.coin} resting ${dollars(BigDecimal(p.quantity), limit)} at ${priceText(limit)}"
             )
             complete(p, text, rest = Some(oid), pause = Some(false))
-            synchronized(restingOrders.find(_.id == p.id)).foreach(shrink(_, size, None))
+            synchronized(restingOrders.find(_.id == p.id))
+              .foreach(r => shrink(r, size, None, facing(None, r.side)))
           case _ => ()
       }
       val cached = synchronized {

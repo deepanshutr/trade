@@ -269,9 +269,9 @@ the button still shows the same label.
 
 REDUCE only shrinks the position and stops at flat. It never opens the other side.
 To turn a long into a short, press CLOSE, then SHORT. For 2 seconds after a REDUCE or
-CLOSE finishes, or after a resting order fills and shrinks the position, real trading
-refuses any order that would open or grow a position, with the notice "Opening paused
-for 2 s after closing". The pause stops only new sends. An order already resting fills
+CLOSE finishes, or after a resting order fills in whole or in part and shrinks the
+position, real trading refuses any order that would open or grow a position, with the
+notice "Opening paused for 2 s after closing". The pause stops only new sends. An order already resting fills
 whenever the market reaches it. Prop pauses only after a CLOSE or a resting sell fill.
 
 CLOSE sits on row 5 after the two amounts. Press `x`, click it, or press Enter on the

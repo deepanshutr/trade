@@ -431,8 +431,10 @@ less than ten dollars of the free position closes all of the free position inste
 CLOSE ignores resting orders and is always the whole position.
 
 For 2 seconds after a fill shrinks the position, from an immediate order or a resting
-one, Desk refuses any new order that would open or grow a position. The pause gates
-only new sends. An order that rested before it fills whenever the market reaches it,
+one, Desk refuses any new order that would open or grow a position. A part fill of a
+resting order starts the pause too. A fill Desk finds through a status lookup or the
+open orders read counts as one that shrank the position. The pause gates only new
+sends. An order that rested before it fills whenever the market reaches it,
 and Desk cannot stop it.
 
 Resting orders on both sides reserve margin at the venue, so the account's own
