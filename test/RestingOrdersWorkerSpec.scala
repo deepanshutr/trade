@@ -869,6 +869,71 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     }
   }
 
+  test("two settles in one batch reach the result log as two lines and the status row in turn") {
+    val seeds = Vector(
+      Seed(Side.Buy, "0.183", "546.09", 5L),
+      Seed(Side.Sell, "0.2", "546.09", 6L, remaining = Some("0.15"), reduceOnly = true)
+    )
+    using(new Fixture(seeds)) { f =>
+      f.ready()
+      // The status row of each result as the controller records it, drawn on a ready panel.
+      val drawnReady = TradingView("XMR", message = "Ready", ready = true)
+      var log = Vector.empty[(Long, String)]
+      var rows = Vector.empty[String]
+      lazy val controller: DeskController = new DeskController(
+        PanelView(mode = "LIVE"),
+        () => f.clock.get(),
+        f.worker.preview,
+        f.worker.submitReviewed,
+        _ => Left("no mode switch"),
+        result = (number, text) => {
+          log :+= ((number, text))
+          val frame = Workspace.draw(
+            Snapshot.initial("XMR", 0L),
+            drawnReady,
+            controller.panel,
+            100,
+            30,
+            0L,
+            java.time.ZoneOffset.UTC,
+            Style.mono
+          )
+          rows :+= Chart.plain(frame.lines(30 - 12 + 3)).take(38).trim
+        }
+      )
+      controller.orders(f.worker.view)
+      f.push(
+        ws(f.seeded(0), "selfTradeCanceled", "0.183", venueTime),
+        ws(f.seeded(1), "reduceOnlyCanceled", "0.15", venueTime)
+      )
+      Wait.until("both settles not applied")(f.resting.isEmpty)
+      controller.orders(f.worker.view)
+      controller.orders(f.worker.view)
+      assertEquals(
+        log,
+        Vector(
+          (1L, "XMR resting buy $19.99 at 546.09 canceled by self-trade prevention"),
+          (2L, "XMR canceled by the venue $16.38 at 546.09 (reduceOnlyCanceled)")
+        )
+      )
+      assertEquals(rows, Vector("Canceled $19.99 #1", "Canceled $16.38 #2"))
+    }
+  }
+
+  test("the worker keeps the last 50 outcomes with rising ids") {
+    using(new Fixture(Vector(Seed(Side.Buy, "1", "546.09", 5L)))) { f =>
+      f.ready()
+      val order = f.seeded.head
+      f.push((1 to 60).map(i => ws(order, "open", (1 - BigDecimal(i) / 1000).toString, i))*)
+      Wait.until("part fills not applied")(f.resting.head.remaining.contains("0.94"))
+      val view = f.worker.view
+      assertEquals(view.outcomes.size, 50)
+      assertEquals(view.outcomes.map(_._1), view.outcomes.map(_._1).sorted.distinct)
+      assertEquals(view.outcomes.last, (view.outcomeId, view.outcome.get))
+      assertEquals(view.outcomes.head._2, "XMR part filled $0.11 of $109.22 at 546.09")
+    }
+  }
+
   test("an update for a finished order is dropped silently and an unknown one is counted") {
     using(new Fixture(Vector(Seed(Side.Buy, "0.2", "546.09", 5L)))) { f =>
       f.ready()

@@ -27,7 +27,9 @@ final case class TradingView(
     fills: Vector[Fill] = Vector.empty,
     stale: Boolean = false,
     ignoredOrderUpdates: Long = 0L,
-    notFoundOrders: Long = 0L
+    notFoundOrders: Long = 0L,
+    // The last outcomes with their ids, oldest first. The newest is outcome with outcomeId.
+    outcomes: Vector[(Long, String)] = Vector.empty
 ):
   def reference(side: Side): Option[BigDecimal] =
     if side == Side.Buy then ask else bid
@@ -63,6 +65,8 @@ object TradingWorker:
   private[desk] val updateLimit: Int = 256
   private[desk] val fillLimit: Int = 200
   private[desk] val finishedLimit: Int = 200
+  // Outcomes kept for the frame loop, so a batch of them between two frames loses none.
+  private[desk] val outcomeLimit: Int = 50
 
   // The loader hands this worker its own copy of the key. The worker wipes it on close.
   def create(
@@ -197,6 +201,7 @@ final class TradingWorker private[desk] (
   private var message = if enabled then "Preparing trading" else "View only"
   private var outcome = Option.empty[String]
   private var outcomeId = 0L
+  private var outcomes = Vector.empty[(Long, String)]
   private var fatal = false
   private var waitingRefresh = false
   private var accountVersion = 0L
@@ -283,6 +288,7 @@ final class TradingWorker private[desk] (
   private def announce(text: String): Unit =
     outcome = Some(text)
     outcomeId = OrderUpdates.nextId()
+    outcomes = (outcomes :+ (outcomeId -> text)).takeRight(TradingWorker.outcomeLimit)
 
   private def remember(id: String): Unit =
     finished = (finished.filterNot(_ == id) :+ id).takeRight(TradingWorker.finishedLimit)
@@ -369,7 +375,8 @@ final class TradingWorker private[desk] (
       fills = fills,
       stale = !fresh(activeAt, config.positionAgeMs),
       ignoredOrderUpdates = ignoredUpdates,
-      notFoundOrders = notFound
+      notFoundOrders = notFound,
+      outcomes = outcomes
     )
   }
 

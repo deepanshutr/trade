@@ -143,6 +143,10 @@ The status row names Desk's own outcomes with their dollars and a result number:
 | `XMR cancel rejected` | `Cancel refused #12` |
 | `XMR order rejected. Resting reduce orders may block it, press o` | `Close refused. Press o for orders #13` |
 
+Outcomes that land together, such as two venue cancels from one CLOSE, each take their
+own number and their own line in the order result log, in order. The status row shows
+each in turn and keeps the last. Desk keeps the last 50 outcomes for this.
+
 A prop market fill reads `Bought $20.00 #14` or `Sold $20.00 #15`, the money it put up
 at the fill price, and `Part filled` when the depth held less. Its full text, such as
 `PROP XMR buy filled $20.00 at 546.09` with the fee after it, goes to the order result

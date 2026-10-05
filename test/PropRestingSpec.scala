@@ -423,6 +423,22 @@ class PropRestingSpec extends TempDirectorySuite:
     }
   }
 
+  test("a rest and a cancel between two collects both reach the result log") {
+    withFixture() { f =>
+      val updates = new OrderUpdates
+      var received = Vector.empty[String]
+      updates.collect(f.worker.view)(received :+= _)
+      val order = f.place(Side.Buy, "546.00", "109.20")
+      assert(f.worker.cancel(Vector(order.id)))
+      updates.collect(f.worker.view)(received :+= _)
+      updates.collect(f.worker.view)(received :+= _)
+      assertEquals(
+        received,
+        Vector("XMR resting $109.20 at 546.00", "XMR canceled $109.20 at 546.00")
+      )
+    }
+  }
+
   test("reserved caps a prop reduce and refuses one when resting sells cover the position") {
     withFixture() { f =>
       f.fill(Side.Buy, "109.22")
