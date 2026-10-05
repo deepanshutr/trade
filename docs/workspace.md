@@ -74,7 +74,8 @@ liquidation price is not drawn.
 Desk's own fills on this market show in the chart at their time and price, `▲` in
 bold green for a buy and `▼` in bold red for a sell. Of two fills in one cell the
 larger in dollars shows, the later one on a tie. A fill timed after now shows in the
-last column. Fill marks are kept in memory, at most 200 for each market, and clear
+last column. A fill Desk learns of only from a status lookup, such as after a lost
+connection, carries no time and draws no mark. Fill marks are kept in memory, at most 200 for each market, and clear
 when Desk restarts. Live's marks also clear whenever its worker stops: on a switch to
 prop, before a settings key or owner step, and when the owner or the key changes.
 Prop's marks stay through settings. While a ticket is open, its price row shows a
