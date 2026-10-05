@@ -844,6 +844,35 @@ class LimitPanelSpec extends munit.FunSuite:
     assertEquals(plot(Vector(btc)), plot(Vector.empty))
   }
 
+  test("a live long draws its liquidation price on the axis and the range stays as it was") {
+    val plain = live.copy(resting = Vector(order("s1", Side.Sell, "552.00", "0.1")))
+    val liquidated =
+      plain.copy(portfolio = plain.portfolio.copy(liquidation = Some(BigDecimal("500"))))
+    val panel = limit.copy(ticket = None)
+    val marked = frame(liquidated, panel)
+    val bare = frame(plain, panel)
+    // Far below the range, it sits on the bottom price row, shown above its true place.
+    assertEquals(Chart.plain(marked.lines(9)).take(17), "          500.00'")
+    // The scale, the depth bars and the plot beside every price row are as they were.
+    def beside(f: WorkspaceFrame): Vector[String] =
+      f.lines.slice(1, 10).map(Chart.plain(_).drop(17))
+    assertEquals(beside(marked), beside(bare))
+    assertEquals(
+      marked.axis.map(OrdersAxis.selectable),
+      bare.axis.map(OrdersAxis.selectable)
+    )
+    assert(marked.axis.exists(_.marks.exists(_.kind == AxisKind.Liquidation)), marked.axis)
+    // In colour it takes the sell colour of a long's close, marked no weight.
+    val coloured = frame(liquidated, panel, style = Style.colour)
+    assert(
+      coloured.lines(9).startsWith(Style.colour.ask + "          500.00'" + Screen.reset),
+      coloured.lines(9)
+    )
+    // View draws no liquidation, as it draws no entry.
+    val viewed = frame(liquidated, PanelView(mode = "VIEW"))
+    assert(!viewed.lines.exists(Chart.plain(_).contains("500.00")), viewed.lines.mkString("\n"))
+  }
+
   test("the ticket's and the entry's prices widen the scale, and the ticket line takes its row") {
     // The plain numbers: a price in columns 8 to 15 with no amount before it and no tie after it.
     def plain(f: WorkspaceFrame): Vector[Double] =

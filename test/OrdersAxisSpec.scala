@@ -30,9 +30,10 @@ class OrdersAxisSpec extends munit.FunSuite:
       ticket: Option[(Side, BigDecimal, BigDecimal)] = sellTicket,
       leverage: Option[Int] = Some(5),
       low: Double = lo,
-      high: Double = hi
+      high: Double = hi,
+      liquidation: Option[(Side, BigDecimal)] = None
   ): Placed =
-    OrdersAxis.marks(current, entry, resting, ticket, leverage, low, high, rows)
+    OrdersAxis.marks(current, entry, resting, ticket, leverage, low, high, rows, liquidation)
   private def draw(
       placed: Placed,
       focus: Option[Int] = None,
@@ -422,4 +423,94 @@ class OrdersAxisSpec extends munit.FunSuite:
     val rows = draw(odd, low = Double.NaN, high = Double.NaN)
     assertEquals(rows.size, 9)
     assert(rows.forall(r => Chart.plain(r).length == 17), rows)
+  }
+
+  // A long's liquidation is sold, so it takes the sell colour. A short's is bought.
+  private val longLiquidation = (Side.Sell, d("545.00"))
+
+  test("a liquidation inside the range takes its true row, with no amount, in the closing colour") {
+    val placed = place(resting = Vector.empty, ticket = None, liquidation = Some(longLiquidation))
+    assertEquals(
+      seen(placed),
+      Vector(
+        (d("546.09"), AxisKind.Current, 6, '>'),
+        (d("545.00"), AxisKind.Liquidation, 7, ' ')
+      )
+    )
+    val liquidation = placed.marks.last
+    assertEquals(
+      (liquidation.amount, liquidation.side, liquidation.ids),
+      (None, Some(Side.Sell), Vector.empty)
+    )
+    assertEquals(draw(placed)(7), style.ask + "          545.00 " + reset)
+    val short =
+      place(resting = Vector.empty, ticket = None, liquidation = Some((Side.Buy, d("548.00"))))
+    assertEquals(seen(short).head, (d("548.00"), AxisKind.Liquidation, 4, ' '))
+    assertEquals(draw(short)(4), style.bid + "          548.00 " + reset)
+  }
+
+  test("a long's liquidation below the range sits on the bottom row, marked as shown above it") {
+    val placed =
+      place(resting = Vector.empty, ticket = None, liquidation = Some((Side.Sell, d("500.00"))))
+    assertEquals(seen(placed).last, (d("500.00"), AxisKind.Liquidation, 8, '\''))
+    assertEquals(draw(placed)(8), style.ask + "          500.00'" + reset)
+    // Without a current price it takes the same row.
+    val bare = place(
+      current = None,
+      resting = Vector.empty,
+      ticket = None,
+      liquidation = Some((Side.Sell, d("500.00")))
+    )
+    assertEquals(seen(bare), Vector((d("500.00"), AxisKind.Liquidation, 8, '\'')))
+  }
+
+  test("a short's liquidation above the range sits on the top row, marked as shown below it") {
+    val placed =
+      place(resting = Vector.empty, ticket = None, liquidation = Some((Side.Buy, d("560.00"))))
+    assertEquals(seen(placed).head, (d("560.00"), AxisKind.Liquidation, 0, ','))
+    assertEquals(draw(placed)(0), style.bid + "          560.00," + reset)
+  }
+
+  test("a liquidation past the edge takes the edge row and packs a mark there inward") {
+    val buy = Vector(order("b1", Side.Buy, "544.00", "0.1"))
+    val placed = place(resting = buy, ticket = None, liquidation = Some((Side.Sell, d("500.00"))))
+    assertEquals(
+      seen(placed),
+      Vector(
+        (d("546.09"), AxisKind.Current, 6, '>'),
+        (d("544.00"), AxisKind.Buy, 7, '\''),
+        (d("500.00"), AxisKind.Liquidation, 8, '\'')
+      )
+    )
+  }
+
+  test("a liquidation is never selectable and the cursor never starts on it") {
+    val alone = place(resting = Vector.empty, ticket = None, liquidation = Some(longLiquidation))
+    assertEquals(OrdersAxis.selectable(alone), Vector.empty)
+    assertEquals(OrdersAxis.start(alone), None)
+    val placed = place(rows = 19, ticket = None, liquidation = Some(longLiquidation))
+    assertEquals(
+      seen(placed).map(_._2),
+      Vector(AxisKind.Sell, AxisKind.Current, AxisKind.Buy, AxisKind.Liquidation, AxisKind.Buy)
+    )
+    assertEquals(
+      OrdersAxis.selectable(placed).map(_.price),
+      Vector(d("552.00"), d("546.00"), d("544.00"))
+    )
+    assertEquals(OrdersAxis.start(placed), Some(1))
+  }
+
+  test("a liquidation never takes an order's row: with no row to spare it is left off, uncounted") {
+    // Below the current price two rows hold the buys at 546.00 and 544.00, so 545.00 has none.
+    val placed = place(ticket = None, liquidation = Some(longLiquidation))
+    assertEquals(placed, place(ticket = None))
+    assertEquals((placed.above, placed.below), (0, 0))
+  }
+
+  test("the mono form of a liquidation row is its price and tie glyph alone") {
+    val placed =
+      place(resting = Vector.empty, ticket = None, liquidation = Some((Side.Sell, d("500.00"))))
+    val mono = OrdersAxis.lines(placed, None, xmr, lo, hi, 9, false, None, Style.mono)
+    // No colour and no weight, so the row carries no style at all.
+    assertEquals(mono(8), "          500.00'")
   }

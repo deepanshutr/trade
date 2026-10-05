@@ -56,6 +56,7 @@ The axis also lists Desk's orders on this market. Each kind of row has its colou
 | Buy orders at one price | money put up, summed | the price | green |
 | Sell orders at one price | money put up, summed | the price | red |
 | Ticket | money the ticket puts up | the ticket's price | the ticket's side colour, bold |
+| Liquidation | blank | the position's liquidation price | the colour of the side that closes the position: red for a long, green for a short |
 | Selected row | as its kind | as its kind | inverse and bold |
 | Other rows | blank | the middle price of every third row and of the lowest | faint |
 
@@ -66,8 +67,12 @@ goes out of view. It widens so an order just beyond the current price keeps a ro
 Marks are packed back from an edge, so none is left off while its side has a free
 row. When a side has more prices than rows, the farthest are left off and the status
 row reads `2 more above` or `2 more below`. An amount is faint while the account data
-is stale, or while a cancel of that row runs. The entry price sits on the axis. The
-liquidation price is not drawn.
+is stale, or while a cancel of that row runs.
+
+The live position's liquidation price sits on the axis too, but it never widens the
+range. Beyond the range it sits on the nearest edge row, with `'` below the range or `,`
+above it. It takes a row only where the orders leave one, so it never pushes an order
+off the axis. The cursor never stops on it. Prop has no liquidation price.
 
 ### The chart and the time axis
 

@@ -294,22 +294,42 @@ object Workspace:
       def colour(side: Side): String = if side == Side.Buy then style.bid else style.ask
       // The ticket's size is the plan the controller holds from its preview, and nothing else.
       val plan = ticket.flatMap(_.plan)
-      def place(lo: Double, hi: Double, count: Int): Placed =
+      // The liquidation price, in the colour of the side that would close the position.
+      val liquidation = for
+        size <- held
+        price <- view.portfolio.liquidation
+      yield (if size > 0 then Side.Sell else Side.Buy, price)
+      def place(
+          lo: Double,
+          hi: Double,
+          count: Int,
+          liquidated: Option[(Side, BigDecimal)] = None
+      ): Placed =
         val ticketMark =
           ticket.map(t => (t.intent.side, t.price, plan.fold(BigDecimal(0))(_.quantity)))
-        val placed =
-          OrdersAxis.marks(current, entry, resting, ticketMark, view.leverage, lo, hi, count)
+        val placed = OrdersAxis.marks(
+          current,
+          entry,
+          resting,
+          ticketMark,
+          view.leverage,
+          lo,
+          hi,
+          count,
+          liquidated
+        )
         if plan.nonEmpty then placed
         else
           placed.copy(marks =
             placed.marks.map(m => if m.kind == AxisKind.Ticket then m.copy(amount = None) else m)
           )
       // With no rows every mark is counted, so this gives the marks above and below the price.
+      // The liquidation is left out, so it never widens the range.
       val counted = place(0, 1, 0)
       // The axis exactly as the labels drew it. Keys on the axis act on these rows.
       var drawn = Option.empty[Placed]
       def labels(rules: MarketRules)(a: Axis): Vector[String] =
-        val placed = place(a.lo, a.hi, a.rows)
+        val placed = place(a.lo, a.hi, a.rows, liquidation)
         drawn = Some(placed)
         val side = held.map(p => if p > 0 then Side.Buy else Side.Sell)
         OrdersAxis.lines(placed, panel.focus, rules, a.lo, a.hi, a.rows, view.stale, side, style)
