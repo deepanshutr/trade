@@ -1,7 +1,8 @@
 # Configure live trading
 
 The [workspace guide](workspace.md) describes the layout, prop account and
-trade buttons. Clicking a trade button submits the selected amount immediately.
+trade buttons. In market mode, clicking a trade button submits the selected amount
+immediately. [Limit orders](#limit-orders) rest on the book instead.
 Switching into real trading requires a visible mode confirmation. Starting the
 program preserves observed leverage and margin mode.
 
@@ -127,7 +128,8 @@ terminal. Secrets are typed there, never in the running Desk. Before a child sta
 Desk stops its live worker, which releases the saved-order lock so the key screen can
 switch keys. While an order is pending, Desk refuses with "Wait for the pending order".
 A live worker that does not stop shows "Trading did not stop. Restart Desk" and no
-child runs. The child's own prompts and refusals stay on the terminal. When it exits,
+child runs. Resting orders stay at the venue while a child runs. Desk sees no fill
+until the child ends, then looks each order up. The child's own prompts and refusals stay on the terminal. When it exits,
 Desk prints "Press Enter to return to Desk." A step that fails shows "The step did not
 complete (exit N)".
 
@@ -167,6 +169,8 @@ mark. Up and Down move. Enter selects the key. `r` renames it, `n` makes a new k
 restores a key from its seed and `q` leaves. A key without a Keychain item shows "not in
 Keychain" and cannot be selected. Nothing is ever deleted. A switch is refused while
 the current key has a saved order, or while another Desk holds that key's order lock.
+It is also refused while the current key has resting orders, with "Cancel the resting
+orders for the current key first".
 When a refusal stops a new or restored key from becoming active, the key is still stored
 and named, the current key stays active and the screen shows the reason. Select the key
 later from the list. Restore asks for the seed and the passphrase, shows the address,
@@ -221,9 +225,13 @@ the role check must pass. An approval can expire. A key whose approval has expir
 cannot trade until the owner approves it again. The Approval row in settings runs
 that step through the owner tooling.
 
-Desk's local signer accepts only its supported immediate orders. It rejects fund
-transfers, withdrawals, permission changes and leverage changes before producing
-a signature. Hyperliquid's standard agent permission is broader and includes
+Desk's local signer accepts only two actions. One is a single order, either immediate
+(the venue's `Ioc`) or post only (`Alo`). The other is a cancel of one order by Desk's
+own client order id (`cancelByCloid`). It rejects orders that rest without the post
+only rule (`Gtc`), cancels by the venue's order number, order changes, batches,
+scheduled cancels, fund transfers, withdrawals, permission changes and leverage changes
+before producing a signature. Desk builds a cancel only from its own saved resting
+orders. Hyperliquid's standard agent permission is broader and includes
 transfers between balances within the same account. The local restriction does
 not constrain a key used outside Desk. See the venue's
 [agent-transfer documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#agent-send-asset).
@@ -242,7 +250,8 @@ order. Select 5x for that market at the venue. A market whose maximum leverage i
 below 5x cannot trade live. Desk preserves the observed margin mode and never signs
 a leverage change. The margin mode and leverage are captured with each order and
 rechecked before sending. Changing them at the venue invalidates a captured order.
-Missing or stale position data remains unavailable and is never interpreted as a
+A resting order keeps the size it was placed with. A leverage change at the venue while
+orders rest is outside Desk's control. Missing or stale position data remains unavailable and is never interpreted as a
 flat account.
 
 A new account may already read five times on XMR. An anonymous read on 2026-10-02
@@ -255,7 +264,7 @@ another read immediately after an order completes. Quiet active-account data is
 refreshed through one outstanding read on the existing account connection. Late,
 wrong-market or replaced-connection replies cannot renew the selected account.
 
-The workspace uses immediate orders. The price limit is the captured best quote
+Market mode uses immediate orders. The price limit is the captured best quote
 moved by the `slippage` fraction, up for a buy and down for a sell. Available depth
 can produce a partial fill or no fill. An order must be worth at least ten dollars
 at its quote and its limit. Only a close may be smaller.
@@ -273,7 +282,8 @@ In prop trading, Buy spends stables and Sell is capped at held tokens. A prop se
 that would leave less than ten dollars of tokens at the quote sells the whole
 holding. The selected value excludes fees. Calculations retain full precision.
 Compact dollar figures are rounded for display. Best and Target orders are no longer
-exposed in the normal workspace.
+exposed in the normal workspace. [Prop limit orders](#prop-limit-orders) have their own
+fill rules.
 
 Live orders keep durable recovery state under the chosen state directory,
 separated by network and delegated signer. One process holds each account lock.
@@ -323,7 +333,9 @@ provided in this repository. An external wallet-change tool must create and clea
 it as part of its account-change procedure.
 The controls show the pause and refuse new orders. The pause survives a restart.
 Finish or resolve the wallet change before using the replacement account. Do not
-remove saved pause state to bypass it.
+remove saved pause state to bypass it. The pause blocks cancels as it blocks orders, so
+cancel every resting order before you start a wallet change. Only you can do this
+step.
 
 Quoted prices and book depth normally expire after one second. Position and active
 account data normally expire after two seconds. Optional `quoteAgeMs` and
@@ -335,4 +347,214 @@ Restart an already running Desk after installing a new build. It continues using
 its previous loaded program until restarted. No build resends a saved order. A
 restart only looks up its status. An older build would still describe a saved
 reduce-only order as an ordinary one, so resolve any saved order before installing an
-older build.
+older build. An older build also cannot read the saved order file while orders rest.
+Cancel every resting order first. See [saved orders](#saved-orders).
+
+## Limit orders
+
+Press `t` in the workspace to switch to limit orders. The
+[workspace guide](workspace.md#market-and-limit-orders) describes the ticket and the
+price axis. Limit orders work in live and in prop. View places nothing.
+
+Every limit order is post only. Desk sends it with the venue's `Alo` setting, which
+means add liquidity only: the venue cancels the order rather than let it trade at
+once. So the order rests on the book until it fills or is cancelled, and it pays the
+maker fee, the lower fee for an order that rested. The venue's base fees are 0.015
+percent for a maker and 0.045 percent for a taker. The ticket shows the fee at the
+base maker rate. The fee actually charged depends on the account's fee tier, which
+Desk does not read.
+
+The ticket starts at the best bid for a buy and the best ask for a sell, so the order
+joins the back of the queue at that price. Enter is refused while the price would
+trade at once: a buy at or above the best ask, or a sell at or below the best bid. The
+status row then reads "Takes liquidity. Move below the ask" or "Takes liquidity. Move
+above the bid". The worker checks again just before signing. A price the market has
+crossed since then is refused as "XMR canceled before sending". If the venue still
+refuses, the outcome is "XMR order rejected" and nothing rests. On a fast market you
+may need two tries.
+
+A limit order is sized at its own price: the amount times the observed leverage
+divided by the price, rounded down to the smallest size the market allows. Each order
+must be worth at least ten dollars at its price. A press at a price where Desk already
+has an order places a second order with its own id. The first keeps its place in the
+queue.
+
+Desk holds at most 20 resting orders for each key, across markets. A limit press past
+that answers "20 orders rest. Cancel one first". The cap applies to limit presses
+only, so market presses and CLOSE still work.
+
+What is sent is what the ticket showed. Enter previews the order again and sends it
+only when the fresh preview is the same order: the same market, side, kind, size,
+price, reduce only flag and post only setting. Otherwise the ticket shows the new
+order with "Order changed. Enter again to send" and waits for the screen to show it.
+Every order action acts only through the screen that drew it.
+
+A resting order sits on the price axis in its side's colour with the money it puts up,
+and the status row reads "Resting $19.99 #9". LONG and SHORT stay free while orders
+rest. While Desk sends an order or a cancel, the next press waits for it.
+
+### Both sides
+
+Orders may rest on both sides of the price at once, for example buys below and sells
+above. One market has one net position, so fills from both sides offset each other.
+
+The venue sets an order's reduce only flag once, when it is placed, and never changes
+it. A press that faces the position when it is placed is sent reduce only and capped
+at the free position. A press made while flat, or on the position's side, opens. The
+ticket's first row names the flag as `reduce only` or `post only`. An order faces the
+position when it is on the side that shrinks it.
+
+Later fills can change what a resting order would do. Desk works this out again on
+every screen, and the status row shows it while the cursor is on the order's row. The
+rows are tried in this order and the first match wins:
+
+| Shown | When | What a fill would do |
+| --- | --- | --- |
+| `void` | The order is reduce only and does not face the position, which includes a flat one | Nothing. The venue should cancel it |
+| `opens` | The position is flat, or the order is on the position's side | Open or grow the position |
+| `reduce` | The order faces the position and fits the free position | Shrink the position |
+| `flip $5.44 XMR if filled` | The order faces the position, is larger than the free position and is not reduce only | Close the position and open the other side with the amount shown |
+| `reduce` | The same, but reduce only | Fill the reducing part, which is an assumption about the venue |
+
+The free position for an order is the position less the remaining size of the facing
+orders nearer the price. So with two facing orders, only the one that would fill
+second can read `flip`. A `flip` is the only way the account can change sides without
+a press, and it exists only when you placed entries on both sides. Desk cancels
+nothing on its own.
+
+Desk adds up the remaining size of every resting order that faces the position,
+whatever its flag, up to the position size. That sum is reserved. A new REDUCE,
+limit or immediate, is capped at the position less the reserved sum. When nothing is
+left it is refused with "Resting orders cover the position". A reduce that would leave
+less than ten dollars of the free position closes all of the free position instead.
+CLOSE ignores resting orders and is always the whole position.
+
+For 2 seconds after a fill shrinks the position, from an immediate order or a resting
+one, Desk refuses any new order that would open or grow a position. The pause gates
+only new sends. An order that rested before it fills whenever the market reaches it,
+and Desk cannot stop it.
+
+Resting orders on both sides reserve margin at the venue, so the account's own
+capacity check refuses a press it cannot carry. Live sizes each order at 5x when it
+is placed. A leverage change at the venue while orders rest is outside Desk's control.
+
+### How fills and cancels arrive
+
+Desk follows its orders on the account connection it already holds. Each time that
+connection opens, Desk subscribes to the owner's order updates. A fill, a partial fill
+or a cancel at the venue arrives as an update. It shows on the status row, on the axis
+and in the order result log:
+
+| At the venue | Text |
+| --- | --- |
+| Filled | `XMR filled $21.84 at 546.09` |
+| Partly filled | `XMR part filled $5.46 of $21.84 at 546.09` |
+| Canceled | `XMR canceled $16.38 at 546.09` |
+| Canceled by self-trade prevention | `XMR resting buy $19.99 at 546.09 canceled by self-trade prevention` |
+| Canceled by the venue for another reason | `XMR canceled by the venue $16.38 at 546.09 (reduceOnlyCanceled)` |
+
+A fill shows at the order's own price, the price a resting order is expected to fill
+at. Desk reads an update's size as the size still resting. The venue docs list that
+field without saying so. Check it on the first live partial fill: the remaining size
+on the axis should match the account's fill history. If it does not, only the shown
+remaining size is wrong, since Desk never raises a remaining size and sends nothing
+because of it.
+
+A fill update can arrive before the reply to the order itself. Desk holds it until the
+order rests, then applies it, so no row shows twice. A fill update also settles an
+order whose reply was lost. An update for an order Desk did not place is ignored and
+counted in diagnostics. A count above zero means another tool places orders on the
+account.
+
+Updates are missed while the connection is down, so Desk keeps a safety net. When it
+starts, it looks up each resting order once. After every connection opens, and once
+a minute while orders rest, it reads the account's open orders and looks up any order
+missing from them, each no sooner than ten seconds after its last try. A remaining
+size never grows from that read. A failed lookup keeps the order. An order missing
+from the open orders that the venue does not know on three lookups, each at least ten
+seconds apart and all at least 60 seconds after the order was made, settles as
+"XMR $21.84 at 546.09 not found at the venue".
+
+Enter on an order row cancels each order at that price in turn, one signed cancel per
+order, by Desk's own client order id. The status row reads "XMR canceling 1 of 3"
+meanwhile, and the row's amount is faint. A success reads "XMR canceled $16.38 at
+546.09". A cancel that errors or gets no clear reply is settled only from one status
+lookup. An order the lookup finds still open reads "XMR cancel rejected" and stays. An
+order the lookup cannot place reads "XMR cancel result unknown" and stays for the next
+check. A cancel waits while an order is pending, with "Wait for the pending order". It
+needs neither the selected market nor fresh prices. Desk sends no cancel you did not
+pick on the axis, and a market change cancels nothing.
+
+While prop or view is selected, or while settings run a key or owner step, the live
+worker does not run and live fills are not seen. They show when live runs again, after
+Desk looks the orders up.
+
+### CLOSE and resting orders
+
+CLOSE sends at once, sized at the whole position, and Desk cancels nothing before or
+after it. Four consequences follow:
+
+1. A Desk entry resting on the other side within CLOSE's price allowance is cancelled
+   by the venue's self-trade prevention. That rule cancels the resting order instead
+   of filling two orders of the same account against each other. For example, a
+   resting buy at the bid vanishes when CLOSE sells a long through it. It shows as
+   "XMR resting buy $19.99 at 546.09 canceled by self-trade prevention". A market
+   REDUCE can do the same.
+2. Resting reduce only orders left with nothing to reduce are expected to be cancelled
+   by the venue, shown as "XMR canceled by the venue $16.38 at 546.09
+   (reduceOnlyCanceled)".
+3. If the venue refuses the CLOSE while reduce only orders rest, the status reads
+   "XMR order rejected. Resting reduce orders may block it, press o". Cancel them from
+   the axis, then press CLOSE again.
+4. After a CLOSE or a REDUCE to flat, an entry resting on the far side without the
+   reduce only flag stays on the axis in its side's colour. It opens a new position
+   with no press when the market reaches it. Cancel it from the axis if you do not
+   want that.
+
+The second and third are assumptions about the venue until a live test shows them. So
+is the fifth row of the table under [both sides](#both-sides).
+
+### Saved orders
+
+The saved order file holds the one order in flight and the list of resting orders. It
+is version 1, the shape older builds write, while no order rests. While orders rest it
+is version 2. An older build cannot read version 2 and blocks live with its saved
+order failure. Cancel every resting order and resolve any saved order before
+installing an older build. A cancel saves nothing but its nonce, a number each signed
+action uses once. If Desk stops during a cancel, the next start looks the order up.
+
+### Prop limit orders
+
+Prop takes limit orders with the same ticket, axis, cap, price rule and cancel as
+live. It keeps its resting orders in its wallet file, `prop/wallet-mainnet.json` or
+`prop/wallet-testnet.json`, so they survive restarts and settings. A cancel removes
+the order at once. Prop has no venue, so it fills resting orders from the market's
+trades:
+
+- A resting buy fills when a trade prints below its price, and a sell when a trade
+  prints above it.
+- It fills whole at its own price, whatever the trade's size, with the maker fee of
+  0.015 percent, not the prop fee.
+- A trade at the order's price does not fill, since the place in the queue is unknown.
+  So prop fills later than live would.
+- A trade counts once, only with an id, only when it printed after the order rested,
+  and never while Desk uses backup prices.
+- One trade through two orders fills the nearest first.
+- An order on another market fills only once that market is selected.
+- A buy checks the cash when it rests. Its value and maker fee must fit the cash left
+  after the other resting buys, else "Not enough stables for order and fee". `Usable`
+  on the panel is that figure. A buy whose cash an immediate buy spent later is
+  cancelled at its fill with "(not enough stables)".
+- Prop holds only tokens it bought, so a limit sell needs tokens held. A sell larger
+  than the tokens held fills what is held, and the rest is cancelled with "(nothing
+  left to sell)".
+- The cap of 20 counts prop's resting orders and applies to limit presses only.
+- The two second pause starts only after a resting sell fills or a CLOSE. An immediate
+  sell does not pause, so its proceeds can fund the next buy at once.
+
+CLOSE in prop, from `x`, the CLOSE button or Enter on the entry row, sells the whole
+holding at once at market with the prop fee, whatever orders rest. Resting sells then
+left with nothing to sell are cancelled when their trade comes.
+
+A downgrade to an older Desk drops prop's resting orders on its next save. Only
+simulated money is affected.
