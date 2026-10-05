@@ -381,7 +381,8 @@ final class TradingWorker private[desk] (
       usableMargin = usableMargin.filter(_ => fresh(activeAt, config.positionAgeMs)),
       resting = restingOrders.map(restingView),
       fills = fills,
-      stale = !fresh(activeAt, config.positionAgeMs),
+      // A fatal worker no longer applies fills or cancels, so its orders draw faint.
+      stale = fatal || !fresh(activeAt, config.positionAgeMs),
       ignoredOrderUpdates = ignoredUpdates,
       notFoundOrders = notFound,
       outcomes = outcomes

@@ -134,6 +134,8 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     @volatile var openOrders: Option[ujson.Value] = Some(ujson.Arr())
     @volatile var cancels: String => Option[ujson.Value] = _ => Some(cancelReply("success"))
     @volatile var inGate = false
+    // Makes every journal write fail, as a full disk would.
+    @volatile var failWrites = false
     @volatile var orders: OrderEvent => Unit = _ => ()
     @volatile var journal: OrderJournal = null
     // Holds the first account read when asked, so a test acts while the position is unknown.
@@ -304,8 +306,10 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
         journal = OrderJournal.open(
           directory,
           config.identity,
-          beforeReplace =
-            () => record.synchronized { writersSeen += Thread.currentThread().getName }
+          beforeReplace = () => {
+            if failWrites then throw new java.io.IOException("disk full")
+            record.synchronized { writersSeen += Thread.currentThread().getName }
+          }
         )
         journal
       },
@@ -758,6 +762,36 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       Wait.until("stale active data not shown")(f.worker.view.stale)
       f.publishActive = true
       Wait.until("fresh active data not shown")(!f.worker.view.stale)
+    }
+  }
+
+  test("a fatal worker dims the amounts and the status row keeps the restart text") {
+    using(new Fixture(Vector(Seed(Side.Buy, "0.2", "546.09", 5L)))) { f =>
+      f.ready()
+      assert(!f.worker.view.stale)
+      f.failWrites = true
+      f.push(ws(f.seeded.head, "open", "0.15", venueTime))
+      Wait.until("storage failure not shown")(
+        f.worker.view.block.contains(TradingWorker.storageFailedMessage)
+      )
+      // Account reads and active data go on, but fills are no longer applied.
+      f.refreshes()
+      val view = f.worker.view
+      assert(view.stale, "a fatal worker drew its orders as current")
+      val frame = Workspace.draw(
+        Snapshot.initial("XMR", 0L),
+        view,
+        PanelView(mode = "LIVE"),
+        100,
+        30,
+        0L,
+        java.time.ZoneOffset.UTC,
+        Style.mono
+      )
+      assertEquals(
+        Chart.plain(frame.lines(30 - 12 + 3)).take(38).trim,
+        TradingWorker.storageFailedMessage
+      )
     }
   }
 

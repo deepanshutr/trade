@@ -68,7 +68,8 @@ price can lie beyond it. It widens so an order just beyond the current price kee
 Marks are packed back from an edge, so none is left off while its side has a free
 row. When a side has more prices than rows, the farthest are left off and the status
 row reads `2 more above` or `2 more below`. An amount is faint while the account data
-is stale, or while a cancel of that row runs.
+is stale, while a cancel of that row runs, or after live trading stopped on a failure.
+Then the status row says to restart, and fills and cancels no longer show.
 
 The live position's liquidation price sits on the axis too, but it never widens the
 range. Beyond the range it sits on the nearest edge row, with `'` below the range or `,`
