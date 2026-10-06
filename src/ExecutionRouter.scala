@@ -25,6 +25,9 @@ final class ExecutionRouter(
   private var connected = false
   private var retirement = Option.empty[Thread]
   private var retirementFailed = false
+  // The live orders resting when the last live worker retired. They keep resting at the venue,
+  // so prop and view show the count.
+  private var liveResting = 0
   private var closed = false
   // While settings run a child, no live worker exists, so none holds the journal lock or a key.
   private var suspended = false
@@ -47,7 +50,9 @@ final class ExecutionRouter(
             previous.close()
             if !previous.isRetired then previous.awaitRetirement()
           }
+          val count = previous.restingCount
           synchronized {
+            liveResting = count
             retirement = None
             retirementFailed = result.isFailure || !previous.isRetired
             if !closed && !suspended && selected == "LIVE" && !retirementFailed then startLive()
@@ -100,7 +105,7 @@ final class ExecutionRouter(
     prop.foreach(_.select(next))
   }
   def view: TradingView = synchronized {
-    if selected == "PROP" then propWorker().view
+    if selected == "PROP" then propWorker().view.copy(liveResting = liveResting)
     else if selected == "LIVE" && !liveEnabled then
       TradingView(
         coin,
@@ -108,7 +113,7 @@ final class ExecutionRouter(
         block = Some(transitionReason)
       )
     else if selected == "LIVE" then live.view
-    else live.view.copy(ready = false, block = Some("View only"))
+    else live.view.copy(ready = false, block = Some("View only"), liveResting = liveResting)
   }
   def switchMode(next: String): Either[String, Unit] = synchronized {
     if closed then Left("Trading stopped")
@@ -139,6 +144,17 @@ final class ExecutionRouter(
   def submitReviewed(review: OrderReview): Boolean = synchronized {
     if selected == "PROP" then propWorker().submitReviewed(review)
     else selected == "LIVE" && liveEnabled && live.submitReviewed(review)
+  }
+  // A cancel goes to the worker of the selected mode. View holds no orders, so it answers false.
+  // A live worker that is retiring is disabled and refuses the cancel itself.
+  def cancel(ids: Vector[String]): Boolean = synchronized {
+    if selected == "PROP" then propWorker().cancel(ids)
+    else selected == "LIVE" && live.cancel(ids)
+  }
+  // Only live runs a row cancel long enough for CLOSE to wait on it.
+  def closeFirst(): Boolean = synchronized(selected == "LIVE" && liveEnabled && live.closeFirst())
+  def withdrawClose(): Unit = synchronized {
+    if selected == "LIVE" && liveEnabled then live.withdrawClose()
   }
   def livePending: Boolean = synchronized(live.view.pending)
   // Stops the live worker for a child and waits for it, as close does. A worker that has not

@@ -5,6 +5,62 @@ class KeysSpec extends munit.FunSuite:
     assertEquals(feed(sequence("hyn[]"))._2, Vector.empty)
   }
 
+  test("a places, t picks the order type and o opens the orders") {
+    assertEquals(feed(Vector(97))._2, Vector(Command.Place))
+    assertEquals(feed(Vector(116))._2, Vector(Command.OrderType))
+    assertEquals(feed(Vector(111))._2, Vector(Command.Orders))
+    assertEquals(feed(Vector(98))._2, Vector.empty)
+    assertEquals(feed(Vector(97), prompt = true)._2, Vector(Command.PromptChar('a')))
+  }
+
+  test("an unbound order type leaves t alone and the owner's t binding wins") {
+    val owner = Bindings
+      .load(
+        {
+          val dir = java.nio.file.Files.createTempDirectory("desk-keys")
+          val file = dir.resolve("b.json")
+          java.nio.file.Files.writeString(
+            file,
+            """{"version":1,"bindings":{"quit":["t"]}}"""
+          )
+          java.nio.file.Files.setPosixFilePermissions(
+            file,
+            java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
+          )
+          file
+        }
+      )
+      .toOption
+      .get
+    assertEquals(feed(Vector(116), bindings = owner)._2, Vector(Command.Quit))
+  }
+
+  test("the three new commands leave a snapshot unchanged") {
+    val now = 1_700_000_000_000L
+    val snapshot = Snapshot.initial("XMR", now)
+    for command <- Vector(Command.OrderType, Command.Orders, Command.Place) do
+      assertEquals(State.reduce(snapshot, Event.Key(command), now), snapshot, command)
+  }
+
+  test("a panel starts in market mode with no ticket and no focus") {
+    val panel = PanelView()
+    assertEquals(panel.orderMode, OrderMode.Market)
+    assertEquals(panel.ticket, None)
+    assertEquals(panel.focus, None)
+  }
+
+  test("with Close stored on a, a places and Close is unbound") {
+    val dir = java.nio.file.Files.createTempDirectory("desk-keys")
+    val file = dir.resolve("b.json")
+    java.nio.file.Files.writeString(file, """{"version":1,"bindings":{"close":["a"]}}""")
+    java.nio.file.Files.setPosixFilePermissions(
+      file,
+      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
+    )
+    val loaded = Bindings.load(file).toOption.get
+    assertEquals(feed(Vector(97), bindings = loaded)._2, Vector(Command.Place))
+  }
+
   private def feed(
       bytes: Seq[Int],
       prompt: Boolean = false,

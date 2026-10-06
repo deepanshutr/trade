@@ -8,8 +8,6 @@ class WorkspaceViewportSpec extends munit.FunSuite:
       val back = State.reduce(sized, Event.Key(Command.ScrubBack), 0L)
       assertEquals(back.offsetSec, seconds)
       assertEquals(State.reduce(back, Event.Key(Command.ScrubForward), 0L).offsetSec, 0L)
-    assertEquals(Layout.workspaceMarketWidth(100), 53)
-    assertEquals(Layout.workspaceMarketWidth(120), 72)
   }
 
   test("even a three-candle plot moves by at least one candle") {

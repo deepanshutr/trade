@@ -33,24 +33,31 @@ class WorkspaceHelpersSpec extends munit.FunSuite:
       hashes,
       Vector(
         "eb5e5a7d07e8f9e3d1b38c11b60011b6d2dbd7c6359d11f6dea627bd75ec796c",
-        "d514772990ceb8d3f1a392608b44f42cbc2ada0c424d87085882bc35ace30e7f"
+        "e0547c3d959d6d05ca045d5b1f98ad07d73df592368eb8565b798818c0429191"
       )
     )
   }
 
   test("workspace frame bytes stay fixed for compact display fixtures") {
-    val lines = for
+    val frames = for
       coin <- Vector("XMR", "BTC", "PAXG")
       mode <- ChartMode.values.toVector
       style <- Vector(Style.mono, Style.colour)
       (cols, rows) <- CompactDisplayFixtures.sizes
-      line <- CompactDisplayFixtures
+    yield (
+      rows,
+      CompactDisplayFixtures
         .draw(
           CompactDisplayFixtures.snapshot(coin, mode, cols, rows),
           CompactDisplayFixtures.panel(coin),
           style
         )
         .lines
-    yield line
-    assertEquals(digest(lines), "d6caf715a60cc2f0bec4027a2339f83a3aa36b3c5d36bea2c9826cdbcb5a3994")
+    )
+    // Taken after lane L9 moved the panel to the left of a twelve row band. The hand written
+    // fixtures in LimitPanelSpec pin what these frames draw. This digest only flags a change.
+    assertEquals(
+      digest(frames.flatMap(_._2)),
+      "46584cdfeb60dcd378488ec99b11d9df6e59b26d4863095656f8710fce48d7a8"
+    )
   }

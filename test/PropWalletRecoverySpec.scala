@@ -1,6 +1,7 @@
 package desk
 
 import java.nio.file.{Files, Path}
+import scala.util.chaining.*
 
 class PropWalletRecoverySpec extends TempDirectorySuite:
   private def savedWallet(directory: Path): Path =
@@ -93,6 +94,103 @@ class PropWalletRecoverySpec extends TempDirectorySuite:
             PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
           )
           assertEquals(Files.readString(path), saved)
+        val released = LocalFiles.lock(directory.resolve("wallet-mainnet.lock"))
+        released.close()
+      }
+    }
+
+  private def walletWith(resting: ujson.Value*): String =
+    val body = ujson.Obj(
+      "cash" -> "1000",
+      "deposit" -> "1000",
+      "realized" -> "0",
+      "fees" -> "0",
+      "orders" -> ujson.Arr(),
+      "count" -> "0",
+      "positions" -> ujson.Obj()
+    )
+    if resting.nonEmpty then body("resting") = ujson.Arr.from(resting)
+    ujson.write(body)
+
+  private def restingOrder(id: String = "0x" + "a" * 32): ujson.Obj = ujson.Obj(
+    "id" -> id,
+    "coin" -> "XMR",
+    "side" -> "Buy",
+    "price" -> "546.00",
+    "quantity" -> "0.2",
+    "reduceOnly" -> false,
+    "createdAt" -> "1800000000000"
+  )
+
+  test("a wallet saved before resting orders loads with none and saves the key") {
+    withDirectory { directory =>
+      val path = directory.resolve("wallet-mainnet.json")
+      LocalFiles.write(path, walletWith())
+      val wallet = PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+      try
+        assertEquals(wallet.account.resting, Vector.empty)
+        val plan =
+          OrderPlan("XMR", 0, Side.Buy, OrderKind.Hard, 1, 100, 100, 1, 100, Some(100), 1, false)
+        assert(wallet.fill(plan, 1800000000000L).isRight)
+        assertEquals(ujson.read(Files.readString(path))("resting"), ujson.Arr())
+      finally wallet.close()
+    }
+  }
+
+  test("a saved resting order loads with its price as written") {
+    withDirectory { directory =>
+      LocalFiles.write(directory.resolve("wallet-mainnet.json"), walletWith(restingOrder()))
+      val wallet = PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+      try
+        assertEquals(
+          wallet.account.resting,
+          Vector(
+            PropOrder(
+              "0x" + "a" * 32,
+              "XMR",
+              Side.Buy,
+              BigDecimal("546"),
+              BigDecimal("0.2"),
+              false,
+              1800000000000L
+            )
+          )
+        )
+        assertEquals(wallet.account.resting.head.price.bigDecimal.toPlainString, "546.00")
+        assertEquals(wallet.usable, BigDecimal("890.78362"))
+      finally wallet.close()
+    }
+  }
+
+  test("a saved wallet with twenty resting orders, the cap, loads them all") {
+    withDirectory { directory =>
+      val orders = (1 to 20).map(n => restingOrder("0x%032x".format(n)))
+      LocalFiles.write(directory.resolve("wallet-mainnet.json"), walletWith(orders*))
+      val wallet = PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+      try assertEquals(wallet.account.resting.size, 20)
+      finally wallet.close()
+    }
+  }
+
+  for (label, resting) <- Vector(
+      "a malformed id" -> Vector(restingOrder("0x12")),
+      "a repeated id" -> Vector(restingOrder(), restingOrder()),
+      "an invalid market" -> Vector(restingOrder().tap(_("coin") = "xmr!")),
+      "a zero price" -> Vector(restingOrder().tap(_("price") = "0")),
+      "a zero quantity" -> Vector(restingOrder().tap(_("quantity") = "0")),
+      "more than twenty orders" ->
+        (1 to 21).toVector.map(n => restingOrder("0x%032x".format(n)))
+    )
+  do
+    test("a saved wallet with " + label + " resting is refused and preserved") {
+      withDirectory { directory =>
+        val path = directory.resolve("wallet-mainnet.json")
+        val saved = walletWith(resting*)
+        LocalFiles.write(path, saved)
+        intercept[Exception](
+          PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+        )
+        assertEquals(Files.readString(path), saved)
         val released = LocalFiles.lock(directory.resolve("wallet-mainnet.lock"))
         released.close()
       }

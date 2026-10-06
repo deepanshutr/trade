@@ -5,6 +5,9 @@ import java.math.{MathContext, RoundingMode}
 enum OrderKind:
   case Hard, Best, Target, Close
 
+enum Effect:
+  case Opens, Reduces, Flips, Void
+
 final case class MarketRules(asset: Int, szDecimals: Int, maxLeverage: Int)
 
 final case class TradeSizes(
@@ -19,7 +22,8 @@ final case class OrderIntent(
     side: Side,
     kind: OrderKind,
     big: Boolean = false,
-    target: Option[BigDecimal] = None
+    target: Option[BigDecimal] = None,
+    price: Option[BigDecimal] = None
 )
 
 final case class OrderPlan(
@@ -34,11 +38,43 @@ final case class OrderPlan(
     estimatedValue: BigDecimal,
     average: Option[BigDecimal],
     positionAfter: BigDecimal,
-    reduceOnly: Boolean
+    reduceOnly: Boolean,
+    post: Boolean = false
+):
+  // Every field that changes what is sent. A ticket sends a fresh plan only when it is the same
+  // order as the one the ticket drew, so a new field that changes the order belongs here.
+  def sameOrder(other: OrderPlan): Boolean =
+    coin == other.coin && asset == other.asset && side == other.side && kind == other.kind &&
+      quantity == other.quantity && limit == other.limit && reduceOnly == other.reduceOnly &&
+      post == other.post
+
+final case class RestingOrder(
+    id: String,
+    coin: String,
+    asset: Int,
+    side: Side,
+    price: BigDecimal,
+    remaining: BigDecimal,
+    original: BigDecimal,
+    reduceOnly: Boolean,
+    createdAt: Long,
+    cancelling: Boolean = false
+)
+
+final case class Fill(
+    coin: String,
+    side: Side,
+    time: Long,
+    price: BigDecimal,
+    quantity: BigDecimal
 )
 
 object Trading:
   val defaultSlippage: BigDecimal = BigDecimal("0.001")
+  val baseMakerFee: BigDecimal = BigDecimal("0.00015")
+  val restingCap: Int = 20
+  // Live and prop refuse a resting order past the cap with this text.
+  val restingCapText: String = s"$restingCap orders rest. Cancel one first"
   private val zero = BigDecimal("0")
   private val one = BigDecimal("1")
   private val ten = BigDecimal("10")
@@ -118,6 +154,99 @@ object Trading:
         }
         .filter(validPrice(_, rules))
 
+  def movePrice(
+      value: BigDecimal,
+      rules: MarketRules,
+      delta: BigDecimal,
+      up: Boolean
+  ): Option[BigDecimal] =
+    nextPrice(value, rules, up).map { tick =>
+      val raw = if up then add(value, delta) else subtract(value, delta)
+      boundary(raw, rules, up, strict = false) match
+        case Some(far) => if up then far.max(tick) else far.min(tick)
+        case None      => tick
+    }
+
+  private val takesLiquidity = "Takes liquidity. Move "
+
+  def crossing(side: Side, price: BigDecimal, bid: BigDecimal, ask: BigDecimal): Option[String] =
+    if side == Side.Buy then if price >= ask then Some(takesLiquidity + "below the ask") else None
+    else if price <= bid then Some(takesLiquidity + "above the bid")
+    else None
+
+  // Each stretch of price with one step is counted at its own step, so a count across a power
+  // of ten stays true. The sign says whether the price is above or below the touch.
+  def ticks(price: BigDecimal, touch: BigDecimal, rules: MarketRules): Long =
+    val (low, high) = if price >= touch then (touch, price) else (price, touch)
+    def count(from: BigDecimal): Long =
+      if from >= high then 0L
+      else
+        priceStep(from, rules) match
+          case None       => 0L
+          case Some(step) =>
+            val plain = from.bigDecimal.stripTrailingZeros()
+            val next = BigDecimal(
+              java.math.BigDecimal.ONE.scaleByPowerOfTen(plain.precision() - plain.scale())
+            )
+            val end = high.min(next)
+            val here = subtract(end, from).bigDecimal
+              .divide(step.bigDecimal, 0, RoundingMode.HALF_UP)
+              .longValue
+            here + count(next)
+    val total = if low <= zero then 0L else count(low)
+    if price >= touch then total else -total
+
+  private def facing(position: BigDecimal, order: RestingOrder): Boolean =
+    position.signum != 0 && order.side == (if position.signum > 0 then Side.Sell else Side.Buy)
+
+  def effects(position: BigDecimal, resting: Vector[RestingOrder]): Vector[(RestingOrder, Effect)] =
+    val (near, rest) = resting.partition(facing(position, _))
+    val nearest =
+      if position.signum > 0 then near.sortBy(o => (o.price, o.createdAt))
+      else near.sortBy(o => (-o.price, o.createdAt))
+    val taken = nearest.scanLeft(zero)((sum, o) => add(sum, o.remaining))
+    val ranked = nearest.zip(taken).map { (order, before) =>
+      val free = subtract(position.abs, before)
+      val effect =
+        if order.remaining <= free then Effect.Reduces
+        else if order.reduceOnly then Effect.Reduces
+        else Effect.Flips
+      order -> effect
+    }
+    val others = rest.map { order =>
+      order -> (if order.reduceOnly then Effect.Void else Effect.Opens)
+    }
+    ranked ++ others
+
+  def reserved(position: BigDecimal, resting: Vector[RestingOrder]): BigDecimal =
+    resting
+      .filter(facing(position, _))
+      .foldLeft(zero)((sum, o) => add(sum, o.remaining))
+      .min(position.abs)
+
+  def money(quantity: BigDecimal, price: BigDecimal, leverage: Option[Int]): Option[BigDecimal] =
+    leverage.filter(_ >= 1).map { l =>
+      BigDecimal(
+        multiply(quantity, price).bigDecimal
+          .divide(BigDecimal(l).bigDecimal, 2, RoundingMode.HALF_UP)
+      )
+    }
+
+  def dollars(value: Option[BigDecimal], width: Int): String =
+    val text = value match
+      case None    => "--"
+      case Some(v) =>
+        val plain = "$" + v.bigDecimal.toPlainString
+        if plain.length <= 7 then plain else "$" + display(v, 6)
+    text.reverse.padTo(width, ' ').reverse
+
+  def priceText(price: BigDecimal, rules: MarketRules): String =
+    priceStep(price, rules)
+      .map(step =>
+        price.bigDecimal.setScale(step.bigDecimal.scale(), RoundingMode.HALF_UP).toPlainString
+      )
+      .getOrElse(format(price))
+
   private def boundary(
       raw: BigDecimal,
       rules: MarketRules,
@@ -154,11 +283,11 @@ object Trading:
     for
       price <- decimal(level.px)
       quantity <- decimal(level.sz)
-      _ <- check(validPrice(price, rules), "Book price does not match market precision")
-      _ <- check(quantity > zero && level.n > 0, "Book quantity and order count must be positive")
+      _ <- check(validPrice(price, rules), "Book price is off the market's tick")
+      _ <- check(quantity > zero && level.n > 0, "Book sizes must be positive")
       _ <- check(
         quantity.bigDecimal.stripTrailingZeros().scale() <= rules.szDecimals,
-        "Book quantity does not match market precision"
+        "Book size is off the market's lot"
       )
     yield Quote(price, quantity)
 
@@ -174,7 +303,7 @@ object Trading:
       val ordered = values.zip(values.drop(1)).forall { (a, b) =>
         if ascending then a.price < b.price else a.price > b.price
       }
-      check(values.nonEmpty && ordered, "Book sides must be nonempty and strictly ordered")
+      check(values.nonEmpty && ordered, "Book sides are empty or out of order")
         .map(_ => values)
     }
 
@@ -249,7 +378,8 @@ object Trading:
       intent: OrderIntent,
       sizes: TradeSizes,
       leverage: Int,
-      slippage: BigDecimal
+      slippage: BigDecimal,
+      reserved: BigDecimal = zero
   ): Either[String, OrderPlan] =
     // A press against the open side only shrinks the position. It is sent reduce only.
     val reducing = position.signum == (if intent.side == Side.Buy then -1 else 1)
@@ -257,7 +387,7 @@ object Trading:
       _ <- check(coin.nonEmpty, "Select a market")
       _ <- check(
         rules.asset >= 0 && validDecimals(rules) && rules.maxLeverage >= 1,
-        "Market rules contain invalid asset, precision or leverage limits"
+        "Market rules are invalid"
       )
       _ <- check(
         leverage >= 1 && leverage <= rules.maxLeverage,
@@ -265,23 +395,42 @@ object Trading:
       )
       _ <- check(
         sizes.small > zero && sizes.big >= sizes.small && sizes.target > zero,
-        "Dollar sizes must be positive and big must be at least small"
+        "Order sizes in settings are invalid"
       )
-      _ <- check(validPrice(reference, rules), "Captured quote does not match market precision")
+      _ <- check(validPrice(reference, rules), "Price is off the market's tick")
       _ <- check(
         position.bigDecimal.stripTrailingZeros().scale() <= rules.szDecimals,
-        "Position does not match market precision"
+        "Position is off the market's lot"
       )
       _ <- check(intent.kind != OrderKind.Close || reducing, "No position to close")
       bids <- levels(book.bids, rules, ascending = false)
       asks <- levels(book.asks, rules, ascending = true)
       _ <- check(bids.head.price < asks.head.price, "Book sides cross")
-      limit <- limitFor(intent, reference, rules, slippage)
+      _ <- intent.price match
+        case Some(p) =>
+          check(intent.kind == OrderKind.Hard, "A limit order takes a sized press")
+            .flatMap(_ =>
+              check(validPrice(p, rules), "Price does not match market precision")
+                .flatMap(_ => crossing(intent.side, p, reference, reference).toLeft(()))
+            )
+        case None => Right(())
+      limit <- intent.price.map(Right(_)).getOrElse(limitFor(intent, reference, rules, slippage))
+      // A posted order is sized and judged at its own price.
+      ref = intent.price.getOrElse(reference)
+      free =
+        if intent.kind == OrderKind.Close then position.abs else subtract(position.abs, reserved)
+      _ <- check(
+        !reducing || intent.kind == OrderKind.Close || free > zero,
+        "Resting orders cover the position"
+      )
       lot = power(-rules.szDecimals)
       side = if intent.side == Side.Buy then asks else bids
-      eligible = side.takeWhile(q =>
-        if intent.side == Side.Buy then q.price <= limit else q.price >= limit
-      )
+      eligible =
+        if intent.price.nonEmpty then Vector.empty[Quote]
+        else
+          side.takeWhile(q =>
+            if intent.side == Side.Buy then q.price <= limit else q.price >= limit
+          )
       available = eligible.foldLeft(zero)((sum, q) => add(sum, q.quantity))
       // An amount is the money put up. The position value is the amount times the leverage.
       dollars = multiply(
@@ -290,7 +439,7 @@ object Trading:
         else sizes.small,
         BigDecimal(leverage)
       )
-      cap = quantityFor(dollars, reference.max(limit), lot)
+      cap = quantityFor(dollars, ref.max(limit), lot)
       reachesTarget =
         if intent.side == Side.Buy then limit <= side.last.price else limit >= side.last.price
       _ <- check(
@@ -298,20 +447,20 @@ object Trading:
         "Target extends beyond the known exact book"
       )
       requested = intent.kind match
-        case OrderKind.Hard => quantityFor(dollars, reference, lot)
+        case OrderKind.Hard => quantityFor(dollars, ref, lot)
         case OrderKind.Best =>
-          available.min(cap).min(quantityFor(dollars, reference, lot, strict = true))
+          available.min(cap).min(quantityFor(dollars, ref, lot, strict = true))
         case OrderKind.Target => available.min(cap)
         case OrderKind.Close  => position.abs
       _ <- check(requested > zero, "No visible quantity fits this order")
       // A reduce that would leave under ten dollars at the quote closes the whole position.
       // This also stops every reduce at flat.
-      closing = reducing && multiply(subtract(position.abs, requested), reference) < ten
-      quantity = if closing then position.abs else requested
+      closing = reducing && multiply(subtract(free, requested), ref) < ten
+      quantity = if closing then free else requested
       kind = if closing then OrderKind.Close else intent.kind
       _ <- check(
-        kind == OrderKind.Close || multiply(quantity, reference.min(limit)) >= ten,
-        "Requested order must reach ten dollars at the quote and limit"
+        kind == OrderKind.Close || multiply(quantity, ref.min(limit)) >= ten,
+        "Order must be at least $10"
       )
       estimate = walk(eligible, quantity)
       (filled, value) = estimate
@@ -326,10 +475,11 @@ object Trading:
       kind,
       quantity,
       limit,
-      reference,
+      ref,
       filled,
       value,
       average,
       after,
-      reducing
+      reducing,
+      intent.price.nonEmpty
     )

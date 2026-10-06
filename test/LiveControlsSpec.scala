@@ -35,8 +35,12 @@ class LiveControlsSpec extends munit.FunSuite:
       cols,
       rows
     )
+  // The two trade buttons, one row each, left to right.
   private def tiles(frame: WorkspaceFrame): Vector[(String, DeskAction)] =
-    frame.controls.filter(_.height > 1).sortBy(_.x).map(b => (b.label, b.action))
+    frame.controls
+      .filter(_.action.isInstanceOf[DeskAction.Prepare])
+      .sortBy(_.x)
+      .map(b => (b.label, b.action))
   private def hard(side: Side, big: Boolean = false): DeskAction =
     DeskAction.Prepare(OrderIntent(side, OrderKind.Hard, big = big))
 
@@ -44,8 +48,7 @@ class LiveControlsSpec extends munit.FunSuite:
     for (cols, rows) <- Vector((100, 30), (120, 40), (360, 99)) do
       val live = frame(500, "LIVE", cols, rows)
       val text = live.lines.mkString("\n")
-      assert(text.contains("LIVE XMR 5x"), text)
-      assert(text.contains("XMR LONG"), text)
+      assert(text.contains("LIVE XMR 5x LONG"), text)
       assert(live.buttons.exists(b => b.label == "1 LONG $500 x5" && b.action == hard(Side.Buy)))
       assert(
         live.buttons.exists(b => b.label == "3 SHORT $500 x5" && b.action == hard(Side.Sell))
@@ -88,55 +91,53 @@ class LiveControlsSpec extends munit.FunSuite:
   test("short exposure is named without changing the fixed buy and sell targets") {
     val long = frame(500, "LIVE", 100, 30)
     val short = frame(-500, "LIVE", 100, 30)
-    assert(short.lines.mkString("\n").contains("XMR SHORT"))
+    assert(short.lines.mkString("\n").contains("LIVE XMR 5x SHORT"))
     assertEquals(short.buttons, long.buttons)
   }
 
   test("the live heading does not invent leverage and flat exposure is explicit") {
     val flat = frame(0, "LIVE", 100, 30, None)
     val text = flat.lines.mkString("\n")
-    assert(text.contains("XMR FLAT"))
+    assert(text.contains("LIVE XMR FLAT"))
     assert(!text.contains("5x"))
   }
 
-  test("simulated wallet controls keep buy and sell without suggesting borrowed tokens") {
-    val prop = draw(readyView.copy(position = Some(BigDecimal("0.2"))), PanelView(mode = "PROP"))
-    val execution = prop.lines
-      .drop(15)
-      .map(_.drop(Layout.workspaceMarketWidth(100) + 1))
-      .mkString("\n")
-    assert(!execution.contains("5x"))
-    assert(!execution.contains("x5"))
-    assert(!execution.contains("LONG"))
-    assert(!execution.contains("SHORT"))
-    assert(!execution.contains("REDUCE"))
+  test("prop controls follow the live rule at the leverage prop reports") {
+    val prop = draw(
+      readyView.copy(leverage = Some(1), position = Some(BigDecimal("0.2"))),
+      PanelView(mode = "PROP")
+    )
+    assert(prop.lines.mkString("\n").contains("PROP XMR 1x LONG"))
     assertEquals(
       tiles(prop),
-      Vector("1 BUY $500" -> hard(Side.Buy), "3 SELL $500" -> hard(Side.Sell))
+      Vector("1 LONG $500 x1" -> hard(Side.Buy), "3 REDUCE $500 x1" -> hard(Side.Sell))
     )
   }
 
-  test("CLOSE names the open position on the size row and works by key") {
+  // A long or short of 0.2 entered at 100 puts up $4.00 at 5x.
+  private val entered = readyView.copy(portfolio = readyView.portfolio.copy(entry = Some(100)))
+
+  test("CLOSE names the money the position puts up on the size row and works by key") {
     for position <- Vector("0.2", "-0.2") do
       for (cols, rows) <- Vector((100, 30), (120, 40)) do
         val live = draw(
-          readyView.copy(position = Some(BigDecimal(position))),
+          entered.copy(position = Some(BigDecimal(position))),
           PanelView(mode = "LIVE"),
           cols,
           rows
         )
         val close = live.buttons.filter(_.action == DeskAction.Close)
-        assertEquals(close.map(_.label), Vector("x Close 0.2 XMR"), position)
+        assertEquals(close.map(_.label), Vector("x Close $4.00"), position)
         val big = live.buttons.find(_.action == DeskAction.OrderSize(true)).get
         assertEquals(close.head.y, big.y)
-        assertEquals(close.head.y, rows - 15 + 5 + 1)
+        assertEquals(close.head.y, rows - 12 + 4 + 1)
         assert(close.head.x > big.x + big.width, close)
-        assert(live.lines(close.head.y - 1).contains("[x Close 0.2 XMR]"))
+        assert(live.lines(close.head.y - 1).contains("[x Close $4.00]"))
         assert(live.shortcuts.contains(DeskAction.Close))
   }
 
-  test("CLOSE is dimmed and unnamed unless live, ready, holding a position and not pending") {
-    val long = readyView.copy(position = Some(BigDecimal("0.2")))
+  test("CLOSE is dimmed and unnamed unless live or prop, ready, holding and not pending") {
+    val long = entered.copy(position = Some(BigDecimal("0.2")))
     val live = PanelView(mode = "LIVE")
     val plain = Snapshot.initial("XMR", now)
     val cases: Vector[(String, TradingView, PanelView, Snapshot)] = Vector(
@@ -144,7 +145,6 @@ class LiveControlsSpec extends munit.FunSuite:
       ("unknown", long.copy(position = None), live, plain),
       ("not ready", long.copy(ready = false), live, plain),
       ("pending", long.copy(pending = true), live, plain),
-      ("prop", long, PanelView(mode = "PROP"), plain),
       ("view", long, PanelView(mode = "VIEW"), plain),
       ("mode review", long, live.copy(modeReview = Some("PROP")), plain),
       ("market prompt", long, live, plain.copy(prompt = Some("BT")))
@@ -160,30 +160,21 @@ class LiveControlsSpec extends munit.FunSuite:
       )
   }
 
-  test("CLOSE shortens its label instead of disappearing when the full label does not fit") {
+  test("CLOSE shortens its money instead of disappearing when the full label does not fit") {
     val cases = Vector(
-      ("1234567890123.45", TradeSizes(), "x Close 1234567890123.45"),
-      ("1234567890123456789.12", TradeSizes(), "x Close"),
-      ("0.2", TradeSizes(BigDecimal("1000000000"), BigDecimal("1000000000")), "x Close 0.2")
+      ("0.2", TradeSizes(), "x Close $4.00"),
+      // $24691357.80 does not fit after the sizes, so the money takes its short form.
+      ("1234567.89", TradeSizes(), "x Close $~2.4e7"),
+      ("0.2", TradeSizes(BigDecimal("10000000"), BigDecimal("10000000")), "x Close")
     )
     for (position, sizes, expected) <- cases; big <- Vector(false, true) do
       val live = draw(
-        readyView.copy(position = Some(BigDecimal(position))),
+        entered.copy(position = Some(BigDecimal(position))),
         PanelView(mode = "LIVE", terms = TradeTerms(sizes, Trading.defaultSlippage), bigOrder = big)
       )
       val close = live.buttons.filter(_.action == DeskAction.Close)
       assertEquals(close.map(_.label), Vector(expected), position)
       assert(live.lines(close.head.y - 1).contains("[" + expected + "]"), position)
-      assert(close.head.x + close.head.width - 1 <= 100, position)
+      assert(close.head.x + close.head.width - 1 <= 38, position)
       assert(live.shortcuts.contains(DeskAction.Close), position)
-    val wide = draw(
-      readyView.copy(position = Some(BigDecimal("1234567890123.45"))),
-      PanelView(mode = "LIVE"),
-      160,
-      45
-    )
-    assertEquals(
-      wide.buttons.filter(_.action == DeskAction.Close).map(_.label),
-      Vector("x Close 1234567890123.45 XMR")
-    )
   }

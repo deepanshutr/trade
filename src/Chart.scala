@@ -1,6 +1,6 @@
 package desk
 
-import java.time.{Instant, ZoneId}
+import java.time.{Instant, LocalDate, LocalTime, ZoneId}
 import java.time.format.DateTimeFormatter
 import scala.math.log
 
@@ -40,13 +40,12 @@ final class Canvas(val cells: Int, val rows: Int):
 
   def restyle(cell: Int, row: Int, style: String): Unit =
     if cell >= 0 && cell < cells && row >= 0 && row < rows then styles(row)(cell) = style
-  def lines: Vector[String] =
+  def grid: Vector[Vector[(Char, String)]] =
     bits.toVector.zipWithIndex.map { (row, r) =>
-      Chart.styled(
-        row.toVector.zipWithIndex
-          .map((b, c) => (if b == 0 then ' ' else (0x2800 + b).toChar, styles(r)(c)))
-      )
+      row.toVector.zipWithIndex
+        .map((b, c) => (if b == 0 then ' ' else (0x2800 + b).toChar, styles(r)(c)))
     }
+  def lines: Vector[String] = grid.map(Chart.styled)
 
 final case class Column(first: Double, low: Double, high: Double, last: Double, volume: Double)
 
@@ -56,7 +55,28 @@ final case class Axis(lo: Double, hi: Double, rows: Int):
   private def place(p: Double, n: Int): Int =
     Screen.round((hi - p) / (hi - lo) * (n - 1)).toInt.max(0).min(n - 1)
   def row(p: Double): Int = place(p, rows)
+  // The row whose price band holds p, each row an equal share of the range from the top.
+  def trueRow(p: Double): Int = math.floor((hi - p) / (hi - lo) * rows).toInt.max(0).min(rows - 1)
   def dot(p: Double): Int = place(p, rows * 4)
+
+// A glyph drawn over one plot cell, such as a fill.
+final case class PlotMark(col: Int, row: Int, glyph: Char, style: String)
+
+// What the chart draws beside and over the price rows: the prices the range must hold, the
+// label of 17 columns for each price row, the marks over the plot, a ticket row with its style,
+// and how many axis marks sit above and below the current price.
+final case class AxisDecor(
+    held: Vector[Double],
+    labels: Axis => Vector[String],
+    marks: Axis => Vector[PlotMark],
+    ticketRow: Axis => Option[(Int, String)],
+    above: Int = 0,
+    below: Int = 0
+)
+
+object AxisDecor:
+  // No held prices, the plain numbers, no marks and no ticket row.
+  val plain: AxisDecor = AxisDecor(Vector.empty, Chart.plainLabels, _ => Vector.empty, _ => None)
 
 object Chart:
   private val esc = Screen.esc
@@ -172,20 +192,43 @@ object Chart:
       }
     }
 
-  def axis(columns: Vector[Option[Column]], book: Option[Book], rows: Int): Option[Axis] =
+  // The held prices join the plotted lows and highs and the book before the pad is taken. The
+  // counts are the marks the orders axis places above and below the current price.
+  def axis(
+      columns: Vector[Option[Column]],
+      book: Option[Book],
+      rows: Int,
+      held: Vector[Double] = Vector.empty,
+      above: Int = 0,
+      below: Int = 0
+  ): Option[Axis] =
+    val marked = held.filter(_.isFinite)
     val prices = columns.flatten.flatMap(c => Vector(c.low, c.high)) ++
-      book.toVector.flatMap(b => (b.bids ++ b.asks).map(_.px.toDouble))
+      book.toVector.flatMap(b => (b.bids ++ b.asks).map(_.px.toDouble)) ++ marked
     if prices.isEmpty then None
     else
       val (lo, hi) = (prices.min, prices.max)
       val pad = if hi > lo then (hi - lo) * 0.05 else hi * 0.001
-      Some(Axis(lo - pad, hi + pad, rows))
+      val padded = Axis(lo - pad, hi + pad, rows)
+      Some(book.flatMap(_.mid).map(_.toDouble).fold(padded)(room(padded, _, above, below)))
+
+  // A mark beyond a current price on an edge row would get no row, so that side grows.
+  private def room(a: Axis, current: Double, above: Int, below: Int): Axis =
+    val (up, down) = (a.hi - current, current - a.lo)
+    val row = a.trueRow(current)
+    if above + below + 1 > a.rows || up < 0 || down < 0 || a.hi <= a.lo then a
+    else if row < above then a.copy(hi = current + (above + 0.5) * down / (a.rows - above - 0.5))
+    else if row > a.rows - 1 - below then
+      a.copy(lo = current - (below + 0.5) * up / (a.rows - below - 0.5))
+    else a
 
   def decimals(hi: Double): Int =
     val digits = if hi < 1 then 0 else hi.toLong.toString.length
     (5 - digits).max(0)
 
-  def line(columns: Vector[Option[Column]], a: Axis): Vector[String] =
+  def line(columns: Vector[Option[Column]], a: Axis): Vector[String] = lineCanvas(columns, a).lines
+
+  private def lineCanvas(columns: Vector[Option[Column]], a: Axis): Canvas =
     val cv = Canvas(columns.size / 2, a.rows)
     var previous: Option[(Int, Int)] = None
     var newest: Option[(Int, Int)] = None
@@ -201,13 +244,19 @@ object Chart:
           newest = Some((x / 2, y / 4))
     }
     newest.foreach((cell, row) => cv.restyle(cell, row, Screen.bold))
-    cv.lines
+    cv
 
   def candleRows(
       columns: Vector[Option[Column]],
       a: Axis,
       cells: Int
-  ): Vector[String] =
+  ): Vector[String] = candleGrid(columns, a, cells).toVector.map(row => new String(row))
+
+  private def candleGrid(
+      columns: Vector[Option[Column]],
+      a: Axis,
+      cells: Int
+  ): Array[Array[Char]] =
     val out = Array.fill(a.rows, cells)(' ')
     def put(x: Int, y: Int, text: String): Unit =
       if y >= 0 && y < a.rows then
@@ -233,7 +282,7 @@ object Chart:
           put(x, bottom, "└─┘")
       }
     }
-    out.toVector.map(row => new String(row))
+    out
 
   def plot(
       columns: Vector[Option[Column]],
@@ -243,6 +292,52 @@ object Chart:
   ): Vector[String] = mode match
     case ChartMode.Line    => line(columns, a)
     case ChartMode.Candles => candleRows(columns, a, cells)
+
+  // The plot with a ticket row of dots on its empty cells, then the marks over their cells.
+  def decorated(
+      columns: Vector[Option[Column]],
+      a: Axis,
+      cells: Int,
+      mode: ChartMode,
+      ticket: Option[(Int, String)],
+      marks: Vector[PlotMark]
+  ): Vector[String] =
+    val grid = mode match
+      case ChartMode.Line    => lineCanvas(columns, a).grid.map(_.toArray).toArray
+      case ChartMode.Candles => candleGrid(columns, a, cells).map(_.map(ch => (ch, "")))
+    ticket.foreach { (row, style) =>
+      if row >= 0 && row < grid.length then
+        grid(row).indices.foreach { c =>
+          if grid(row)(c)._1 == ' ' then grid(row)(c) = ('⠒', style)
+        }
+    }
+    marks.foreach { m =>
+      if m.row >= 0 && m.row < grid.length && m.col >= 0 && m.col < grid(m.row).length then
+        grid(m.row)(m.col) = (m.glyph, m.style)
+    }
+    grid.toVector.map(row => styled(row.toVector))
+
+  // A fill at its time column, counted back from the right edge at now, and its true row. A
+  // time past now is held to the last column and one before the first column is left off. Of two
+  // fills in one cell the larger in dollars shows, the later on a tie.
+  def fillMarks(
+      fills: Vector[Fill],
+      axis: Axis,
+      now: Long,
+      msPerCell: Long,
+      cells: Int,
+      style: Style
+  ): Vector[PlotMark] =
+    val placed = fills.zipWithIndex.flatMap { (fill, i) =>
+      val back = Math.floorDiv(now - fill.time, msPerCell.max(1L)).max(0L)
+      val col = cells - 1L - back
+      Option.when(col >= 0)((col.toInt, axis.trueRow(fill.price.toDouble)) -> (fill, i))
+    }
+    placed.groupMap(_._1)(_._2).toVector.sortBy(_._1).map { case ((col, row), here) =>
+      val (fill, _) = here.maxBy((f, i) => (f.quantity * f.price, f.time, i))
+      if fill.side == Side.Buy then PlotMark(col, row, '▲', style.bid + Screen.bold)
+      else PlotMark(col, row, '▼', style.ask + Screen.bold)
+    }
 
   def width(p: Double, k: Int): Double = math.pow(10, math.floor(math.log10(p)) + 1 - k)
 
@@ -274,8 +369,8 @@ object Chart:
       val vHi = sp.hi.min(a.hi)
       if vHi >= vLo then
         val visible = if sp.hi > sp.lo then sp.size * (vHi - vLo) / (sp.hi - sp.lo) else sp.size
-        val r1 = a.row(vHi)
-        val r2 = a.row(vLo)
+        val r1 = a.trueRow(vHi)
+        val r2 = a.trueRow(vLo)
         val share = visible / (r2 - r1 + 1)
         for r <- r1 to r2 do
           depth(r) += share
@@ -296,12 +391,12 @@ object Chart:
     val sorted = xs.sorted
     sorted(((sorted.size - 1) * q).toInt.min(sorted.size - 1))
 
-  def ladderRows(
+  // The depth bar of each price row, bids from the label side and asks from the plot side.
+  def depthBars(
       book: Option[Book],
       coarse: Map[Int, Book],
       ax: Option[Axis],
       rows: Int,
-      midRow: Option[Int],
       style: Style
   ): Vector[String] =
     (book, ax) match
@@ -311,47 +406,55 @@ object Chart:
         val u = if nz.isEmpty then 1.0 else percentile(nz, 0.5)
         val p95 = if nz.isEmpty then 1.0 else percentile(nz, 0.95)
         val r = if p95 > u then p95 else nz.maxOption.getOrElse(1.0)
-        val dec = decimals(a.hi)
-        val bestRows = Set(
-          b.bids.headOption.map(l => a.row(l.px.toDouble)),
-          b.asks.headOption.map(l => a.row(l.px.toDouble))
-        ).flatten
         val steps = Layout.barW * 2
         (0 until rows).toVector.map { row =>
-          val price = a.hi - (a.hi - a.lo) * row / (rows - 1).max(1)
           val s = depth(row)
           val raw = if s <= 0 then 0L else Screen.round(steps * log(1 + s / u) / log(1 + r / u))
           val text =
             if s <= 0 then " " * Layout.barW
             else bar(raw.max(1).min(steps).toInt, isBid(row), raw > steps)
-          val coloured = style.wrap(if isBid(row) then style.bid else style.ask, text)
-          val label =
-            rjust(s"%.${dec}f".format(price), Layout.labelW) + (if midRow.contains(row) then ">"
-                                                                else " ")
-          if bestRows.contains(row) || midRow.contains(row) then
-            Screen.bold + label + Screen.reset + coloured
-          else label + coloured
+          style.wrap(if isBid(row) then style.bid else style.ask, text)
         }
-      case _ => Vector.fill(rows)(" " * Layout.leftW)
+      case _ => Vector.fill(rows)(" " * Layout.barW)
 
+  // A faint price at the row's middle on every third row from the second and on the last row,
+  // in 17 columns: 8 spaces, the price right aligned in 8 and a space.
+  def plainLabels(axis: Axis): Vector[String] =
+    val dec = decimals(axis.hi)
+    (0 until axis.rows).toVector.map { i =>
+      if i % 3 == 1 || i == axis.rows - 1 then
+        val middle = axis.hi - (i + 0.5) * (axis.hi - axis.lo) / axis.rows
+        Screen.dim + " " * 8 + rjust(fitted(middle, dec, 8), 8) + " " + Screen.reset
+      else " " * 17
+    }
+
+  // A price at dec decimals, shortened by Trading.display when it is wider than width.
+  private def fitted(price: Double, dec: Int, width: Int): String =
+    val fixed = s"%.${dec}f".format(price)
+    if fixed.length <= width || !price.isFinite then fixed
+    else Trading.display(BigDecimal(price), width)
+
+  // The prices beside a small plot in width columns: the top, the middle and the bottom of the
+  // axis right aligned before a space, and the current price in bold with > after it on its row.
   def scaleRows(
       ax: Option[Axis],
       rows: Int,
       midRow: Option[Int],
-      mid: Option[String]
+      mid: Option[String],
+      width: Int
   ): Vector[String] =
-    ax.fold(Vector.fill(rows)(" " * Layout.scaleW)) { a =>
+    ax.fold(Vector.fill(rows)(" " * width)) { a =>
       val dec = decimals(a.hi)
       val middle = a.hi - (a.hi - a.lo) * (rows / 2) / (rows - 1).max(1)
       val labels = Map(0 -> a.hi, rows / 2 -> middle, rows - 1 -> a.lo)
       (0 until rows).toVector.map { row =>
         (midRow, mid) match
           case (Some(m), Some(text)) if m == row =>
-            Screen.bold + rjust("<" + text, Layout.scaleW) + Screen.reset
+            Screen.bold + rjust(text, width - 1) + ">" + Screen.reset
           case _ =>
-            labels
-              .get(row)
-              .fold(" " * Layout.scaleW)(v => rjust(s"%.${dec}f".format(v), Layout.scaleW))
+            labels.get(row).fold(" " * width) { v =>
+              rjust(fitted(v, dec, width - 1), width - 1) + " "
+            }
       }
     }
 
@@ -378,37 +481,29 @@ object Chart:
     }
     (cv.lines, maximum)
 
-  def axisRow(
-      first: Long,
-      z: Int,
-      count: Int,
-      zone: ZoneId,
-      width: Int = 0
-  ): String =
-    val cells = if width > 0 then width else count / 2
-    val (pattern, clockWidth) =
-      if z < 60 then ("HH:mm:ss", 8)
-      else if z < 3600 then ("HH:mm", 5)
-      else if z < 86400 then ("MM-dd HH:mm", 11)
-      else ("yyyy-MM-dd", 10)
-    val fmt = DateTimeFormatter.ofPattern(pattern).withZone(zone)
-    def clock(column: Long): String =
-      fmt.format(Instant.ofEpochSecond((first + column) * z))
-    val out = Array.fill(cells)(' ')
-    val spots =
-      if count <= 0 || cells < clockWidth then Vector.empty
-      else if cells >= 3 * clockWidth + 2 then
-        Vector(
-          (0, clock(0)),
-          (cells / 2 - clockWidth / 2, clock(count / 2)),
-          (cells - clockWidth, clock(count - 1))
-        )
-      else if cells >= 2 * clockWidth + 1 then
-        Vector((0, clock(0)), (cells - clockWidth, clock(count - 1)))
-      else Vector((cells - clockWidth, clock(count - 1)))
-    spots.foreach { (at, text) =>
-      text.zipWithIndex.foreach { (ch, i) =>
-        if at + i >= 0 && at + i < cells then out(at + i) = ch
-      }
-    }
+  private val tickSteps = Vector(5L, 10L, 15L, 30L, 60L, 300L, 900L, 3600L, 14400L, 86400L)
+  private val clockFormat = DateTimeFormatter.ofPattern("HH:mm:ss")
+  private val dayFormat = DateTimeFormatter.ofPattern("MM-dd")
+
+  // A tick at a round local time at the smallest step that keeps ticks fourteen cells apart,
+  // never within fourteen cells of the last tick, and its label after it when nine cells remain.
+  // Day ticks carry the date, since their clock always reads midnight.
+  def timeRow(start: Long, secondsPerCell: Long, cells: Int, zone: ZoneId): String =
+    val width = secondsPerCell.max(1L)
+    val step = tickSteps.find(_ >= 14 * width).getOrElse(tickSteps.last)
+    val out = Array.fill(cells.max(0))(' ')
+    var free = 0
+    for c <- 0 until cells do
+      val from = start + c * width
+      val local = from + zone.getRules.getOffset(Instant.ofEpochSecond(from)).getTotalSeconds
+      val round = Math.floorDiv(local + step - 1, step) * step
+      if c >= free && round < local + width then
+        out(c) = '|'
+        free = c + 14
+        if c + 9 <= cells then
+          val label =
+            if step == 86400L then
+              LocalDate.ofEpochDay(Math.floorDiv(round, 86400L)).format(dayFormat)
+            else LocalTime.ofSecondOfDay(Math.floorMod(round, 86400L)).format(clockFormat)
+          label.zipWithIndex.foreach((ch, i) => out(c + 1 + i) = ch)
     new String(out)

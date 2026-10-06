@@ -41,7 +41,7 @@ class PropReviewSpec extends TempDirectorySuite:
       )
       assert(!worker.submitReviewed(review.copy(expiresAt = now)))
       assert(!worker.submitReviewed(review.copy(createdAt = now + 1)))
-      assert(!worker.submitReviewed(review.copy(leverage = Some(1))))
+      assert(!worker.submitReviewed(review.copy(leverage = Some(5))))
       assert(!worker.submitReviewed(review.copy(marginMode = Some("cross"))))
       assertEquals(ledger.account.count, 0L)
       assert(worker.submitReviewed(review))

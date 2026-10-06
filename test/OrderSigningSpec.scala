@@ -302,3 +302,95 @@ class OrderSigningSpec extends munit.FunSuite:
       }
     }
   }
+
+  private val deskCloid = "0x0123456789abcdef0123456789abcdef"
+  private def cancel(asset: ujson.Value = ujson.Num(32767), cloid: ujson.Value = deskCloid) =
+    ujson.Obj(
+      "type" -> "cancelByCloid",
+      "cancels" -> ujson.Arr(ujson.Obj("asset" -> asset, "cloid" -> cloid))
+    )
+
+  test("post-only and immediate orders sign and a resting good-till-cancel order does not") {
+    Vector("Alo", "Ioc").foreach { tif =>
+      val action = sample
+      action("orders")(0)("t")("limit")("tif") = tif
+      sign(action)
+    }
+    val resting = sample
+    resting("orders")(0)("t")("limit")("tif") = "Gtc"
+    intercept[IllegalArgumentException](sign(resting))
+  }
+
+  test("exactly Alo and Ioc pass the time in force check") {
+    val others: Vector[ujson.Value] = Vector(
+      "Gtc",
+      "FrontendMarket",
+      "LiquidationMarket",
+      "alo",
+      "ioc",
+      "ALO",
+      " Ioc",
+      "Alo ",
+      ""
+    ).map(ujson.Str(_)) ++ Vector(ujson.Num(1), ujson.Null, ujson.Bool(true))
+    others.foreach { tif =>
+      val action = sample
+      action("orders")(0)("t")("limit")("tif") = tif
+      intercept[IllegalArgumentException](sign(action))
+    }
+  }
+
+  test("a cancel by client id matches the recorded reference bytes") {
+    val fixture = fixtures("vectors").arr.find(_("name").str == "cancelByCloidExpiryMain").get
+    val action = fixture("action")
+    val nonce = fixture("nonce").num.toLong
+    val expiry = Some(fixture("expiresAfter").num.toLong)
+    assertEquals(hex(OrderSigning.packed(action)), fixture("packed").str)
+    assertEquals(hex(OrderSigning.actionHash(action, nonce, expiry)), fixture("actionHash").str)
+    assertEquals(hex(OrderSigning.digest(action, nonce, true, expiry)), fixture("digest").str)
+    assertEquals(OrderSigning.sign(secret, action, nonce, true, expiry), fixture("signature"))
+  }
+
+  test("only one well formed cancel by client id can be signed") {
+    sign(cancel())
+    val two = cancel()
+    two("cancels").arr.append(ujson.Obj("asset" -> 1, "cloid" -> deskCloid))
+    val none = cancel()
+    none("cancels").arr.clear()
+    val flagged = cancel()
+    flagged("f") = 1
+    val inner = cancel()
+    inner("cancels")(0)("f") = 1
+    val swapped = ujson.Obj(
+      "type" -> "cancelByCloid",
+      "cancels" -> ujson.Arr(ujson.Obj("cloid" -> deskCloid, "asset" -> 1))
+    )
+    val reordered = ujson.Obj(
+      "cancels" -> cancel()("cancels"),
+      "type" -> "cancelByCloid"
+    )
+    Vector[ujson.Value](
+      two,
+      none,
+      flagged,
+      inner,
+      swapped,
+      reordered,
+      cancel(asset = ujson.Num(-1)),
+      cancel(asset = ujson.Num(1.5)),
+      cancel(asset = ujson.Str("1")),
+      cancel(cloid = ujson.Str("0x0123456789ABCDEF0123456789abcdef")),
+      cancel(cloid = ujson.Str("0x0123")),
+      cancel(cloid = ujson.Str("0123456789abcdef0123456789abcdef")),
+      cancel(cloid = ujson.Num(5)),
+      cancel(cloid = ujson.Str(deskCloid + "0")),
+      cancel(cloid = ujson.Str("0x" + "a" * 33)),
+      cancel(cloid = ujson.Str(" " + deskCloid)),
+      cancel(cloid = ujson.Str(deskCloid + " ")),
+      ujson.Obj("type" -> "cancel", "cancels" -> cancel()("cancels")),
+      ujson.Obj("type" -> "cancel", "cancels" -> ujson.Arr(ujson.Obj("a" -> 1, "o" -> 77738308))),
+      ujson.Obj("type" -> "modify", "oid" -> 1, "order" -> sample("orders")(0)),
+      ujson.Obj("type" -> "batchModify", "modifies" -> ujson.Arr()),
+      ujson.Obj("type" -> "scheduleCancel", "time" -> 1788684359292L)
+    ).foreach(action => intercept[IllegalArgumentException](sign(action)))
+  }

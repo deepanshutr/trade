@@ -266,6 +266,8 @@ class ActiveDataReadsSpec extends munit.FunSuite:
     val clock = new AtomicLong(1000L)
     var sockets = Vector.empty[FakeSocket]
     var events = Vector.empty[(Option[ujson.Value], Long)]
+    // Each order event with the number of messages its socket had sent when it arrived.
+    var orders = Vector.empty[(OrderEvent, Int)]
     val exchange = new JdkExchange(
       "https://example.invalid",
       Some((_, address, listener) =>
@@ -276,6 +278,7 @@ class ActiveDataReadsSpec extends munit.FunSuite:
         socket
       )
     )
+    exchange.watchOrders(event => orders :+= ((event, sockets.lastOption.fold(0)(_.messages.size))))
     def watch(coin: String = "XMR", generation: Long = 7L): Unit =
       exchange.watchTimed(
         coin,
@@ -391,4 +394,89 @@ class ActiveDataReadsSpec extends munit.FunSuite:
       socket.emit(error)
       assertEquals(f.events.last, (None, 1000L))
     finally f.exchange.close()
+  }
+
+  private def update(cloid: String): ujson.Value = ujson.Obj(
+    "order" -> ujson.Obj(
+      "coin" -> "XMR",
+      "side" -> "B",
+      "limitPx" -> "546.09",
+      "sz" -> "0.15",
+      "oid" -> 77738308,
+      "timestamp" -> 1700000000000.0,
+      "origSz" -> "0.2",
+      "cloid" -> cloid
+    ),
+    "status" -> "open",
+    "statusTimestamp" -> 1700000000001.0
+  )
+
+  test("the account socket subscribes to order updates and reports each open after both") {
+    val f = new SocketFixture
+    try
+      f.watch()
+      val socket = f.sockets.head
+      val subscribes = socket.messages.filter(_("method").str == "subscribe")
+      assertEquals(
+        subscribes.map(_("subscription")),
+        Vector(
+          ujson.Obj("type" -> "activeAssetData", "user" -> owner, "coin" -> "XMR"),
+          ujson.Obj("type" -> "orderUpdates", "user" -> owner)
+        )
+      )
+      assertEquals(socket.messages.take(2), subscribes)
+      assertEquals(f.orders, Vector((OrderEvent.Opened(1000L), 2)))
+      f.clock.set(1200L)
+      f.watch()
+      assertEquals(f.orders.size, 1, "a kept socket reported another open")
+      f.watch("BTC", 8L)
+      val next = f.sockets.last
+      assert(next ne socket)
+      assertEquals(
+        next.messages.filter(_("method").str == "subscribe").map(_("subscription")("type").str),
+        Vector("activeAssetData", "orderUpdates")
+      )
+      assertEquals(f.orders.last, (OrderEvent.Opened(1200L), 2))
+      assertEquals(f.orders.size, 2)
+    finally f.exchange.close()
+  }
+
+  test("order updates reach the orders receiver and never the active data receiver") {
+    val f = new SocketFixture
+    try
+      f.watch()
+      val socket = f.sockets.head
+      val before = f.events
+      f.clock.set(1500L)
+      val values = ujson.Arr(update("0x" + "1" * 32), update("0x" + "2" * 32))
+      socket.emit(ujson.Obj("channel" -> "orderUpdates", "data" -> values))
+      assertEquals(f.events, before)
+      assertEquals(f.orders.last._1, OrderEvent.Updates(values.value.toVector, 1500L))
+      socket.emit(ujson.Obj("channel" -> "orderUpdates", "data" -> ujson.Obj()))
+      socket.emit(ujson.Obj("channel" -> "userFills", "data" -> values))
+      assertEquals(f.orders.size, 2)
+      f.watch("BTC", 8L)
+      val count = f.orders.size
+      socket.emit(ujson.Obj("channel" -> "orderUpdates", "data" -> values))
+      assertEquals(f.orders.size, count, "a replaced socket delivered order updates")
+    finally f.exchange.close()
+  }
+
+  test("order updates pass only for the current session") {
+    val reads = new ActiveDataReads
+    val message =
+      ujson.Obj("channel" -> "orderUpdates", "data" -> ujson.Arr(update("0x" + "1" * 32)))
+    assertEquals(reads.orders(current, message, 1000L), None)
+    reads.open(current)
+    assertEquals(
+      reads.orders(current, message, 1000L),
+      Some(OrderEvent.Updates(Vector(update("0x" + "1" * 32)), 1000L))
+    )
+    assertEquals(reads.orders(current.copy(connection = 12L), message, 1000L), None)
+    assertEquals(
+      reads.orders(current, ujson.Obj("channel" -> "activeAssetData", "data" -> data()), 1000L),
+      None
+    )
+    reads.close()
+    assertEquals(reads.orders(current, message, 1000L), None)
   }

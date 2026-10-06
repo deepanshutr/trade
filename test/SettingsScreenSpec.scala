@@ -201,18 +201,18 @@ class SettingsScreenSpec extends munit.FunSuite:
     )
     assertEquals(page(13), "Key bindings")
     assertEquals(
-      page.slice(14, 26).map(_.take(23).trim),
+      page.slice(14, 28).map(_.take(23).trim),
       Bind.values.toVector.map(_.label)
     )
     assertEquals(
-      page.slice(14, 26).map(value),
-      Vector("q", "p", "l", "m", "c", "v", "1", "2", "3", "4", "x", "s")
+      page.slice(14, 28).map(value),
+      Vector("q", "p", "l", "m", "c", "v", "1", "2", "3", "4", "x", "s", "t", "o")
     )
     assertEquals(
-      page(26),
+      page(28),
       "Up and Down move. Enter edits or acts. r reads the owner again. Esc leaves."
     )
-    assertEquals(page.size, 28)
+    assertEquals(page.size, 30)
   }
 
   test("Up and Down move the cursor and the page scrolls to keep it visible") {
@@ -222,7 +222,7 @@ class SettingsScreenSpec extends munit.FunSuite:
     val page = f.last
     assertEquals(page.size, 12)
     assert(page.forall(_.length <= 60), page)
-    assert(page.exists(_.startsWith("> Settings")), page)
+    assert(page.exists(_.startsWith("> Orders")), page)
     assert(!page.exists(_ == "Trading"), page)
     assert(f.frames.head(3).startsWith("> Small amount"))
   }
@@ -566,6 +566,22 @@ class SettingsScreenSpec extends munit.FunSuite:
   }
 
   // Key bindings
+
+  test("a row for an unbound action reads unbound") {
+    val dir = java.nio.file.Files.createTempDirectory("desk-unbound")
+    val saved = dir.resolve("bindings.json")
+    java.nio.file.Files.writeString(saved, """{"version":1,"bindings":{"close":["t"]}}""")
+    java.nio.file.Files.setPosixFilePermissions(
+      saved,
+      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
+    )
+    val f = new Fixture
+    f.bindings = Bindings.load(saved).toOption.get
+    assert(!f.run(esc))
+    assertEquals(value(f.row("Order type")), "unbound")
+    assertEquals(value(f.row("Close")), "t")
+    assertEquals(value(f.row("Orders")), "o")
+  }
 
   private val quitRow = down * 7
   private val marketRow = down * 10

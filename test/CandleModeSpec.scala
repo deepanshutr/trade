@@ -11,14 +11,17 @@ class CandleModeSpec extends munit.FunSuite:
       zone: java.time.ZoneId,
       style: Style
   ): Vector[String] =
+    // cols is the chart area here, so the terminal is that plus the outlook and its bar.
     Screen
       .renderMarket(
         s,
-        cols,
-        rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin),
         now,
         zone,
-        style
+        style,
+        Layout
+          .regions(cols + Layout.outlookWidth + 1, rows)
+          .copy(priceRows = rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin)),
+        AxisDecor.plain
       )
       .lines
   private val now = 1_700_000_000_000L
@@ -84,15 +87,15 @@ class CandleModeSpec extends munit.FunSuite:
 
   test("the candle window and scrub step use the visible candle count") {
     val s = press(Snapshot.initial("XMR", now), Command.ToggleCandles)
-    val count = Layout.plotColumns(100, s.chartMode)
-    assertEquals(count, 15)
-    assertEquals(Layout.plotColumns(100, ChartMode.Line), 122)
+    val count = Layout.columnsIn(Layout.regions(100, 30).plot, s.chartMode)
+    assertEquals(count, 5)
+    assertEquals(Layout.columnsIn(Layout.regions(100, 30).plot, ChartMode.Line), 46)
     val (first, z) = Chart.window(s, count, now)
     assertEquals(first + count - 1, Math.floorDiv(now / 1000, 60L))
     assertEquals(z, 60)
     assertEquals(press(s, Command.ScrubBack).offsetSec, 60L)
     val wide = s.copy(cols = 120)
-    assertEquals(Layout.plotColumns(120, ChartMode.Candles), 20)
+    assertEquals(Layout.columnsIn(Layout.regions(120, 40).plot, ChartMode.Candles), 10)
     assertEquals(press(wide, Command.ScrubBack).offsetSec, 120L)
   }
 
@@ -198,12 +201,14 @@ class CandleModeSpec extends munit.FunSuite:
     assertEquals(dots(rows).map(_._1), Set(2, 3, 18, 19))
   }
 
-  test("candle time labels describe the same first and last candle as the chart") {
-    val row = Chart.axisRow(0, 60, 15, ZoneOffset.UTC, 61)
-    assertEquals(row.length, 61)
-    assertEquals(row.take(5), "00:00")
-    assertEquals(row.slice(28, 33), "00:07")
-    assertEquals(row.takeRight(5), "00:14")
+  test("candle ticks sit on the first cell of the candle that opens at the round time") {
+    // One minute candles of four cells give fifteen seconds a cell and five minute ticks, so the
+    // ticks fall on candles 0, 5, 10 and 15 at cells 0, 20, 40 and 60.
+    val row = Chart.timeRow(0L, 15L, 61, ZoneOffset.UTC)
+    assertEquals(
+      row,
+      "|00:00:00" + " " * 11 + "|00:05:00" + " " * 11 + "|00:10:00" + " " * 11 + "|"
+    )
   }
 
   test("both modes preserve all screen rows with plain reference plots and no magenta") {
@@ -220,14 +225,14 @@ class CandleModeSpec extends munit.FunSuite:
       assert(frame.map(Chart.plain).forall(_.length == cols))
       assert(!frame.exists(_.contains(Screen.esc + "[35m")))
       val axis = frame(frame.size - 1)
-      assert(axis.contains(if mode == ChartMode.Candles then "1m/candle" else "1s/col"))
+      assert(axis.contains(if mode == ChartMode.Candles then "1m/candle" else "2s/col"))
       if mode == ChartMode.Candles then
         val count = rows - 19
-        val main = frame.slice(1, count + 1).map(Chart.plain).map(_.slice(30, cols - 9))
+        val main = frame.slice(1, count + 1).map(Chart.plain).map(_.drop(38))
         assert(!main.exists(_.exists(c => c >= 0x2800 && c <= 0x28ff)))
   }
 
-  test("candle frames share the last two columns across main references volume and clocks") {
+  test("candle frames draw the last two candles in the main plot, references, volume and ticks") {
     val at = 119_000L
     val candles = Vector(Candle(0L, 2, 6, 0, 4, 7), Candle(60_000L, 4, 6, 0, 2, 14))
     val s = Snapshot
@@ -253,29 +258,33 @@ class CandleModeSpec extends munit.FunSuite:
           )
         )
       )
+    // cols is the chart area. The main plot and the reference plots start at column 38.
     for cols <- Vector(100, 101, 120) do
-      val count = Layout.plotColumns(cols, ChartMode.Candles)
-      val cells = Layout.cells(cols)
+      val cells = cols - 38
+      val count = Layout.columnsIn(cells, ChartMode.Candles)
       val start = (count - 2) * Layout.candleW
       val end = start + 8
       val frame = market(s, cols, 30, at, ZoneOffset.UTC, Style.colour).map(Chart.plain)
-      val main = frame.slice(1, 12).map(_.slice(Layout.leftW, cols - Layout.scaleW))
+      val main = frame.slice(1, 12).map(_.drop(38))
       assert(main.exists(_.slice(start, end) == "┌─┐ ███ "))
       assert(main.exists(_.slice(start, end) == "│ │ ███ "))
       assert(main.exists(_.slice(start, end) == "└─┘ ███ "))
       assert(main.forall(row => row.take(start).trim.isEmpty && row.drop(end).trim.isEmpty))
       for first <- Vector(13, 16) do
-        val ref = frame.slice(first, first + 3).map(_.slice(Layout.leftW, cols - Layout.scaleW))
+        val ref = frame.slice(first, first + 3).map(_.drop(38))
         assertEquals(ref.map(_.slice(start, end)), Vector(" │   │  ", " □  ███ ", "        "))
         assert(ref.forall(row => row.take(start).trim.isEmpty && row.drop(end).trim.isEmpty))
-      val volume = frame(12).slice(Layout.leftW, cols - Layout.scaleW)
+      val volume = frame(12).drop(38)
       assertEquals(
         volume.zipWithIndex.collect { case (ch, i) if ch != ' ' => i },
         Vector(start + 1, start + 5)
       )
-      assert(frame(12).endsWith("v 14.0"))
-      val clock = frame(19).slice(Layout.leftW, cols - Layout.scaleW)
-      assertEquals(clock.takeRight(5), "00:01")
-      assertEquals(clock.take(5), if count == 20 then "23:42" else "23:47")
+      // Five minute ticks at fifteen seconds a cell, the last labelled one on the candle at 00:00.
+      val clock = frame(19).drop(38)
       assertEquals(clock.length, cells)
+      assertEquals(clock.slice(start, start + 9), "|00:00:00")
+      assertEquals(
+        clock.indices.filter(clock(_) == '|').toVector,
+        (start to 0 by -20).reverse.toVector
+      )
   }

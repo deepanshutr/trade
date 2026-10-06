@@ -54,6 +54,7 @@ enum Command:
   case SelectTarget(side: Side)
   case Confirm, Cancel, ToggleCandles
   case Close, Settings
+  case OrderType, Orders, Place
 
 enum Event:
   case BookUpdate(coin: String, book: Book, fromSocket: Boolean)
@@ -216,8 +217,8 @@ object State:
     r.copy(samples = keep(r.samples, sec, samplesMs) :+ (sec, mid))
 
   private def step(s: Snapshot): Long =
-    val width = Layout.workspaceChartWidth(s.cols)
-    (Layout.plotColumns(width, s.chartMode) / 4L).max(1L) * zooms(s.zoom)
+    val cells = Layout.regions(s.cols, s.rows).plot
+    (Layout.columnsIn(cells, s.chartMode) / 4L).max(1L) * zooms(s.zoom)
 
   def reduce(s: Snapshot, e: Event, now: Long): Snapshot = e match
     case Event.BookUpdate(coin, book, fromSocket) =>
@@ -306,7 +307,8 @@ object State:
   private def key(s: Snapshot, cmd: Command, now: Long): Snapshot = cmd match
     case Command.PlaceOrder(_) | Command.SelectTarget(_) | Command.Confirm | Command.Cancel |
         Command.Pointer(_, _, _) | Command.PointerPress(_, _, _) | Command.ToggleMute |
-        Command.Mode(_) | Command.Close | Command.Settings =>
+        Command.Mode(_) | Command.Close | Command.Settings | Command.OrderType | Command.Orders |
+        Command.Place =>
       s
     case Command.Quit              => s.copy(quit = true)
     case Command.StartMarketPrompt => s.copy(prompt = Some(""))

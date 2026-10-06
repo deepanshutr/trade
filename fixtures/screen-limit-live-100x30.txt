@@ -1,0 +1,29 @@
+ $11.04   552.00                      |
+                                      |
+          549.96                      |
+                 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿|
+          548.00                      |
+ $10.92   546.10'          ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿|
+          546.10>⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇          |
+ $21.84   546.00,⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇          |
+  $5.44   544.00 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿|
+                               volume |
+BTC                             97050 |
+                                96000>|
+                                94950 |
+PAXG (token tied to gold)      2320.5 |
+                                 2310>|
+                               2299.5 |
+                        c line 2s/col |
+LIVE XMR 5x LONG                      |
+Val  $109.22 Open   $0.44 Net      -- |
+Stables $1000.00  Usable  $880.00     |
+Filled $21.84 #7                      |
+[$20 *] [$100] [x Close $21.84]       |
+[t Limit] [o Orders] v Sound  1 on BTC|
+[1 LONG $20 x5] [3 REDUCE $20 x5]     |
+SELL LIMIT XMR reduce only            |
+Price 546.10  ask 546.10 +0t +0.00%   |
+Size $10.92 of $21.84 held  fee $0.01 |
+[Enter Place] [Esc Cancel] step 0.01  |
+[p Prop] [l Live] m Market c Chart    |

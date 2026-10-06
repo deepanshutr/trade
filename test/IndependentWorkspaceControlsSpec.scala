@@ -77,7 +77,8 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
       assertEquals(actual.lines.size, rows)
       assert(actual.lines.forall(_.length == cols))
       for button <- actual.buttons do
-        assert(button.x > Layout.workspaceMarketWidth(cols) + 1)
+        // Every control sits in the panel, the band's left 38 columns.
+        assert(button.x >= 1 && button.x + button.width - 1 <= 38 && button.y > rows - 12)
         assert(button.x + button.width - 1 <= cols && button.y >= 1 && button.y <= rows)
         val text = actual
           .lines(button.y - 1 + button.height / 2)
@@ -93,7 +94,7 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
       if pending then assert(!actual.buttons.exists(b => tradeAction(b.action)))
   }
 
-  test("trade buttons retain their coordinates across size and pending changes") {
+  test("trade buttons keep their row, and their place while pending, across sizes") {
     for cols <- Vector(100, 101, 117, 120, 160); rows <- Vector(30, 31, 40) do
       def trades(f: WorkspaceFrame) = f.controls
         .filter(_.action.isInstanceOf[DeskAction.Prepare])
@@ -101,6 +102,8 @@ class IndependentWorkspaceControlsSpec extends munit.FunSuite:
       val small = draw(PanelView(mode = "PROP"), cols, rows)
       val large = draw(PanelView(mode = "PROP", bigOrder = true), cols, rows)
       val pending = draw(PanelView(mode = "PROP"), cols, rows, pending = true)
-      assertEquals(trades(small), trades(large))
+      // A wider amount widens the labels along their row. The first button keeps its start.
+      assertEquals(trades(small).map(b => (b._2, b._4)), trades(large).map(b => (b._2, b._4)))
+      assertEquals(trades(small).head._1, trades(large).head._1)
       assertEquals(trades(small), trades(pending))
   }

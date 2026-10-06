@@ -265,91 +265,97 @@ class ChartSpec extends munit.FunSuite:
     assertEquals(Chart.bar(42, bid = true, clamp = false), FULL * 21)
   }
 
-  test("ladder rows put bids from the label side and asks from the chart side") {
+  test("depth bars put bids from the label side and asks from the chart side") {
     val book = Book(Vector(lvl("100", "1")), Vector(lvl("110", "100"), lvl("107.5", "10")), 1L)
     val a = Axis(100.0, 110.0, 5)
-    val rows = Chart.ladderRows(Some(book), Map.empty, Some(a), 5, Some(2), Style.mono)
+    val rows = Chart.depthBars(Some(book), Map.empty, Some(a), 5, Style.mono)
     assertEquals(rows.size, 5)
     val plain = rows.map(Chart.plain)
-    assert(plain.forall(_.length == 30), plain)
-    assertEquals(plain(0), "  110.00 " + FULL * 21)
-    assertEquals(plain(1), "  107.50 " + " " * 15 + FULL * 6)
-    assertEquals(plain(2), "  105.00>" + " " * 21)
-    assertEquals(plain(3), "  102.50 " + " " * 21)
-    assertEquals(plain(4), "  100.00 " + FULL + " " * 20)
-    assert(rows(0).startsWith(Screen.bold) && rows(4).startsWith(Screen.bold))
-    assert(!rows(1).contains(Screen.bold))
-    assert(rows(2).contains(Screen.bold + "  105.00>" + Screen.reset))
+    assert(plain.forall(_.length == 21), plain)
+    assertEquals(plain(0), FULL * 21)
+    assertEquals(plain(1), " " * 15 + FULL * 6)
+    assertEquals(plain(2), " " * 21)
+    assertEquals(plain(3), " " * 21)
+    assertEquals(plain(4), FULL + " " * 20)
+    assert(!rows.exists(_.contains(Screen.bold)))
   }
 
-  test("ladder bars use the log rule with the clamp mark at the outer end") {
+  test("depth bars use the log rule with the clamp mark at the outer end") {
     val bids = (1 to 20).toVector.map(i => Level((200 - i).toString, (i * i).toString, 1))
     val book = Book(bids, Vector.empty, 1L)
     val a = Axis(180.0, 199.0, 20)
     val plain =
-      Chart.ladderRows(Some(book), Map.empty, Some(a), 20, None, Style.mono).map(Chart.plain)
-    assertEquals(plain(19).drop(9), FULL * 20 + ">")
-    assertEquals(plain(0).drop(9), LHALF + " " * 20)
-    assert(plain.forall(_.length == 30))
+      Chart.depthBars(Some(book), Map.empty, Some(a), 20, Style.mono).map(Chart.plain)
+    assertEquals(plain(19), FULL * 20 + ">")
+    assertEquals(plain(0), LHALF + " " * 20)
+    assert(plain.forall(_.length == 21))
     assertEquals(
-      Chart.ladderRows(None, Map.empty, None, 2, None, Style.mono),
-      Vector(" " * 30, " " * 30)
+      Chart.depthBars(None, Map.empty, None, 2, Style.mono),
+      Vector(" " * 21, " " * 21)
     )
   }
 
-  test("ladder bars scale by depth when the reference ties the lower median") {
+  test("depth bars scale by depth when the reference ties the lower median") {
     val book = Book(Vector(lvl("100", "1"), lvl("99", "5"), lvl("98", "5")), Vector.empty, 1L)
     val a = Axis(98.0, 100.0, 3)
     val plain =
-      Chart.ladderRows(Some(book), Map.empty, Some(a), 3, None, Style.mono).map(Chart.plain)
-    assertEquals(plain(0).drop(9), FULL * 5 + LHALF + " " * 15)
-    assertEquals(plain(1).drop(9), FULL * 21)
-    assertEquals(plain(2).drop(9), FULL * 21)
+      Chart.depthBars(Some(book), Map.empty, Some(a), 3, Style.mono).map(Chart.plain)
+    assertEquals(plain(0), FULL * 5 + LHALF + " " * 15)
+    assertEquals(plain(1), FULL * 21)
+    assertEquals(plain(2), FULL * 21)
   }
 
-  test("ladder rows draw far depth from the coarse books in colour") {
+  test("depth bars draw far depth from the coarse books in colour") {
     val full = Book(Vector(lvl("530.5", "1")), Vector(lvl("530.7", "1")), 1L)
     val sf2 = Book(Vector.empty, Vector(lvl("550", "60")), 1L)
     val a = Axis(500.0, 560.0, 7)
-    val rows = Chart.ladderRows(Some(full), Map(2 -> sf2), Some(a), 7, None, Style.colour)
+    val rows = Chart.depthBars(Some(full), Map(2 -> sf2), Some(a), 7, Style.colour)
     val plain = rows.map(Chart.plain)
-    assert(plain.forall(_.length == 30), plain)
-    assert(plain(1).drop(9).trim.nonEmpty && plain(2).drop(9).trim.nonEmpty, plain)
+    assert(plain.forall(_.length == 21), plain)
+    assert(plain(1).trim.nonEmpty && plain(2).trim.nonEmpty, plain)
     assert(rows(1).contains(Style.colour.ask), rows(1))
-    assert(
-      rows(3).contains(Style.colour.bid) || rows(4).contains(Style.colour.bid),
-      rows.mkString("\n")
-    )
+    assert(rows(3).contains(Style.colour.bid), rows.mkString("\n"))
     assert(!plain.exists(_.contains("#")))
     assert(
       !Chart
-        .ladderRows(Some(full), Map(2 -> sf2), Some(a), 7, None, Style.mono)
+        .depthBars(Some(full), Map(2 -> sf2), Some(a), 7, Style.mono)
         .exists(_.contains(Screen.esc + "[3"))
     )
   }
 
-  test("scale rows label the top middle and bottom and print the mid bold") {
-    val a = Axis(98.35, 112.65, 14)
-    val rows = Chart.scaleRows(Some(a), 14, Some(7), Some("105.5"))
-    assertEquals(rows(0), "   112.65")
-    assertEquals(rows(7), Screen.bold + "   <105.5" + Screen.reset)
-    assertEquals(rows(13), "    98.35")
-    assertEquals(rows(1), " " * 9)
-    val lower = Chart.scaleRows(Some(a), 14, Some(8), Some("105.5"))
-    assertEquals(lower(7), "   104.95")
-    assertEquals(lower(8), Screen.bold + "   <105.5" + Screen.reset)
-    assertEquals(Chart.scaleRows(None, 2, None, None), Vector(" " * 9, " " * 9))
+  test("depth is placed on the true row, so a bid never sits above the current price") {
+    // At nine rows the mid 547.47 has true row 5. The touch either side shares that row, where
+    // the bid wins, and the rounded row of the old ladder would have put both on row 4.
+    val a = Axis(543.6, 552.4, 9)
+    val book = Book(
+      Vector(lvl("547.46"), lvl("545.00")),
+      Vector(lvl("547.48"), lvl("549.00")),
+      1L
+    )
+    val (depth, isBid) = Chart.depthRows(Chart.spans(book, Map.empty), a)
+    assertEquals(depth.toVector, Vector(0.0, 0.0, 0.0, 1.0, 0.0, 2.0, 0.0, 1.0, 0.0))
+    assertEquals(isBid.toVector.zipWithIndex.collect { case (true, i) => i }, Vector(5, 7))
+    assertEquals(a.trueRow(547.47), 5)
+    assertEquals(a.trueRow(552.4), 0)
+    assertEquals(a.trueRow(543.6), 8)
+    assertEquals(a.trueRow(600.0), 0)
+    assertEquals(a.trueRow(500.0), 8)
   }
 
-  test("the middle scale label is the price of the middle ladder row") {
+  test("scale rows print the top, the bottom and the current price in bold with its marker") {
     val a = Axis(98.35, 112.65, 14)
-    val book = Book(Vector(lvl("100")), Vector(lvl("110")), 1L)
-    val ladder =
-      Chart.ladderRows(Some(book), Map.empty, Some(a), 14, None, Style.mono).map(Chart.plain)
-    val scale = Chart.scaleRows(Some(a), 14, None, None)
-    assertEquals(scale(7).trim, ladder(7).take(Layout.labelW).trim)
-    assertEquals(scale(0).trim, ladder(0).take(Layout.labelW).trim)
-    assertEquals(scale(13).trim, ladder(13).take(Layout.labelW).trim)
+    val rows = Chart.scaleRows(Some(a), 14, Some(7), Some("105.5"), 8)
+    assertEquals(rows(0), " 112.65 ")
+    assertEquals(rows(7), Screen.bold + "  105.5>" + Screen.reset)
+    assertEquals(rows(13), "  98.35 ")
+    assertEquals(rows(1), " " * 8)
+    val lower = Chart.scaleRows(Some(a), 14, Some(8), Some("105.5"), 8)
+    assertEquals(lower(7), " 104.95 ")
+    assertEquals(lower(8), Screen.bold + "  105.5>" + Screen.reset)
+    assertEquals(Chart.scaleRows(None, 2, None, None, 8), Vector(" " * 8, " " * 8))
+    // A price too wide for its column is shortened, never cut.
+    val wide = Chart.scaleRows(Some(Axis(1.0e8, 3.0e8, 3)), 3, None, None, 8)
+    assertEquals(wide, Vector("   ~3e8 ", "   ~2e8 ", "   ~1e8 "))
   }
 
   test("one volume row scales to the largest column with at least one dot") {
@@ -369,30 +375,265 @@ class ChartSpec extends munit.FunSuite:
     assert(!mono.head.contains(Screen.esc))
   }
 
-  test("the axis row prints three clocks at the first middle and last column") {
-    val fine = Chart.axisRow(0L, 1, 122, ZoneOffset.UTC)
-    assertEquals(fine.length, 61)
-    assertEquals(fine.take(8), "00:00:00")
-    assertEquals(fine.slice(26, 34), "00:01:01")
-    assertEquals(fine.drop(53), "00:02:01")
-    val coarse = Chart.axisRow(0L, 60, 122, ZoneOffset.UTC)
-    assertEquals(coarse.take(5), "00:00")
-    assertEquals(coarse.slice(28, 33), "01:01")
-    assertEquals(coarse.drop(56), "02:01")
+  test("held prices widen the axis before the five percent pad") {
+    val series = Vector(
+      Some(Column(548, 546, 552, 547, 0)),
+      None,
+      Some(Column(547, 544, 549, 546, 0))
+    )
+    val plain = Chart.axis(series, None, 9).get
+    assertEqualsDouble(plain.lo, 543.60, 1e-9)
+    assertEqualsDouble(plain.hi, 552.40, 1e-9)
+    val held = Chart.axis(series, None, 9, Vector(500.0)).get
+    assert(held.lo < 500.0, held)
+    assertEqualsDouble(held.lo, 497.40, 1e-9)
+    assertEqualsDouble(held.hi, 554.60, 1e-9)
+    val above = Chart.axis(series, None, 9, Vector(560.0, 546.0)).get
+    assertEqualsDouble(above.lo, 543.20, 1e-9)
+    assertEqualsDouble(above.hi, 560.80, 1e-9)
   }
 
-  test("narrow axes keep complete separated timestamps") {
-    assertEquals(Chart.axisRow(0L, 1, 28, ZoneOffset.UTC), "      00:00:27")
-    assertEquals(Chart.axisRow(0L, 1, 36, ZoneOffset.UTC), "00:00:00  00:00:35")
-    assertEquals(Chart.axisRow(0L, 3600, 28, ZoneOffset.UTC), "   01-02 03:00")
-    assertEquals(Chart.axisRow(0L, 1, 10, ZoneOffset.UTC), "     ")
+  // The orders axis places the current price on its true row, the prices above it upward nearest
+  // first, each on its true row or the row above its lower neighbour, and the prices below it
+  // downward the same way. A row under 0 or past the last is a mark left off the axis.
+  private def placed(a: Axis, current: Double, held: Vector[Double]): Vector[Int] =
+    val row = a.trueRow(current)
+    val up = held
+      .filter(_ > current)
+      .distinct
+      .sorted
+      .scanLeft(row)((last, p) => a.trueRow(p).min(last - 1))
+      .tail
+    val down = held
+      .filter(_ < current)
+      .distinct
+      .sorted
+      .reverse
+      .scanLeft(row)((last, p) => a.trueRow(p).max(last + 1))
+      .tail
+    up ++ down
+
+  // The touch is 546.08 and 546.10, so the current price is 546.09.
+  private val touch = Book(Vector(lvl("546.08")), Vector(lvl("546.10")), 1L)
+
+  test("a current price on the top row leaves a row for each held price above it") {
+    // The plotted range ends at the current price, with a sell resting one tick above it.
+    val series = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
+    val held = Vector(546.09, 546.10)
+    for rows <- Vector(9, 20) do
+      val a = Chart.axis(series, Some(touch), rows, held, above = 1).get
+      assertEquals(a.trueRow(546.09), 1, a)
+      assert(placed(a, 546.09, held).forall(r => r >= 0 && r < rows), (a, placed(a, 546.09, held)))
+      assertEqualsDouble(a.lo, 539.695, 1e-9)
+      assert(a.hi > 546.405, a)
   }
 
-  test("the axis row picks its clock pattern by zoom") {
-    assertEquals(Chart.axisRow(0L, 3600, 122, ZoneOffset.UTC).take(11), "01-01 00:00")
-    assertEquals(Chart.axisRow(0L, 86400, 122, ZoneOffset.UTC).take(10), "1970-01-01")
-    assertEquals(Chart.axisRow(0L, 60, 122, ZoneOffset.UTC).take(5), "00:00")
-    assertEquals(Chart.axisRow(0L, 1, 122, ZoneOffset.UTC).take(8), "00:00:00")
+  test("three sells just above a current price on the top rows each keep a row at 50 rows") {
+    // At 50 rows the five percent pad leaves the current price on row 2, two rows for three.
+    val series = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
+    val three = Vector(546.09, 546.10, 546.11, 546.12)
+    val wide = Chart.axis(series, Some(touch), 50, three, above = 3).get
+    assertEquals(wide.trueRow(546.09), 3, wide)
+    assertEquals(placed(wide, 546.09, three).sorted, Vector(0, 1, 2))
+    assertEqualsDouble(wide.lo, 539.694, 1e-9)
+  }
+
+  test("a current price on the bottom row leaves a row for each held price below it") {
+    // The plotted range starts at the current price, with a buy ticket one tick under it.
+    val series = Vector(Some(Column(546.09, 546.09, 552.0, 552.0, 0)))
+    val held = Vector(546.09, 546.08)
+    for rows <- Vector(9, 20) do
+      val a = Chart.axis(series, Some(touch), rows, held, below = 1).get
+      assertEquals(a.trueRow(546.09), rows - 2, a)
+      assert(placed(a, 546.09, held).forall(r => r >= 0 && r < rows), (a, placed(a, 546.09, held)))
+      assertEqualsDouble(a.hi, 552.296, 1e-9)
+      assert(a.lo < 545.784, a)
+  }
+
+  test("a current price with enough rows above it leaves the top of the range alone") {
+    val series = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
+    // No held price, as every frame draws today: the current price stays on row 0.
+    val bare = Chart.axis(series, Some(touch), 9).get
+    assertEqualsDouble(bare.lo, 539.695, 1e-9)
+    assertEqualsDouble(bare.hi, 546.405, 1e-9)
+    assertEquals(bare.trueRow(546.09), 0)
+    // One held price above and the current price already on row 1 of 30: room exactly met.
+    val met = Chart.axis(series, Some(touch), 30, Vector(546.10), above = 1).get
+    assertEqualsDouble(met.lo, 539.695, 1e-9)
+    assertEqualsDouble(met.hi, 546.405, 1e-9)
+    assertEquals(met.trueRow(546.09), 1)
+  }
+
+  test("the room grows for the marks counted on each side, not for the held prices") {
+    // Two marks above, whatever the held prices repeat: the top grows for two rows, not three.
+    val upper = Vector(Some(Column(540.0, 540.0, 546.11, 546.11, 0)))
+    val up = Chart.axis(upper, Some(touch), 9, Vector(546.10, 546.11, 546.11), above = 2).get
+    assertEqualsDouble(up.lo, 539.6945, 1e-9)
+    assertEqualsDouble(up.hi, 548.5498076923, 1e-9)
+    assertEquals(up.trueRow(546.09), 2)
+    // Two marks below: the bottom grows for two rows, not three.
+    val lower = Vector(Some(Column(546.07, 546.07, 552.0, 552.0, 0)))
+    val down = Chart.axis(lower, Some(touch), 9, Vector(546.08, 546.07, 546.07), below = 2).get
+    assertEqualsDouble(down.lo, 543.7028846154, 1e-9)
+    assertEqualsDouble(down.hi, 552.2965, 1e-9)
+    assertEquals(down.trueRow(546.09), 6)
+  }
+
+  test("the room counts the marks as the orders axis places them, not distinct prices") {
+    // A sell resting at the current price sits above it, so the top keeps a row for it.
+    val top = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
+    val seller = Chart.axis(top, Some(touch), 9, Vector(546.09), above = 1).get
+    assertEquals(seller.trueRow(546.09), 1, seller)
+    assertEquals(Chart.axis(top, Some(touch), 9, Vector(546.09)).get.trueRow(546.09), 0)
+    // The entry and a buy at one price under it are two marks, so the bottom keeps two rows.
+    val bottom = Vector(Some(Column(546.09, 546.09, 552.0, 552.0, 0)))
+    val both = Chart.axis(bottom, Some(touch), 9, Vector(546.08, 546.08), below = 2).get
+    assertEquals(both.trueRow(546.09), 6, both)
+    assertEqualsDouble(both.lo, 543.7030769231, 1e-9)
+  }
+
+  test("held prices that cannot all fit keep the five percent pad and are left off as before") {
+    // Three prices above and the current price need four rows of three.
+    val series = Vector(Some(Column(540.0, 540.0, 546.09, 546.09, 0)))
+    val held = Vector(546.09, 546.10, 546.11, 546.12)
+    val a = Chart.axis(series, Some(touch), 3, held, above = 3).get
+    assertEqualsDouble(a.lo, 539.694, 1e-9)
+    assertEqualsDouble(a.hi, 546.426, 1e-9)
+    assert(placed(a, 546.09, held).exists(_ < 0), placed(a, 546.09, held))
+  }
+
+  test("held prices with room either side of the current price keep the five percent pad") {
+    // The plan's pinned case: the current price 546.095 keeps row 6 of nine and row 13 of 19.
+    val series = Vector(Some(Column(548.0, 544.0, 552.0, 546.0, 0)))
+    val book = Book(Vector(lvl("546.09")), Vector(lvl("546.10")), 1L)
+    val held = Vector(552.0, 546.10, 546.095, 546.0, 544.0)
+    for (rows, row) <- Vector((9, 6), (19, 13)) do
+      val a = Chart.axis(series, Some(book), rows, held, above = 2, below = 2).get
+      assertEqualsDouble(a.lo, 543.60, 1e-9)
+      assertEqualsDouble(a.hi, 552.40, 1e-9)
+      assertEquals(a.trueRow(546.095), row)
+      assert(placed(a, 546.095, held).forall(r => r >= 0 && r < rows))
+  }
+
+  test(
+    "plain labels put a faint row middle price on every third row from the second and the last"
+  ) {
+    val rows = Chart.plainLabels(Axis(543.6, 552.4, 9))
+    assertEquals(rows.size, 9)
+    val priced = Map(1 -> "550.93", 4 -> "548.00", 7 -> "545.07", 8 -> "544.09")
+    rows.zipWithIndex.foreach { (row, i) =>
+      priced.get(i) match
+        case Some(price) =>
+          assertEquals(row, Screen.dim + " " * 8 + Chart.rjust(price, 8) + " " + Screen.reset)
+          assertEquals(Chart.plain(row).indexOf(price), 16 - price.length)
+        case None => assertEquals(row, " " * 17)
+    }
+    val btc = Chart.plainLabels(Axis(98000.0, 100000.0, 4)).map(Chart.plain)
+    assertEquals(btc, Vector(" " * 17, " " * 8 + "   99250 ", " " * 17, " " * 8 + "   98250 "))
+    val huge = Chart.plainLabels(Axis(1e9, 2e9, 2)).map(Chart.plain)
+    assert(huge.forall(_.length == 17), huge)
+    assertEquals(huge(1).trim, Trading.display(BigDecimal(1.25e9), 8))
+  }
+
+  test("fill marks land at their time column and true row and a past fill drops off the left") {
+    val a = Axis(543.6, 552.4, 9)
+    def fill(side: Side, time: Long, price: String, quantity: String): Fill =
+      Fill("XMR", side, time, BigDecimal(price), BigDecimal(quantity))
+    def marks(fills: Fill*): Vector[PlotMark] =
+      Chart.fillMarks(fills.toVector, a, 1_000_000L, 2000L, 23, Style.colour)
+    val buy = Style.colour.bid + Screen.bold
+    val sell = Style.colour.ask + Screen.bold
+    assertEquals(
+      marks(fill(Side.Buy, 999_000L, "546.00", "0.2")),
+      Vector(PlotMark(22, 6, '▲', buy))
+    )
+    assertEquals(
+      marks(fill(Side.Sell, 1_001_000L, "549.00", "0.2")),
+      Vector(PlotMark(22, 3, '▼', sell))
+    )
+    assertEquals(marks(fill(Side.Buy, 950_000L, "546.00", "0.2")), Vector.empty)
+    assertEquals(marks(fill(Side.Buy, 955_000L, "546.00", "0.2")), Vector(PlotMark(0, 6, '▲', buy)))
+    assertEquals(marks(fill(Side.Buy, 954_000L, "546.00", "0.2")), Vector.empty)
+    assertEquals(
+      Chart.fillMarks(
+        Vector(fill(Side.Sell, 999_000L, "546.00", "1")),
+        a,
+        1_000_000L,
+        2000L,
+        23,
+        Style.mono
+      ),
+      Vector(PlotMark(22, 6, '▼', Screen.bold))
+    )
+    // A mono buy carries no colour either.
+    assertEquals(
+      Chart.fillMarks(
+        Vector(fill(Side.Buy, 999_000L, "546.00", "0.2")),
+        a,
+        1_000_000L,
+        2000L,
+        23,
+        Style.mono
+      ),
+      Vector(PlotMark(22, 6, '▲', Screen.bold))
+    )
+    // 547.47 is on true row 5, where the rounded row would be 4.
+    assertEquals(
+      marks(fill(Side.Buy, 999_000L, "547.47", "0.2")),
+      Vector(PlotMark(22, 5, '▲', buy))
+    )
+  }
+
+  test("two fills in one cell show the larger dollar fill, the later on a tie") {
+    val a = Axis(543.6, 552.4, 9)
+    def fill(side: Side, time: Long, price: String, quantity: String): Fill =
+      Fill("XMR", side, time, BigDecimal(price), BigDecimal(quantity))
+    def marks(fills: Fill*): Vector[PlotMark] =
+      Chart.fillMarks(fills.toVector, a, 1_000_000L, 2000L, 23, Style.colour)
+    val sell = PlotMark(20, 6, '▼', Style.colour.ask + Screen.bold)
+    val small = fill(Side.Buy, 995_000L, "546.00", "0.2")
+    val large = fill(Side.Sell, 996_000L, "546.05", "1")
+    assertEquals(marks(small, large), Vector(sell))
+    assertEquals(marks(large, small), Vector(sell))
+    val early = fill(Side.Buy, 995_000L, "546.00", "1")
+    val late = fill(Side.Sell, 996_000L, "546.00", "1")
+    assertEquals(marks(late, early), Vector(sell))
+    assertEquals(marks(early, late), Vector(sell))
+    val apart = marks(small, fill(Side.Sell, 999_000L, "549.00", "1"))
+    assertEquals(apart.map(m => (m.col, m.row)).toSet, Set((20, 6), (22, 3)))
+  }
+
+  test("the time row ticks a round time with its label after it") {
+    // Two seconds per cell picks thirty second ticks. 08:20:00 falls in cell 10.
+    assertEquals(Chart.timeRow(29_980L, 2L, 23, ZoneOffset.UTC), " " * 10 + "|08:20:00" + " " * 4)
+    // At cell 14 of 23 the label has its nine cells.
+    assertEquals(Chart.timeRow(29_972L, 2L, 23, ZoneOffset.UTC), " " * 14 + "|08:20:00")
+    // At cell 15 only the tick is drawn.
+    assertEquals(
+      Chart.timeRow(29_970L, 2L, 23, ZoneOffset.UTC),
+      "|08:19:30" + " " * 6 + "|" + " " * 7
+    )
+  }
+
+  test("the time row picks the smallest round interval that keeps fourteen cells") {
+    // Four seconds per cell needs 56 seconds, so the ticks are whole minutes.
+    assertEquals(
+      Chart.timeRow(10L, 4L, 30, ZoneOffset.UTC),
+      " " * 12 + "|00:01:00" + " " * 6 + "|" + "  "
+    )
+    // The clock is local: one round minute in a zone half an hour ahead.
+    assertEquals(
+      Chart.timeRow(10L, 4L, 30, ZoneOffset.ofHoursMinutes(9, 30)),
+      " " * 12 + "|09:31:00" + " " * 6 + "|" + "  "
+    )
+  }
+
+  test("the time row never ticks inside fourteen cells of the last tick") {
+    // Two days per cell holds a midnight in every cell. Day ticks carry the date.
+    assertEquals(
+      Chart.timeRow(0L, 172_800L, 30, ZoneOffset.UTC),
+      "|01-01" + " " * 8 + "|01-29" + " " * 8 + "|" + " "
+    )
   }
 
   test("rjust pads on the left and cuts on the right") {

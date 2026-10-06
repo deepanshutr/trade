@@ -2,7 +2,6 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
@@ -17,13 +16,11 @@ args.fixtures = str(Path('fixtures').resolve())
 output = Path(args.output)
 output.mkdir(exist_ok=True)
 
+# The start second of the chart's last cell, read from the ticks of the time axis.
 def axis(frame):
-    rows = [row.split('|', 1)[0] for row in frame['lines'] if 'c line 1s/col' in row]
-    assert len(rows) == 1, rows
-    values = re.findall(r'(?<![\d:])(\d{2}):(\d{2}):(\d{2})(?![\d:])', rows[0])
-    assert values, rows
-    h, m, s = map(int, values[-1])
-    return h * 3600 + m * 60 + s
+    edge = playback.right_edge(frame)
+    assert edge is not None, frame['lines']
+    return edge[0]
 
 records = []
 failures = []
@@ -63,7 +60,8 @@ for number in range(3):
         ordered = int(resized['entered_ns']) < int(pan['entered_ns'])
         minimum = elapsed // 1_000_000_000 - 1
         maximum = (elapsed + 999_999_999) // 1_000_000_000 + 1
-        correct_step = minimum <= difference + 21 <= maximum
+        # A tick reading may be one second late at two seconds a cell, in either frame.
+        correct_step = minimum - 1 <= difference + 21 <= maximum + 1
         record = {'trial': number + 1, 'elapsed_ns': elapsed, 'clock_difference_seconds': difference,
                   'expected_pan_seconds': 21, 'resize_before_pan': ordered, 'correct_step': correct_step,
                   'samples': samples, 'before_axis': axis(before), 'after_axis': axis(after)}

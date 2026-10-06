@@ -204,24 +204,27 @@ class IndependentOpenProfitSpec extends TempDirectorySuite:
       val drawn = frame(p, cols, rows, style, mode)
       assertEquals(drawn.lines.size, rows)
       assert(drawn.lines.forall(line => Chart.plain(line).length == cols))
-      val raw = drawn.lines(rows - 12)
+      val raw = drawn.lines(rows - 11)
       val (plain, paint) = colors(raw)
-      val start = Layout.workspaceMarketWidth(cols) + 1
-      val half = (cols - start) / 2
-      val left = plain.substring(start, start + half)
-      val right = plain.substring(start + half)
-      assert(left.startsWith("Open P&L "), left)
-      assert(right.startsWith("Net P&L "), right)
-      assertEquals(plain.sliding(8).count(_ == "Open P&L"), 1)
-      assertEquals(plain.sliding(7).count(_ == "Net P&L"), 1)
-      if open.isEmpty then assert(left.contains("--"), left)
-      if net.isEmpty then assert(right.contains("--"), right)
+      // The panel's fixed columns: Open at 13 with its value in 18 to 24, Net at 26 with its
+      // value in 30 to 36. Only the values take a colour.
+      val panel = plain.take(38)
+      assertEquals(panel.slice(13, 17), "Open", panel)
+      assertEquals(panel.slice(26, 29), "Net", panel)
+      assertEquals(panel.sliding(4).count(_ == "Open"), 1)
+      assertEquals(panel.sliding(3).count(_ == "Net"), 1)
+      val openValue = panel.slice(18, 25).trim
+      val netValue = panel.slice(30, 37).trim
+      if open.isEmpty then assertEquals(openValue, "--", panel)
+      if net.isEmpty then assertEquals(netValue, "--", panel)
       if style.colour then
         def expected(v: Option[BigDecimal]): Option[Int] = v.map(n => if n >= 0 then 32 else 31)
-        assert(paint.slice(start, start + "Open P&L".length).forall(_ == expected(open)))
-        assert(
-          paint.slice(start + half, start + half + "Net P&L".length).forall(_ == expected(net))
-        )
+        val openAt = panel.indexOf(openValue, 18)
+        val netAt = panel.indexOf(netValue, 30)
+        assert(paint.slice(openAt, openAt + openValue.length).forall(_ == expected(open)), raw)
+        assert(paint.slice(netAt, netAt + netValue.length).forall(_ == expected(net)), raw)
+        assert(paint.slice(12, 18).forall(_.isEmpty), raw)
+        assert(paint.slice(25, 30).forall(_.isEmpty), raw)
       else assert(!raw.contains("\u001b"))
   }
 
@@ -244,7 +247,7 @@ class IndependentOpenProfitSpec extends TempDirectorySuite:
       ZoneOffset.UTC,
       Style.mono
     )
-    val line = drawn.lines(18)
-    assert(line.contains("Open P&L --"), line)
-    assert(line.contains("Net P&L --"), line)
+    val line = drawn.lines(19).take(38).split(" +").mkString(" ")
+    assert(line.contains("Open --"), line)
+    assert(line.contains("Net --"), line)
   }

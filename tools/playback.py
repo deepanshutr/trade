@@ -2,7 +2,7 @@
 """Offline playback through Main.run and a real pseudo terminal, using the standard library."""
 
 import argparse
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 import errno
 import fcntl
 import hashlib
@@ -122,29 +122,71 @@ def market_matches(frame, coin, midpoint):
     if not frame["lines"]:
         return False
     coin, midpoint = re.escape(coin), re.escape(midpoint)
-    pattern = rf"connection active (\d+\.\d)s {coin} mid {midpoint}(?: (?:mark|oracle|24h|fund|open interest|volume) \S+)*"
+    pattern = rf"{coin} mid {midpoint}(?: (?:mark|oracle|24h|fund|open interest|volume) \S+)* ping (\d+\.\d)s"
     header = frame["lines"][0].split("|", 1)[0]
     matched = re.fullmatch(pattern, " ".join(header.split()))
     return matched is not None and float(matched[1]) <= 5
 
 
-def history_matches(before, after, shift, max_seconds=10, clock_count=3):
+# The band holds the last twelve rows. Its panel is the left 38 columns, with the mode heading on
+# its first row, the status on its fourth and the two trade buttons on its seventh.
+BAND, PANEL = 12, 38
+
+
+def panel(frame):
+    """The panel's twelve rows, each 38 columns wide."""
+    return [row[:PANEL].ljust(PANEL) for row in frame["lines"][-BAND:]]
+
+
+def prop_ready(frame):
+    """Prop on XMR is drawn and its status row is blank, so a click is taken."""
+    rows = panel(frame)
+    return len(rows) == BAND and rows[0].startswith("PROP XMR") and rows[3].strip() == ""
+
+
+def trade_clicks(frame):
+    """The terminal column and row, counted from one, at the middle of each trade button: the
+    buy button first, then the sell button."""
+    buttons = list(re.finditer(r"\[[^\]]*\]", panel(frame)[6]))
+    assert len(buttons) == 2, "the panel's seventh row lacks its two trade buttons"
+    row = len(frame["lines"]) - BAND + 6
+    return [((button.start() + button.end()) // 2 + 1, row + 1) for button in buttons]
+
+
+# The time axis row holds the caption in the left pane of 38 columns, then a tick at a round time
+# with its hh:mm:ss label after it, and the outlook of 39 columns closes every row above the band.
+def right_edge(frame):
+    """The start second of the chart's last cell, read from every labelled tick of the time axis.
+
+    A tick marks a round time inside its cell, so each reading is up to one cell late, and the
+    readings of one row must agree within a cell."""
+    width = max((len(row) for row in frame["lines"]), default=0)
+    caption = r"c line (\d+)s/col(?: history)? $"
+    rows = [row.ljust(width) for row in frame["lines"] if re.search(caption, row[:38])]
+    if len(rows) != 1:
+        return None
+    per_cell = int(re.search(caption, rows[0][:38])[1])
+    plot = rows[0][38:width - 39]
+    edges = [(int(h) * 3600 + int(m) * 60 + int(s) + (len(plot) - 1 - match.start()) * per_cell) % 86400
+             for match in re.finditer(r"\|(\d{2}):(\d{2}):(\d{2})(?![\d:])", plot)
+             for h, m, s in [match.groups()]]
+    if not edges or any(abs((edge - edges[0] + 43200) % 86400 - 43200) >= per_cell for edge in edges):
+        return None
+    return edges[0], per_cell
+
+
+def history_matches(before, after, shift, max_seconds=10):
     elapsed = after["captured_ns"] - before["captured_ns"]
     if elapsed < 0 or elapsed > max_seconds * 1_000_000_000:
         return False
-    minimum_progress = elapsed // 1_000_000_000 - 1
-    maximum_progress = (elapsed + 999_999_999) // 1_000_000_000 + 1
-    clocks = []
-    for frame in (before, after):
-        rows = [row for row in frame["lines"] if "c line 1s/col" in row]
-        if len(rows) != 1:
-            return False
-        values = re.findall(r"(?<![\d:])(\d{2}):(\d{2}):(\d{2})(?![\d:])", rows[0])
-        if len(values) != clock_count or not 1 <= clock_count <= 3:
-            return False
-        clocks.append([int(h) * 3600 + int(m) * 60 + int(s) for h, m, s in values])
-    return all(minimum_progress <= (new - old + 43200) % 86400 - 43200 - shift <= maximum_progress
-               for old, new in zip(*clocks))
+    old, new = right_edge(before), right_edge(after)
+    if old is None or new is None or old[1] != new[1]:
+        return False
+    # Each reading may be up to one cell less one second late, so the allowance widens by that.
+    slack = new[1] - 1
+    minimum_progress = elapsed // 1_000_000_000 - 1 - slack
+    maximum_progress = (elapsed + 999_999_999) // 1_000_000_000 + 1 + slack
+    return minimum_progress <= (new[0] - old[0] + 43200) % 86400 - 43200 - shift <= maximum_progress
 
 
 def percentile(values, percent):
@@ -194,20 +236,24 @@ def validate_wallet(saved, results, fixture_book):
                 assert expected_side == "sell" and held == 0, "impossible empty-wallet refusal"
             refused.append(receipt)
             continue
-        match = re.fullmatch(r"PROP XMR (buy|sell) filled ([0-9.]+) at ([^\n]+)\nFee \$([0-9.]+) \| #(\d+) .+", receipt)
+        # A fill names the money it put up at one times leverage, its filled value in cents.
+        match = re.fullmatch(r"PROP XMR (buy|sell) filled (\$[0-9.]+) at ([^\n]+)\nFee \$([0-9.]+) \| #(\d+) .+", receipt)
         assert match, "invalid fill receipt"
-        side, quantity, shown, fee, count = match.groups()
+        side, dollars, shown, fee, count = match.groups()
         assert side == expected_side, "fill side differs from clicked button"
-        quantity, fee = Decimal(quantity), Decimal(fee)
+        fee = Decimal(fee)
         levels = fixture_book["levels"][1 if side == "buy" else 0]
         requested = (Decimal(500) / Decimal(levels[0]["px"]) // Decimal("0.001")) * Decimal("0.001")
-        assert quantity > 0 and quantity == (requested if side == "buy" else min(requested, held)), "wrong filled quantity"
+        quantity = requested if side == "buy" else min(requested, held)
+        assert quantity > 0, "wrong filled quantity"
         remaining, value = quantity, Decimal(0)
         for level in levels:
             take = min(remaining, Decimal(level["sz"]))
             value += take * Decimal(level["px"])
             remaining -= take
         assert remaining == 0, "fill exceeded known depth"
+        # The fixture's fills stay under a thousand dollars, so the text keeps both decimals.
+        assert dollars == "$" + str(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)), "dollars differ from the filled value"
         assert fee == value * Decimal("0.0005"), "fee differs from fixed-book filled value"
         approximate = shown.startswith("~")
         price = Decimal(shown.lstrip("~"))
@@ -454,17 +500,17 @@ class Playback:
         self.frame(market("XMR"))
         assert not any(" bad " in f["lines"][0] for f in self.frames.complete), "recorded input was rejected"
         if self.mode == "normal":
-            self.key("zoom out", ESC + b"[B", contains("2s/col"))
-            self.key("zoom in", ESC + b"[A", contains("1s/col"))
+            self.key("zoom out", ESC + b"[B", contains("4s/col"))
+            self.key("zoom in", ESC + b"[A", contains("2s/col"))
             self.key("candles", b"c", contains("1m/candle"))
-            self.key("line", b"c", contains("1s/col"))
+            self.key("line", b"c", contains("2s/col"))
             before = self.frames.complete[-1]
-            # Workspace has a 53-column market panel, leaving 28 one-second dots.
+            # The scrub step is a quarter of the 46 one second dots in the plot of 23 cells at 100
+            # columns, rounded down.
             step = 11
-            count = 2
-            history = self.key("history back", ESC + b"[D", lambda f: history_matches(before, f, -step, clock_count=count))
+            history = self.key("history back", ESC + b"[D", lambda f: history_matches(before, f, -step))
             self.key("history forward", ESC + b"[C",
-                     lambda f: history_matches(history, f, step, clock_count=count) and history_matches(before, f, 0, 20, clock_count=count))
+                     lambda f: history_matches(history, f, step) and history_matches(before, f, 0, 20))
             self.key("open market prompt", b"m", contains("market:"))
             self.key("cancel market prompt with lone Escape", ESC, market("XMR"))
             pasted = ESC + b"[200~qmETH\r1234567890" + ESC + b"[201~c"
@@ -476,7 +522,7 @@ class Playback:
                                lambda f: len(f["lines"]) == 40 and market("XMR")(f))
             assert all(len(row) == 120 for row in wide["lines"])
         elif self.mode == "speed":
-            self.frame(lambda f: contains("PROP XMR")(f) and f["lines"][-11].split("|")[-1].strip() == "")
+            places = trade_clicks(self.frame(prop_ready))
             clicks = self.clicks
             began = time.monotonic_ns()
             for index in range(600):
@@ -484,7 +530,7 @@ class Playback:
                 while time.monotonic_ns() < deadline:
                     self.pump(max(0, min(0.01, (deadline - time.monotonic_ns()) / 1e9)))
                 self.command("quote", coin="XMR")
-                x, y = (65 if index % 2 == 0 else 89), 25
+                x, y = places[index % 2]
                 clicks.append(time.monotonic_ns())
                 self.write(ESC + f"[<0;{x};{y}M".encode() + ESC + f"[<0;{x};{y}m".encode())
                 self.pump(0)
@@ -537,7 +583,7 @@ class Playback:
                                  "arrival_to_frame_ns": matched["captured_ns"] - arrived,
                                  "write_duration_ns": arrived - started})
             self.key("navigate with held " + self.mode, ESC + b"[B",
-                     lambda f: market("ETH")(f) and contains("2s/col")(f))
+                     lambda f: market("ETH")(f) and contains("4s/col")(f))
             assert not any(e["kind"] == "work-ended" for e in self.events)
         elif self.mode == "queue":
             self.command("hold-queue")
@@ -549,7 +595,7 @@ class Playback:
             arrived = time.monotonic_ns()
             self.event("queued-key", 2)
             self.command("release-queue")
-            frame = self.frame(contains("5s/col"), after)
+            frame = self.frame(contains("10s/col"), after)
             self.actions.append({"label": "drain held queue", "write_started_ns": started,
                                  "write_completed_ns": arrived, "frame_completed_ns": frame["captured_ns"],
                                  "arrival_to_frame_ns": frame["captured_ns"] - arrived,
@@ -572,7 +618,7 @@ class Playback:
             self.frame(contains("Checking BTC"))
             self.key("cancel held selection", ESC, market("ETH"))
             self.key("navigate after cancellation", ESC + b"[B",
-                     lambda f: market("ETH")(f) and contains("2s/col")(f))
+                     lambda f: market("ETH")(f) and contains("4s/col")(f))
         quit_started = time.monotonic_ns()
         self.write(b"q")
         quit_arrived = time.monotonic_ns()

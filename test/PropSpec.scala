@@ -28,6 +28,48 @@ class PropSpec extends TempDirectorySuite:
     finally reopened.close()
   }
 
+  test("a prop market fill names the money it put up at the fill price, as a live fill does") {
+    val ledger = PropLedger.open(
+      tempDirectory("desk-prop-test"),
+      "mainnet",
+      BigDecimal(1000),
+      BigDecimal("0.001")
+    )
+    def first(text: Either[String, String]): String = text.toOption.get.takeWhile(_ != '\n')
+    try
+      assertEquals(
+        first(ledger.fill(plan(Side.Buy, "0.183", "546.09"), 1000L)),
+        "PROP XMR buy filled $99.93 at 546.09"
+      )
+      // Half a cent rounds up: 0.5 at 40.01 is 20.005.
+      assertEquals(
+        first(ledger.fill(plan(Side.Buy, "0.5", "40.01"), 2000L)),
+        "PROP XMR buy filled $20.01 at 40.01"
+      )
+      assertEquals(
+        first(ledger.fill(plan(Side.Sell, "0.1", "550"), 3000L)),
+        "PROP XMR sell filled $55.00 at 550"
+      )
+      val part = plan(Side.Buy, "3", "100")
+        .copy(estimatedQuantity = BigDecimal("1.5"), estimatedValue = BigDecimal(150))
+      assertEquals(first(ledger.fill(part, 4000L)), "PROP XMR buy partial $150.00 at 100")
+      // The log keeps the same text, the fee and the count after it, and no quantity.
+      assert(
+        ledger.account.orders.last
+          .startsWith("PROP XMR buy partial $150.00 at 100\nFee $0.15 | #4 "),
+        ledger.account.orders.last
+      )
+      assert(!ledger.account.orders.exists(_.contains(" 0.183 ")), ledger.account.orders)
+    finally ledger.close()
+  }
+
+  test("a prop fill of a thousand dollars or more names them in the live compact form") {
+    def first(p: OrderPlan): String =
+      PropLedger.fillText(p, BigDecimal(1), 1L, 0L).takeWhile(_ != '\n')
+    assertEquals(first(plan(Side.Buy, "2", "1000")), "PROP XMR buy filled $2000 at 1000")
+    assertEquals(first(plan(Side.Buy, "1", "1234.56")), "PROP XMR buy filled $~1234 at 1234.56")
+  }
+
   test("partial fills use actual depth quantity and reject excess exposure without mutation") {
     val ledger = PropLedger.open(
       tempDirectory("desk-prop-test"),

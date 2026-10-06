@@ -60,39 +60,6 @@ class RefinePortfolioSpec extends munit.FunSuite:
     assertEquals(PortfolioView.usdcCash(spot), None)
   }
 
-  test("entry and liquidation labels preserve every plotted cell and scale in all chart modes") {
-    for mode <- ChartMode.values; style <- Vector(Style.mono, Style.colour) do
-      val s = Snapshot
-        .initial("XMR", now)
-        .copy(
-          chartMode = mode,
-          samples = Vector.tabulate(200)(i => (now / 1000 - 199 + i, 99.0 + i % 3)),
-          book = Some(Book(Vector(Level("99", "1", 1)), Vector(Level("101", "1", 1)), now))
-        )
-      val original = Screen.renderMarket(s, 61, 9, now, ZoneOffset.UTC, style)
-      val p =
-        PortfolioView(entry = Some(BigDecimal("100")), liquidation = Some(BigDecimal("100.01")))
-      val marked =
-        Screen.renderMarket(s, 61, 9, now, ZoneOffset.UTC, style, portfolio = p)
-      assertEquals(marked.axis, original.axis)
-      for row <- 1 to original.priceRows do
-        assertEquals(Chart.plain(marked.lines(row)).length, 61)
-        assertEquals(
-          Chart.plain(marked.lines(row)).drop(Layout.leftW),
-          Chart.plain(original.lines(row)).drop(Layout.leftW)
-        )
-      val text = marked.lines.map(Chart.plain).mkString("\n")
-      assert(text.contains("Entry 100"))
-      assert(text.contains("Liq 100.01"))
-      assert(marked.lines.exists(line => line.contains("Entry 100") && line.contains("Liq 100.01")))
-      val overflow = p
-        .copy(entry = Some(BigDecimal(1000)), liquidation = Some(BigDecimal(1)))
-        .markerRows(original.axis, mode, Layout.leftW, style)
-      assert(overflow(0).contains("↑Entry"))
-      assert(overflow(original.priceRows - 1).contains("↓Liq"))
-      assertEquals(p.markerRows(None, mode, Layout.leftW, style), Map.empty)
-  }
-
   test("another market never inherits the previous market holdings or chart markers") {
     val view = TradingView(
       "BTC",

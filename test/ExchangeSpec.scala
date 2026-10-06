@@ -41,6 +41,17 @@ class ExchangeSpec extends munit.FunSuite:
     assertEquals(order("r").bool, false)
   }
 
+  test("a posted order is sent add liquidity only and every other order immediate or cancel") {
+    def tif(order: SavedOrder): String =
+      Exchange.action(order)("orders")(0)("t")("limit")("tif").str
+    assertEquals(tif(saved.copy(post = true)), "Alo")
+    assertEquals(tif(saved), "Ioc")
+    assertEquals(tif(saved.copy(reduceOnly = true)), "Ioc")
+    val posted = Exchange.action(saved.copy(post = true))
+    posted("orders")(0)("t")("limit")("tif") = "Ioc"
+    assertEquals(ujson.write(posted), ujson.write(Exchange.action(saved)))
+  }
+
   test("the action carries the saved reduce-only flag and nothing else changes") {
     assertEquals(saved.reduceOnly, false)
     val opening = Exchange.action(saved)
@@ -53,29 +64,20 @@ class ExchangeSpec extends munit.FunSuite:
 
   test("a top-level err leaves the saved order unresolved") {
     assertEquals(
-      Exchange.outcome(Some(ujson.Obj("status" -> "err", "response" -> "x")), saved),
+      Exchange.placed(Some(ujson.Obj("status" -> "err", "response" -> "x")), saved),
       None
     )
   }
 
   test("an err reply plus unknownOid releases only strictly past expiry plus sixty seconds") {
-    val unknown = Some(ujson.Obj("status" -> "unknownOid"))
     Vector(saved.expiresAfter + 1, saved.expiresAfter + 60000L).foreach { now =>
       assertEquals(
-        Exchange.recovered(
-          unknown,
-          saved,
-          now,
-          elapsedMs = waited,
-          allowUnknown = false,
-          errReply = true
-        ),
+        Exchange.released(saved, now, elapsedMs = waited, allowUnknown = false, errReply = true),
         None
       )
     }
     assertEquals(
-      Exchange.recovered(
-        unknown,
+      Exchange.released(
         saved,
         saved.expiresAfter + 60001L,
         elapsedMs = waited,
@@ -86,189 +88,87 @@ class ExchangeSpec extends munit.FunSuite:
     )
   }
 
-  test("an err reply never releases on failed, malformed, open or other-order lookups") {
-    Vector(
-      None,
-      Some(ujson.Str("unknownOid")),
-      Some(lookup("open")),
-      Some(lookup("filled", "wrong"))
-    ).foreach { reply =>
-      assertEquals(
-        Exchange.recovered(
-          reply,
-          saved,
-          66001L,
-          elapsedMs = waited,
-          allowUnknown = false,
-          errReply = true
-        ),
-        None
-      )
+  test("failed, malformed, open and other-order lookups are never an unknown order") {
+    Vector(None, Some(ujson.Str("unknownOid")), Some(ujson.Obj()), Some(lookup("open"))).foreach {
+      reply =>
+        assert(!VenueOrders.lookup(reply).contains(VenueOrders.Lookup.Unknown), reply.toString)
     }
+    assert(!Exchange.sameOrder(Some(lookup("filled", "wrong")), saved))
+    assertEquals(
+      VenueOrders.lookup(Some(ujson.Obj("status" -> "unknownOid"))),
+      Some(VenueOrders.Lookup.Unknown)
+    )
   }
 
   test("outer success does not turn an inner error into a fill") {
     assertEquals(
-      Exchange.outcome(reply(ujson.Obj("error" -> "rejected")), saved),
-      Some("XMR order rejected")
+      Exchange.placed(reply(ujson.Obj("error" -> "rejected")), saved),
+      Some(VenueOrders.Placed.Rejected("rejected"))
     )
   }
 
-  test("partial fills remain partial and unexpected replies remain unresolved") {
+  test("a fill within the order and its limit is read, and unexpected replies stay unresolved") {
     val fill = ujson.Obj("filled" -> ujson.Obj("totalSz" -> "1", "avgPx" -> "100", "oid" -> 9))
-    assertEquals(Exchange.outcome(reply(fill), saved), Some("XMR filled 1 at 100"))
-    assertEquals(Exchange.outcome(None, saved), None)
-    assertEquals(Exchange.outcome(Some(ujson.Obj()), saved), None)
     assertEquals(
-      Exchange.outcome(reply(ujson.Obj("resting" -> ujson.Obj("oid" -> 9))), saved),
-      None
+      Exchange.placed(reply(fill), saved),
+      Some(VenueOrders.Placed.Filled(BigDecimal(1), BigDecimal(100), 9L))
+    )
+    assertEquals(Exchange.placed(None, saved), None)
+    assertEquals(Exchange.placed(Some(ujson.Obj()), saved), None)
+    assertEquals(
+      Exchange
+        .placed(reply(ujson.Obj("resting" -> ujson.Obj("oid" -> 4294967296L.toDouble))), saved),
+      Some(VenueOrders.Placed.Resting(4294967296L))
     )
     val tooMuch = ujson.Obj("filled" -> ujson.Obj("totalSz" -> "6", "avgPx" -> "100", "oid" -> 9))
-    assertEquals(Exchange.outcome(reply(tooMuch), saved), None)
+    assertEquals(Exchange.placed(reply(tooMuch), saved), None)
+    val other = reply(fill).get
+    other("response")("type") = "cancel"
+    assertEquals(Exchange.placed(Some(other), saved), None)
   }
 
-  test("recovery preserves known status handling after expiry") {
-    assertEquals(
-      Exchange
-        .recovered(
-          Some(lookup("canceled")),
-          saved,
-          66001L,
-          elapsedMs = waited,
-          allowUnknown = true,
-          errReply = false
-        ),
-      Some("XMR recovered canceled")
-    )
-    assertEquals(
-      Exchange.recovered(
-        Some(lookup("futureStatus")),
-        saved,
-        66001L,
-        elapsedMs = waited,
-        allowUnknown = true,
-        errReply = false
-      ),
-      None
-    )
-    assertEquals(
-      Exchange
-        .recovered(
-          Some(lookup("open")),
-          saved,
-          66001L,
-          elapsedMs = waited,
-          allowUnknown = true,
-          errReply = false
-        ),
-      None
-    )
-    assertEquals(
-      Exchange.recovered(
-        Some(lookup("filled", "wrong")),
-        saved,
-        66001L,
-        elapsedMs = waited,
-        allowUnknown = true,
-        errReply = false
-      ),
-      None
-    )
-    assertEquals(
-      Exchange
-        .recovered(
-          Some(lookup("filled")),
-          saved,
-          66001L,
-          elapsedMs = waited,
-          allowUnknown = true,
-          errReply = false
-        ),
-      Some("XMR recovered filled")
-    )
-    assertEquals(
-      Exchange.recovered(
-        Some(lookup("iocCancelRejected")),
-        saved,
-        66001L,
-        elapsedMs = waited,
-        allowUnknown = true,
-        errReply = false
-      ),
-      Some("XMR recovered iocCancelRejected")
-    )
+  test("a lookup names the saved order only by its identity, side, size and limit") {
+    assert(Exchange.sameOrder(Some(lookup("canceled")), saved))
+    assert(Exchange.sameOrder(Some(lookup("filled")), saved))
+    assert(!Exchange.sameOrder(Some(lookup("filled", "wrong")), saved))
+    assert(!Exchange.sameOrder(None, saved))
+    assert(!Exchange.sameOrder(Some(ujson.Obj("status" -> "unknownOid")), saved))
+    assert(!Exchange.sameOrder(Some(lookup("filled")), saved.copy(side = Side.Sell)))
+    assert(!Exchange.sameOrder(Some(lookup("filled")), saved.copy(coin = "BTC")))
   }
 
   test("unknownOid releases only strictly past signed expiry plus sixty seconds") {
-    val unknown = Some(ujson.Obj("status" -> "unknownOid"))
+    Vector(65999L, 66000L).foreach { now =>
+      assertEquals(
+        Exchange.released(saved, now, elapsedMs = waited, allowUnknown = true, errReply = false),
+        None
+      )
+    }
     assertEquals(
-      Exchange.recovered(
-        unknown,
-        saved,
-        65999L,
-        elapsedMs = waited,
-        allowUnknown = true,
-        errReply = false
-      ),
-      None
-    )
-    assertEquals(
-      Exchange.recovered(
-        unknown,
-        saved,
-        66000L,
-        elapsedMs = waited,
-        allowUnknown = true,
-        errReply = false
-      ),
-      None
-    )
-    assertEquals(
-      Exchange.recovered(
-        unknown,
-        saved,
-        66001L,
-        elapsedMs = waited,
-        allowUnknown = true,
-        errReply = false
-      ),
+      Exchange.released(saved, 66001L, elapsedMs = waited, allowUnknown = true, errReply = false),
       Some("XMR not placed")
     )
   }
 
   test("unknownOid releases only after sixty-five monotonic seconds even far past wall expiry") {
-    val unknown = Some(ujson.Obj("status" -> "unknownOid"))
     val late = saved.expiresAfter + 600000L
     for (errReply, text) <- Vector(false -> "XMR not placed", true -> "XMR order rejected") do
       Vector(0L, 64999L).foreach { elapsed =>
         assertEquals(
-          Exchange
-            .recovered(unknown, saved, late, elapsed, allowUnknown = true, errReply = errReply),
+          Exchange.released(saved, late, elapsed, allowUnknown = true, errReply = errReply),
           None,
           s"released after $elapsed ms with err $errReply"
         )
       }
       assertEquals(
-        Exchange.recovered(unknown, saved, late, 65000L, allowUnknown = true, errReply = errReply),
+        Exchange.released(saved, late, 65000L, allowUnknown = true, errReply = errReply),
         Some(text)
       )
-    assertEquals(
-      Exchange.recovered(
-        Some(lookup("filled")),
-        saved,
-        0L,
-        0L,
-        allowUnknown = false,
-        errReply = false
-      ),
-      Some("XMR recovered filled")
-    )
   }
 
   test("unknownOid cannot release without permission even well past expiry") {
     assertEquals(
-      Exchange.recovered(
-        Some(ujson.Obj("status" -> "unknownOid")),
+      Exchange.released(
         saved,
         saved.expiresAfter + 600000L,
         elapsedMs = waited,
@@ -277,27 +177,6 @@ class ExchangeSpec extends munit.FunSuite:
       ),
       None
     )
-  }
-
-  test("failed and malformed lookups never release after expiry") {
-    Vector(
-      None,
-      Some(ujson.Obj()),
-      Some(ujson.Str("unknownOid")),
-      Some(ujson.Obj("status" -> "err"))
-    ).foreach { reply =>
-      assertEquals(
-        Exchange.recovered(
-          reply,
-          saved,
-          66001L,
-          elapsedMs = waited,
-          allowUnknown = true,
-          errReply = false
-        ),
-        None
-      )
-    }
   }
 
   test("HTTP failures and unparsable bodies are neither refusals nor unknown orders") {
@@ -324,18 +203,8 @@ class ExchangeSpec extends munit.FunSuite:
       val lookup = exchange.info(ujson.Obj())
       assertEquals(post, None)
       assertEquals(lookup, None)
-      assertEquals(Exchange.outcome(post, saved), None)
-      assertEquals(
-        Exchange.recovered(
-          lookup,
-          saved,
-          66001L,
-          elapsedMs = waited,
-          allowUnknown = true,
-          errReply = false
-        ),
-        None
-      )
+      assertEquals(Exchange.placed(post, saved), None)
+      assertEquals(VenueOrders.lookup(lookup), None)
     try
       val refusal = """{"status":"err","response":"x"}"""
       val unknown = """{"status":"unknownOid"}"""
@@ -384,7 +253,7 @@ class ExchangeSpec extends munit.FunSuite:
     assertEquals(value, "new data")
   }
 
-  private def recoveredWith(field: String, value: String): Option[String] =
+  private def lookupWith(field: String, value: String): Option[ujson.Value] =
     val order = ujson.Obj(
       "cloid" -> saved.id,
       "coin" -> saved.coin,
@@ -393,61 +262,33 @@ class ExchangeSpec extends munit.FunSuite:
       "origSz" -> saved.quantity
     )
     order(field) = ujson.Str(value)
-    Exchange.recovered(
-      Some(
-        ujson.Obj(
-          "status" -> "order",
-          "order" -> ujson.Obj("status" -> "filled", "order" -> order)
-        )
-      ),
-      saved,
-      66001L,
-      elapsedMs = waited,
-      allowUnknown = true,
-      errReply = false
+    Some(
+      ujson.Obj("status" -> "order", "order" -> ujson.Obj("status" -> "filled", "order" -> order))
     )
 
-  test(
-    "recovery rejects a mismatched original quantity with the same client identifier"
-  ) {
-    assertEquals(recoveredWith("origSz", "4"), None)
-    assertEquals(
-      recoveredWith("origSz", saved.quantity),
-      Some("XMR recovered filled")
-    )
+  test("a lookup with a mismatched original quantity is not the saved order") {
+    assert(!Exchange.sameOrder(lookupWith("origSz", "4"), saved))
+    assert(Exchange.sameOrder(lookupWith("origSz", saved.quantity), saved))
   }
 
-  test("recovery rejects a mismatched limit with the same client identifier") {
-    assertEquals(recoveredWith("limitPx", "100.2"), None)
-    assertEquals(
-      recoveredWith("limitPx", saved.limit),
-      Some("XMR recovered filled")
-    )
+  test("a lookup with a mismatched limit is not the saved order") {
+    assert(!Exchange.sameOrder(lookupWith("limitPx", "100.2"), saved))
+    assert(Exchange.sameOrder(lookupWith("limitPx", saved.limit), saved))
   }
 
   test("filled average prices respect both buy and sell saved limits") {
     def fill(price: String): Option[ujson.Value] =
-      reply(
-        ujson.Obj(
-          "filled" -> ujson.Obj("totalSz" -> "1", "avgPx" -> price, "oid" -> 9)
-        )
-      )
-    assertEquals(Exchange.outcome(fill("100.2"), saved), None)
-    assertEquals(
-      Exchange.outcome(fill("100.1"), saved),
-      Some("XMR filled 1 at 100.1")
-    )
+      reply(ujson.Obj("filled" -> ujson.Obj("totalSz" -> "1", "avgPx" -> price, "oid" -> 9)))
+    def filled(price: String): Option[VenueOrders.Placed] =
+      Some(VenueOrders.Placed.Filled(BigDecimal(1), BigDecimal(price), 9L))
+    assertEquals(Exchange.placed(fill("100.2"), saved), None)
+    assertEquals(Exchange.placed(fill("100.1"), saved), filled("100.1"))
     val sell = saved.copy(side = Side.Sell)
-    assertEquals(Exchange.outcome(fill("100"), sell), None)
-    assertEquals(
-      Exchange.outcome(fill("100.1"), sell),
-      Some("XMR filled 1 at 100.1")
-    )
+    assertEquals(Exchange.placed(fill("100"), sell), None)
+    assertEquals(Exchange.placed(fill("100.1"), sell), filled("100.1"))
   }
 
-  test(
-    "validated fill text fits long markets and marks rounded numbers without changing the fill guards"
-  ) {
+  test("a fill keeps exact long numbers and the guards still hold for them") {
     val long = saved.copy(
       coin = "X" * 40,
       quantity = "99999999999999999999999999999999999999",
@@ -457,14 +298,12 @@ class ExchangeSpec extends munit.FunSuite:
     val price = "234567890123456789012345678901"
     val filled =
       ujson.Obj("filled" -> ujson.Obj("totalSz" -> quantity, "avgPx" -> price, "oid" -> 9))
-    val shown = Exchange.outcome(reply(filled), long).get
-    assert(shown.startsWith(long.coin + " filled ~"), shown)
-    assert(shown.contains(" at ~"), shown)
-    assert(shown.length <= 64, shown)
-    assertEquals(BigDecimal(quantity), BigDecimal(filled("filled")("totalSz").str))
-    assertEquals(BigDecimal(price), BigDecimal(filled("filled")("avgPx").str))
-    assertEquals(Exchange.outcome(reply(filled), long.copy(quantity = "1")), None)
-    assertEquals(Exchange.outcome(reply(filled), long.copy(limit = "1")), None)
+    assertEquals(
+      Exchange.placed(reply(filled), long),
+      Some(VenueOrders.Placed.Filled(BigDecimal(quantity), BigDecimal(price), 9L))
+    )
+    assertEquals(Exchange.placed(reply(filled), long.copy(quantity = "1")), None)
+    assertEquals(Exchange.placed(reply(filled), long.copy(limit = "1")), None)
   }
 
   test("metadata accepts any positive maximum leverage and rejects zero") {

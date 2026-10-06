@@ -185,7 +185,7 @@ class PropBackupSpec extends TempDirectorySuite:
       previewing = true
       assertEquals(
         worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), terms),
-        Left("Prop prices stale. Waiting for fresh depth")
+        Left("Prop prices stale. Waiting for depth")
       )
       assertEquals(reads, 1)
       assertEquals(ledger.account.count, 0L)
