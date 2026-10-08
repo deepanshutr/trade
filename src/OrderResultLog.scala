@@ -3,7 +3,6 @@ package desk
 import java.nio.ByteBuffer
 import java.nio.channels.{FileChannel, FileLock, OverlappingFileLockException}
 import java.nio.file.{Files, LinkOption, Path, StandardOpenOption}
-import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import scala.util.control.NonFatal
@@ -20,7 +19,11 @@ object OrderResultLog:
       retryWindowNanos: Long = TimeUnit.SECONDS.toNanos(5)
   ) extends AutoCloseable:
     private val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    // After close a queued record keeps retrying while this writer still saves records, and gives
+    // up once nothing was saved for 500 ms. A busy log drains, and a stuck lock still lets Desk quit.
     private val closing = new java.util.concurrent.atomic.AtomicBoolean(false)
+    private val lastActivity = new java.util.concurrent.atomic.AtomicLong(0L)
+    private val quietNanos = TimeUnit.MILLISECONDS.toNanos(500)
 
     private def writeWithRetry(text: String, onFailure: Throwable => Unit): Unit =
       val began = System.nanoTime()
@@ -30,10 +33,13 @@ object OrderResultLog:
         try
           write(text)
           saved = true
+          lastActivity.set(System.nanoTime())
         catch
           case error: LockTimeout =>
-            if closing.get() || System.nanoTime() - began >= retryWindowNanos then
-              failed = Some(error)
+            val now = System.nanoTime()
+            if (closing.get() && now - lastActivity.get() >= quietNanos) ||
+              now - began >= retryWindowNanos
+            then failed = Some(error)
             else
               try Thread.sleep(10L)
               catch
@@ -50,6 +56,7 @@ object OrderResultLog:
       try executor.execute(() => writeWithRetry(text, onFailure))
       catch case error: java.util.concurrent.RejectedExecutionException => onFailure(error)
     def close(): Unit =
+      lastActivity.set(System.nanoTime())
       closing.set(true)
       executor.close()
 
@@ -76,7 +83,7 @@ object OrderResultLog:
     FileChannel.open(
       path,
       options,
-      PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+      LocalFiles.privateFile*
     )
 
   private def lock(channel: FileChannel, began: Long): FileLock =

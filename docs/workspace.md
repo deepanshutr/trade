@@ -462,11 +462,33 @@ that the group or others can read, such as one made by hand with mode 755, refus
 every write with "local storage must be private"
 and the folder's path, and nothing changes on disk. Run `chmod 700` on that folder once.
 
+## Windows
+
+Desk runs on Windows in prop and view. Live trading, key setup, owner steps, sound and
+the clipboard need macOS. Settings answers a key or owner step there with "The step did
+not start: Keys and owner steps are not available on Windows".
+
+`make windows-image` builds `bin/image/Desk` with Java 21's `jpackage`. Its `Desk.exe`
+runs Java inside its own process, so a firewall rule can name Desk alone. Copy the
+folder to one that only administrators can change, such as `C:\Program Files\Desk`, and
+start `Desk.exe` in Windows Terminal.
+
+Windows has no mode `600` or `700`. A file or folder there is private when its access
+list allows the user, allows no one but the user, SYSTEM and Administrators, and is
+owned by one of them. Folders inside the user's profile pass by default. Anything
+else is refused like a file with group or other permissions. Symbolic links and
+junctions are refused alike.
+
+Quotes stamped more than a second ahead of the local clock are refused, so keep
+Windows time synchronization running.
+
 ## Development
 
 Install Scala CLI, `python3` and `expect` to run the checks. `make test` runs the
 offline Scala suite excluding `slow` tests, and `make test-python`, which discovers
-`test/test_*.py`. Scala test targets disable the build server.
+`test/test_*.py`. Scala test targets disable the build server. On Windows some Scala
+tests skip with a reason, because symbolic links need developer mode there and some
+tests need Unix tools or `python3`.
 The key-helper tests skip with a reason when `cryptography`, `pycryptodome`
 (`Crypto`) or `eth-account` is missing. They use fixture keys and fake stores,
 plus native access objects on macOS, without creating or reading keychain items.

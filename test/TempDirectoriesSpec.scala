@@ -11,6 +11,7 @@ class TempDirectoriesSpec extends TempDirectorySuite:
     path
 
   test("successful cleanup removes nested files and links without following links") {
+    assume(Platform.links, "symbolic links need developer mode on Windows")
     val outside = tempDirectory("outside-")
     val target = Files.writeString(outside.resolve("saved"), "preserved")
     val root = tempDirectory("nested-", keepOnFailure = true)
@@ -47,6 +48,7 @@ class TempDirectoriesSpec extends TempDirectorySuite:
   }
 
   test("cleanup reports removal failures and continues with the remaining folders") {
+    assume(LocalFiles.posix, "a folder the owner cannot write needs POSIX bits")
     val blocked = List(tempDirectory("blocked-"), tempDirectory("also-blocked-"))
     val nested = blocked.map(root => Files.createDirectory(root.resolve("nested")))
     nested.foreach(path => Files.writeString(path.resolve("saved"), "temporary"))
@@ -56,12 +58,7 @@ class TempDirectoriesSpec extends TempDirectorySuite:
     val output = new java.io.PrintStream(bytes)
     val previous = System.err
     try
-      nested.foreach(path =>
-        Files.setPosixFilePermissions(
-          path,
-          java.nio.file.attribute.PosixFilePermissions.fromString("r-x------")
-        )
-      )
+      nested.foreach(path => Platform.setMode(path, "r-x------"))
       System.setErr(output)
       TempDirectories.finish((blocked :+ ordinary).map(_ -> false), failed = false)
       assert(!Files.exists(ordinary))

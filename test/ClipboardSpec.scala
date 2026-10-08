@@ -105,6 +105,7 @@ class ClipboardSpec extends munit.FunSuite:
 
   // The real runner, run against harmless system tools only.
   test("the real runner hands standard input to the child and returns its output") {
+    assume(!Term.windows, "the runner is checked with Unix tools, absent on Windows")
     val input = "0ABCD-1EFGH\n".getBytes(UTF_8)
     val run = ProcessRun.system(Seq("/bin/cat"), input)
     assertEquals(run.exit, 0)
@@ -112,6 +113,7 @@ class ClipboardSpec extends munit.FunSuite:
   }
 
   test("the real runner keeps at most 4096 bytes of output") {
+    assume(!Term.windows, "the runner is checked with Unix tools, absent on Windows")
     val input = Array.fill[Byte](5000)('x'.toByte)
     val run = ProcessRun.system(Seq("/bin/cat"), input)
     assertEquals(run.exit, 0)
@@ -119,12 +121,14 @@ class ClipboardSpec extends munit.FunSuite:
   }
 
   test("the real runner reports a nonzero exit") {
+    assume(!Term.windows, "the runner is checked with Unix tools, absent on Windows")
     val run = ProcessRun.system(Seq("/usr/bin/false"), Array.emptyByteArray)
     assertEquals(run.exit, 1)
     assertEquals(run.stdout.length, 0)
   }
 
   test("the real runner stops a child that outlives the limit and fails") {
+    assume(!Term.windows, "the runner is checked with Unix tools, absent on Windows")
     val marker = "29.001"
     def child = ProcessHandle
       .allProcesses()

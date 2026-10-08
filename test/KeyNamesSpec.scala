@@ -1,7 +1,6 @@
 package desk
 
 import java.nio.file.{Files, Path}
-import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.TimeUnit
 import scala.jdk.CollectionConverters.*
 
@@ -29,11 +28,8 @@ class KeyNamesSpec extends TempDirectorySuite:
   private def put(path: Path, text: String, mode: String = "rw-------"): Path =
     Files.createDirectories(path.getParent)
     Files.writeString(path, text)
-    Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(mode))
+    Platform.setMode(path, mode)
     path
-
-  private def mode(path: Path): String =
-    PosixFilePermissions.toString(Files.getPosixFilePermissions(path))
 
   private def lines(vector: String*): String = vector.map(_ + "\n").mkString
 
@@ -59,8 +55,8 @@ class KeyNamesSpec extends TempDirectorySuite:
     val path = namesPath()
     KeyNames.create(path, KeyEntry(first, "Main", "testnet", stamp))
     assertEquals(Files.readString(path), createLine(first) + "\n")
-    assertEquals(mode(path), "rw-------")
-    assertEquals(mode(path.getParent), "rwx------")
+    assert(Platform.hasMode(path, "rw-------"))
+    assert(Platform.hasMode(path.getParent, "rwx------"))
     assertEquals(
       KeyNames.load(path),
       Right(Vector(KeyEntry(first, "Main", "testnet", stamp)))
@@ -108,7 +104,7 @@ class KeyNamesSpec extends TempDirectorySuite:
       assert(after.length > before.length)
       assert(java.util.Arrays.equals(after.take(before.length), before))
       assertEquals(after.last, '\n'.toByte)
-      assertEquals(mode(path), "rw-------")
+      assert(Platform.hasMode(path, "rw-------"))
       before = after
   }
 
@@ -310,21 +306,23 @@ class KeyNamesSpec extends TempDirectorySuite:
     val dir = home()
     val real = put(dir.resolve("real.jsonl"), lines(createLine(first)))
     val link = dir.resolve("link.jsonl")
-    Files.createSymbolicLink(link, real)
-    val dangling = dir.resolve("dangling.jsonl")
-    Files.createSymbolicLink(dangling, dir.resolve("nowhere"))
     val folder = Files.createDirectory(dir.resolve("folder.jsonl"))
     val message = Left("key names file must be a private regular file under 1 MiB")
-    assertEquals(KeyNames.load(link), message)
-    assertEquals(KeyNames.load(dangling), message)
+    if Platform.links then
+      Files.createSymbolicLink(link, real)
+      val dangling = dir.resolve("dangling.jsonl")
+      Files.createSymbolicLink(dangling, dir.resolve("nowhere"))
+      assertEquals(KeyNames.load(link), message)
+      assertEquals(KeyNames.load(dangling), message)
     assertEquals(KeyNames.load(folder), message)
     for loose <- Vector("rw-r-----", "rw-r--r--", "rw-rw----", "rw----r--", "rwx------") do
-      Files.setPosixFilePermissions(real, PosixFilePermissions.fromString(loose))
+      Platform.setMode(real, loose)
       val expected = if loose == "rwx------" then Right(1) else message
       assertEquals(KeyNames.load(real).map(_.size), expected, loose)
-    intercept[IllegalStateException](
-      KeyNames.create(link, KeyEntry(second, "Spare", "testnet", stamp))
-    )
+    if Platform.links then
+      intercept[IllegalStateException](
+        KeyNames.create(link, KeyEntry(second, "Spare", "testnet", stamp))
+      )
     assertEquals(Files.readString(real), lines(createLine(first)))
   }
 
@@ -336,8 +334,8 @@ class KeyNamesSpec extends TempDirectorySuite:
     assert(!Files.exists(path.getParent))
     ActiveKey.select(path, "testnet", first)
     assertEquals(Files.readString(path).trim, s"""{"testnet":"$first"}""")
-    assertEquals(mode(path), "rw-------")
-    assertEquals(mode(path.getParent), "rwx------")
+    assert(Platform.hasMode(path, "rw-------"))
+    assert(Platform.hasMode(path.getParent, "rwx------"))
     assertEquals(ActiveKey.load(path), Right(Map("testnet" -> first)))
   }
 
@@ -348,7 +346,7 @@ class KeyNamesSpec extends TempDirectorySuite:
     assertEquals(ActiveKey.load(path), Right(Map("testnet" -> first, "mainnet" -> second)))
     ActiveKey.select(path, "testnet", third)
     assertEquals(ActiveKey.load(path), Right(Map("testnet" -> third, "mainnet" -> second)))
-    assertEquals(mode(path), "rw-------")
+    assert(Platform.hasMode(path, "rw-------"))
     val names = Files.list(path.getParent).iterator().asScala.map(_.getFileName.toString).toVector
     assertEquals(names, Vector("active-key.json"))
   }
@@ -396,13 +394,13 @@ class KeyNamesSpec extends TempDirectorySuite:
   test("the active key refuses a symbolic link, a loose file and a large file") {
     val dir = home()
     val real = put(dir.resolve("real.json"), s"""{"testnet":"$first"}""")
-    val link = dir.resolve("link.json")
-    Files.createSymbolicLink(link, real)
-    assert(ActiveKey.load(link).isLeft)
+    if Platform.links then
+      val link = Files.createSymbolicLink(dir.resolve("link.json"), real)
+      assert(ActiveKey.load(link).isLeft)
     for loose <- Vector("rw-r-----", "rw-r--r--", "rw----rw-") do
-      Files.setPosixFilePermissions(real, PosixFilePermissions.fromString(loose))
+      Platform.setMode(real, loose)
       assert(ActiveKey.load(real).isLeft, loose)
-    Files.setPosixFilePermissions(real, PosixFilePermissions.fromString("rw-------"))
+    Platform.setMode(real, "rw-------")
     assert(ActiveKey.load(real).isRight)
     val big = put(dir.resolve("big.json"), s"""{"testnet":"$first"}""" + " " * 2000)
     assert(ActiveKey.load(big).isLeft)
@@ -422,7 +420,7 @@ class KeyNamesSpec extends TempDirectorySuite:
     assertEquals(Files.readString(broken), """{"testnet":""")
     val loose = put(activePath(), s"""{"testnet":"$first"}""", "rw-r--r--")
     intercept[IllegalStateException](ActiveKey.select(loose, "mainnet", second))
-    assertEquals(mode(loose), "rw-r--r--")
+    assert(Platform.hasMode(loose, "rw-r--r--"))
   }
 
   // Keychain items
@@ -454,6 +452,7 @@ class KeyNamesSpec extends TempDirectorySuite:
   }
 
   test("the process runner returns the exit code and ignores a full output pipe") {
+    assume(!Term.windows, "the runner is checked with Unix tools, absent on Windows")
     assertEquals(KeychainItems.runProcess(Seq("/usr/bin/true"), 5000L), 0)
     assertEquals(KeychainItems.runProcess(Seq("/bin/sh", "-c", "exit 44"), 5000L), 44)
     assertEquals(KeychainItems.runProcess(Seq("/bin/sh", "-c", "exit 1"), 5000L), 1)
@@ -463,6 +462,7 @@ class KeyNamesSpec extends TempDirectorySuite:
   }
 
   test("the process runner destroys a process that passes the limit") {
+    assume(!Term.windows, "the runner is checked with Unix tools, absent on Windows")
     val pidFile = home().resolve("pid")
     val script = "echo $$ > '" + pidFile + "'; exec /bin/sleep 30"
     val began = System.nanoTime()
@@ -679,13 +679,20 @@ class KeyNamesSpec extends TempDirectorySuite:
     OrderJournal.open(dir, "testnet-" + first.drop(2)).close()
     val lock = dir.resolve("testnet-" + first.drop(2) + ".lock")
     val signal = dir.resolve("held")
-    val process = new ProcessBuilder(
-      "python3",
-      "-c",
-      "import fcntl,pathlib,sys\nf=open(sys.argv[1],'r+')\nfcntl.lockf(f,fcntl.LOCK_EX)\npathlib.Path(sys.argv[2]).touch()\nsys.stdin.read(1)",
-      lock.toString,
-      signal.toString
-    ).start()
+    val process = Platform
+      .lockChild(
+        new ProcessBuilder(
+          "python3",
+          "-c",
+          "import fcntl,pathlib,sys\nf=open(sys.argv[1],'r+')\nfcntl.lockf(f,fcntl.LOCK_EX)\npathlib.Path(sys.argv[2]).touch()\nsys.stdin.read(1)",
+          lock.toString,
+          signal.toString
+        ),
+        "hold",
+        lock.toString,
+        signal.toString
+      )
+      .start()
     try
       val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
       while !Files.exists(signal) && process.isAlive && System.nanoTime() < end do Thread.sleep(2)

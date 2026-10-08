@@ -3,7 +3,6 @@ package desk
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.{Files, LinkOption, Path, StandardCopyOption, StandardOpenOption}
-import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.{ArrayBlockingQueue, TimeUnit}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong}
 import scala.util.Try
@@ -41,7 +40,7 @@ object Diagnostics:
         StandardOpenOption.APPEND,
         LinkOption.NOFOLLOW_LINKS
       ),
-      PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+      LocalFiles.privateFile*
     )
     def append(line: String): Unit =
       val bytes = (line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)

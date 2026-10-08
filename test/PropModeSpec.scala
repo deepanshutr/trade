@@ -1,7 +1,6 @@
 package desk
 
 import java.nio.file.{Files, Path}
-import java.nio.file.attribute.PosixFilePermissions
 import java.time.ZoneOffset
 import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 import scala.collection.mutable.ArrayBuffer
@@ -15,7 +14,7 @@ class PropModeSpec extends TempDirectorySuite:
   private def settings(text: String): Path =
     val path = tempDirectory("prop-settings-").resolve("settings.json")
     Files.writeString(path, text)
-    Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"))
+    Platform.setMode(path, "rw-------")
     path
 
   private def fields(value: Product): Map[String, Any] =

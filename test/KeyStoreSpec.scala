@@ -6,8 +6,8 @@ class KeyStoreSpec extends munit.FunSuite:
   private val key = Array.tabulate[Byte](32)(i => (i * 7 + 3).toByte)
   private val keyHex = key.map(b => f"${b & 0xff}%02x").mkString
   private val expected = OrderSigning.address(key)
-  private val python = "/opt/tools/bin/python3"
-  private val helper = "/home/test/.local/lib/desk-keychain.py"
+  private val python = Platform.absolute("/opt/tools/bin/python3")
+  private val helper = Platform.absolute("/home/test/.local/lib/desk-keychain.py")
   private val env = Map("DESK_PYTHON" -> python, "DESK_KEY_HELPER" -> helper)
   private val missing = "key store helper is not installed. Run make install"
 

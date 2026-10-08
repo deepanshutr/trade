@@ -36,8 +36,8 @@ and marked by `!results` for the rest of the session. Failures after saving are 
 
 Records contain fixed event names, counts, durations, validated public market names
 and the running archive hash. They contain no account identifiers, balances, order
-payloads, typed text, exception messages or stack traces. Direct symbolic links in
-the log targets are refused. Test development runs identify their build as
+payloads, typed text, exception messages or stack traces. Direct symbolic links and
+Windows junctions in the log targets are refused. Test development runs identify their build as
 development. Historical records do not prove which build a different process uses.
 
 These records continue while Desk runs. They support later debugging and do not

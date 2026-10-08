@@ -142,10 +142,7 @@ class OrderJournalSpec extends TempDirectorySuite:
     val dir = tempDirectory("desk-corrupt")
     val file = dir.resolve(identity + ".json")
     Files.writeString(file, "broken")
-    Files.setPosixFilePermissions(
-      file,
-      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
-    )
+    Platform.setMode(file, "rw-------")
     intercept[Exception](OrderJournal.open(dir, identity))
     assertEquals(Files.readString(file), "broken")
   }

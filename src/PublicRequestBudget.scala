@@ -2,7 +2,6 @@ package desk
 
 import java.nio.channels.FileChannel
 import java.nio.file.{LinkOption, Path, StandardOpenOption}
-import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.locks.ReentrantLock
 
 object PublicRequestBudget:
@@ -52,7 +51,7 @@ final class PublicRequestBudget(directory: Path, wall: () => Long):
         StandardOpenOption.WRITE,
         LinkOption.NOFOLLOW_LINKS
       ),
-      PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+      LocalFiles.privateFile*
     )
     try
       require(TradingConfig.privateFile(path), "public request lock is not private")

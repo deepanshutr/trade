@@ -2,7 +2,6 @@ package desk
 
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, LinkOption, Path}
-import java.nio.file.attribute.PosixFilePermissions
 import scala.util.Try
 
 // The bytes are the file as read or last written. They are empty when no file exists.
@@ -86,7 +85,7 @@ object SettingsFile:
       folder,
       ".desk-",
       ".tmp",
-      PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+      LocalFiles.privateFile*
     )
     try
       Files.writeString(temporary, text)

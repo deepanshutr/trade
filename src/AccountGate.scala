@@ -18,26 +18,25 @@ object AccountGate:
   def paused(root: Path, network: String, owner: String): Boolean =
     Try {
       val marker = root.resolve(identity(network, owner) + ".paused")
-      require(!Files.isSymbolicLink(root))
+      require(!LocalFiles.linked(root))
       !Files.notExists(marker, LinkOption.NOFOLLOW_LINKS)
     }.getOrElse(true)
 
   def withOrder(root: Path, network: String, owner: String)(send: => Unit): Unit =
     val name = identity(network, owner)
-    require(!Files.isSymbolicLink(root), "account state is symbolic")
-    Files.createDirectories(
-      root,
-      PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))
-    )
+    require(!LocalFiles.linked(root), "account state is symbolic")
+    Files.createDirectories(root, LocalFiles.privateFolder*)
     require(
-      Files.getPosixFilePermissions(root) == PosixFilePermissions.fromString("rwx------"),
+      if LocalFiles.posix then
+        Files.getPosixFilePermissions(root) == PosixFilePermissions.fromString("rwx------")
+      else LocalFiles.isPrivate(root),
       "account state must be private"
     )
     val lockPath = root.resolve(name + ".lock")
     val key = root.toRealPath().resolve(name + ".lock")
     require(active.add(key), "an order already owns this account")
     try
-      require(!Files.isSymbolicLink(lockPath), "account lock is symbolic")
+      require(!LocalFiles.linked(lockPath), "account lock is symbolic")
       val channel = FileChannel.open(
         lockPath,
         java.util.Set.of[java.nio.file.OpenOption](
@@ -45,7 +44,7 @@ object AccountGate:
           StandardOpenOption.WRITE,
           LinkOption.NOFOLLOW_LINKS
         ),
-        PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+        LocalFiles.privateFile*
       )
       try
         val lock = Option(channel.tryLock())

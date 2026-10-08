@@ -5,7 +5,6 @@ import java.nio.ByteBuffer
 import java.nio.channels.{FileChannel, OverlappingFileLockException}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, LinkOption, OpenOption, Path, StandardOpenOption}
-import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.TimeUnit
 import scala.util.Try
 import scala.util.control.NonFatal
@@ -118,17 +117,14 @@ object KeyNames:
         StandardOpenOption.APPEND,
         LinkOption.NOFOLLOW_LINKS
       ),
-      PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+      LocalFiles.privateFile*
     )
     try
       val bytes = ByteBuffer.wrap((render(record) + "\n").getBytes(StandardCharsets.UTF_8))
       while bytes.hasRemaining do channel.write(bytes)
       channel.force(true)
     finally channel.close()
-    if created then
-      val parent = FileChannel.open(path.getParent, StandardOpenOption.READ)
-      try parent.force(true)
-      finally parent.close()
+    if created then LocalFiles.flushFolder(path.getParent)
 
   def create(path: Path, entry: KeyEntry): Unit =
     val record = Record.Create(entry)

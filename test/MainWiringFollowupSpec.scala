@@ -67,10 +67,7 @@ class MainWiringFollowupSpec extends munit.FunSuite:
 
   test("application startup passes loaded test network settings to its public source factory") {
     val config = java.nio.file.Files.createTempFile("desk-screen-network", ".json")
-    java.nio.file.Files.setPosixFilePermissions(
-      config,
-      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
-    )
+    Platform.setMode(config, "rw-------")
     java.nio.file.Files.writeString(config, """{"network":"testnet"}""")
     final class Stop extends RuntimeException
     var calls = 0

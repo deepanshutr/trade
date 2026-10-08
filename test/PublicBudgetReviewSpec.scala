@@ -2,7 +2,6 @@ package desk
 
 import java.nio.channels.FileChannel
 import java.nio.file.{Files, Path}
-import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch, TimeUnit}
 import java.util.concurrent.atomic.AtomicLong
 import scala.jdk.CollectionConverters.*
@@ -47,12 +46,13 @@ class PublicBudgetReviewSpec extends TempDirectorySuite:
     for weight <- Vector(-1, 0, 105, Int.MaxValue) do
       intercept[IllegalArgumentException](budget.reserve(weight))
     assertEquals(Files.readString(saved), before)
-    Files.setPosixFilePermissions(saved, PosixFilePermissions.fromString("rw-r--r--"))
+    Platform.setMode(saved, "rw-r--r--")
     intercept[IllegalArgumentException](budget.reserve(20))
     assertEquals(Files.readString(saved), before)
   }
 
   test("a symbolic schedule cannot overwrite a different private file") {
+    assume(Platform.links, "symbolic links need developer mode on Windows")
     val root = tempDirectory("desk-review-public-symlink")
     val target = root.resolve("foreign.txt")
     LocalFiles.write(target, at.toString)

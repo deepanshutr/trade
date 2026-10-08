@@ -3,7 +3,6 @@ package desk
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, IOException, InputStream, PrintStream}
 import java.nio.charset.StandardCharsets.{ISO_8859_1, US_ASCII, UTF_8}
 import java.nio.file.{Files, Path}
-import java.nio.file.attribute.PosixFilePermissions
 import java.security.{MessageDigest, SecureRandom}
 import scala.collection.mutable.ArrayBuffer
 
@@ -22,6 +21,8 @@ class KeyScreenSpec extends TempDirectorySuite:
   private val deriving = "Deriving the key. This takes a few seconds."
   private val up = esc + "[A"
   private val down = esc + "[B"
+  private val python = Platform.absolute("/usr/bin/python3")
+  private val helperScript = Platform.absolute("/opt/desk/helper.py")
 
   private def storedText(approval: String): String =
     "Stored. Approval at the exchange is your step. Approve this address from the owner wallet " +
@@ -113,8 +114,8 @@ class KeyScreenSpec extends TempDirectorySuite:
       seeds: Vector[Array[Byte]] = Vector(seedOne),
       derive: (Array[Byte], Array[Byte], Int) => Array[Byte] = fakeKey,
       env: Map[String, String] = Map(
-        "DESK_PYTHON" -> "/usr/bin/python3",
-        "DESK_KEY_HELPER" -> "/opt/desk/helper.py"
+        "DESK_PYTHON" -> python,
+        "DESK_KEY_HELPER" -> helperScript
       )
   ):
     val home: Path = tempDirectory("desk-keyscreen")
@@ -278,7 +279,7 @@ class KeyScreenSpec extends TempDirectorySuite:
     val (args, stdin) = f.helperCalls.head
     assertEquals(
       args,
-      Seq("/usr/bin/python3", "/opt/desk/helper.py", "--store", "agent", "--service", "desk-test")
+      Seq(python, helperScript, "--store", "agent", "--service", "desk-test")
     )
     assertEquals(new String(stdin, US_ASCII), hex(keyOf(seedOne, phrase)) + "\n")
     assert(f.output.contains(address))
@@ -1164,7 +1165,7 @@ class KeyScreenSpec extends TempDirectorySuite:
     val f = new Fixture()
     Files.createDirectories(f.names.getParent)
     Files.writeString(f.names, "garbage\n")
-    Files.setPosixFilePermissions(f.names, PosixFilePermissions.fromString("rw-------"))
+    Platform.setMode(f.names, "rw-------")
     assertEquals(f.run(script("n", "s", "r", enter, "q")), None)
     assert(
       lines(f.output).exists(l =>
@@ -1229,14 +1230,11 @@ class KeyScreenSpec extends TempDirectorySuite:
   private val asciiRule = "Only printable ASCII is accepted."
   private val dormant = "Another Desk is using the current key"
 
-  private def mode(path: Path): String =
-    PosixFilePermissions.toString(Files.getPosixFilePermissions(path))
-
   // The key files folder with group and other access, which the screen must refuse.
   private def openFolder(f: Fixture): Path =
     val folder = f.names.getParent
     Files.createDirectories(folder)
-    Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwxr-xr-x"))
+    Platform.setMode(folder, "rwxr-xr-x")
     folder
 
   // Runs the screen and makes one change to the files when the read at that index is asked for.
@@ -1262,14 +1260,14 @@ class KeyScreenSpec extends TempDirectorySuite:
     assert(lines(f.output).contains(folderRule))
     assertEquals(f.random.served, 0)
     assertEquals(f.kinds, Vector.empty[String])
-    assertEquals(mode(folder), "rwxr-xr-x")
+    assert(Platform.hasMode(folder, "rwxr-xr-x"))
   }
 
   test("a new key makes a missing key files folder private before it makes a seed") {
     val f = new Fixture()
     assert(!Files.exists(f.names.getParent))
     f.run(script("n", interrupt))
-    assertEquals(mode(f.names.getParent), "rwx------")
+    assert(Platform.hasMode(f.names.getParent, "rwx------"))
     assertEquals(f.random.served, 1)
   }
 
@@ -1313,7 +1311,7 @@ class KeyScreenSpec extends TempDirectorySuite:
     two(f)
     val folder = f.names.getParent
     changing(f, script("r", "Daily", enter, "q"), 1)(
-      Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwxr-xr-x"))
+      Platform.setMode(folder, "rwxr-xr-x")
     )
     val said = "The key files could not be updated (local storage must be private)"
     assert(lines(f.output).contains(said))
@@ -1321,6 +1319,7 @@ class KeyScreenSpec extends TempDirectorySuite:
   }
 
   test("a symbolic link as the key files folder shows its fixed storage rule") {
+    assume(Platform.links, "symbolic links need developer mode on Windows")
     val f = new Fixture()
     two(f)
     val folder = f.names.getParent

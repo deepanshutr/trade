@@ -3,7 +3,6 @@ package desk
 import java.nio.file.{Files, Path}
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
-import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.TimeUnit
 
 class AccountGateSpec extends TempDirectorySuite:
@@ -33,12 +32,19 @@ class AccountGateSpec extends TempDirectorySuite:
     fixture { root =>
       AccountGate.withOrder(root, "testnet", owner) {
         val lock = root.resolve("testnet-" + owner.drop(2) + ".lock")
-        val process = new ProcessBuilder(
-          "/usr/bin/python3",
-          "-c",
-          "import fcntl,sys\nf=open(sys.argv[1],'r+')\ntry: fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(73)",
-          lock.toString
-        ).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+        val process = Platform
+          .lockChild(
+            new ProcessBuilder(
+              "/usr/bin/python3",
+              "-c",
+              "import fcntl,sys\nf=open(sys.argv[1],'r+')\ntry: fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(73)",
+              lock.toString
+            ),
+            "probe",
+            lock.toString
+          )
+          .redirectError(ProcessBuilder.Redirect.DISCARD)
+          .start()
         try
           assert(process.waitFor(3, TimeUnit.SECONDS))
           assertEquals(process.exitValue(), 73)
@@ -49,9 +55,10 @@ class AccountGateSpec extends TempDirectorySuite:
   }
 
   test("symbolic account directory and lock fail closed") {
+    assume(Platform.links, "symbolic links need developer mode on Windows")
     fixture { root =>
       val real = Files.createDirectory(root.resolve("real"))
-      Files.setPosixFilePermissions(real, PosixFilePermissions.fromString("rwx------"))
+      Platform.setMode(real, "rwx------")
       val symbolic = Files.createSymbolicLink(root.resolve("symbolic"), real)
       intercept[IllegalArgumentException] {
         AccountGate.withOrder(symbolic, "testnet", owner)(fail("sent"))
@@ -69,13 +76,20 @@ class AccountGateSpec extends TempDirectorySuite:
       AccountGate.withOrder(root, "testnet", owner)(())
       val lock = root.resolve("testnet-" + owner.drop(2) + ".lock")
       val signal = root.resolve("held")
-      val process = new ProcessBuilder(
-        "/usr/bin/python3",
-        "-c",
-        "import fcntl,pathlib,sys\nf=open(sys.argv[1],'r+')\nfcntl.lockf(f,fcntl.LOCK_EX)\npathlib.Path(sys.argv[2]).touch()\nsys.stdin.read(1)",
-        lock.toString,
-        signal.toString
-      ).start()
+      val process = Platform
+        .lockChild(
+          new ProcessBuilder(
+            "/usr/bin/python3",
+            "-c",
+            "import fcntl,pathlib,sys\nf=open(sys.argv[1],'r+')\nfcntl.lockf(f,fcntl.LOCK_EX)\npathlib.Path(sys.argv[2]).touch()\nsys.stdin.read(1)",
+            lock.toString,
+            signal.toString
+          ),
+          "hold",
+          lock.toString,
+          signal.toString
+        )
+        .start()
       try
         val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
         while !Files.exists(signal) && process.isAlive && System.nanoTime() < end do Thread.sleep(2)
@@ -103,18 +117,19 @@ class AccountGateSpec extends TempDirectorySuite:
           }
           assert(!sent)
       }
-      Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("rwxr-xr-x"))
+      Platform.setMode(root, "rwxr-xr-x")
       var sent = false
       intercept[IllegalArgumentException] {
         AccountGate.withOrder(root, "testnet", owner) { sent = true }
       }
       assert(!sent)
-      Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("rwx------"))
+      Platform.setMode(root, "rwx------")
       AccountGate.withOrder(root, "testnet", owner)(())
     }
   }
 
   test("a symbolic pause marker blocks the account even when its target is missing") {
+    assume(Platform.links, "symbolic links need developer mode on Windows")
     fixture { root =>
       Files.createSymbolicLink(
         root.resolve("testnet-" + owner.drop(2) + ".paused"),
@@ -133,12 +148,18 @@ class AccountGateSpec extends TempDirectorySuite:
         intercept[Exception] {
           AccountGate.withOrder(root, "testnet", owner)(fail("nested send"))
         }
-        val process = new ProcessBuilder(
-          "/usr/bin/python3",
-          "-c",
-          "import fcntl,sys\nf=open(sys.argv[1],'r+')\ntry: fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(73)",
-          root.resolve("testnet-" + owner.drop(2) + ".lock").toString
-        ).start()
+        val process = Platform
+          .lockChild(
+            new ProcessBuilder(
+              "/usr/bin/python3",
+              "-c",
+              "import fcntl,sys\nf=open(sys.argv[1],'r+')\ntry: fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(73)",
+              root.resolve("testnet-" + owner.drop(2) + ".lock").toString
+            ),
+            "probe",
+            root.resolve("testnet-" + owner.drop(2) + ".lock").toString
+          )
+          .start()
         try
           assert(process.waitFor(3, TimeUnit.SECONDS))
           assertEquals(process.exitValue(), 73)
@@ -151,24 +172,35 @@ class AccountGateSpec extends TempDirectorySuite:
     fixture { root =>
       val real = Files.createDirectory(root.resolve("real"))
       val accounts = Files.createDirectory(real.resolve("accounts"))
-      Files.setPosixFilePermissions(accounts, PosixFilePermissions.fromString("rwx------"))
-      val alias = Files.createSymbolicLink(root.resolve("alias"), real).resolve("accounts")
+      Platform.setMode(accounts, "rwx------")
+      val alias = Platform.alias(root.resolve("alias"), real).resolve("accounts")
       AccountGate.withOrder(accounts, "testnet", owner) {
-        intercept[Exception] {
+        // The canonical key refuses it, before any lock call that could drop the held lock.
+        interceptMessage[IllegalArgumentException](
+          "requirement failed: an order already owns this account"
+        ) {
           AccountGate.withOrder(alias, "testnet", owner)(fail("aliased nested send"))
         }
-        val process = new ProcessBuilder(
-          "/usr/bin/python3",
-          "-c",
-          "import fcntl,sys\nf=open(sys.argv[1],'r+')\ntry: fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(73)",
-          accounts.resolve("testnet-" + owner.drop(2) + ".lock").toString
-        ).start()
+        val process = Platform
+          .lockChild(
+            new ProcessBuilder(
+              "/usr/bin/python3",
+              "-c",
+              "import fcntl,sys\nf=open(sys.argv[1],'r+')\ntry: fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(73)",
+              accounts.resolve("testnet-" + owner.drop(2) + ".lock").toString
+            ),
+            "probe",
+            accounts.resolve("testnet-" + owner.drop(2) + ".lock").toString
+          )
+          .start()
         try
           assert(process.waitFor(3, TimeUnit.SECONDS))
           assertEquals(process.exitValue(), 73)
         finally if process.isAlive then process.destroyForcibly()
       }
       AccountGate.withOrder(alias, "testnet", owner)(())
+      // Java takes a junction for a folder, so cleanup would walk into it twice.
+      Files.delete(alias.getParent)
     }
   }
 

@@ -1,7 +1,7 @@
 package desk
 
 import java.nio.file.{Files, Path}
-import java.nio.file.attribute.{BasicFileAttributes, PosixFilePermissions}
+import java.nio.file.attribute.BasicFileAttributes
 import scala.jdk.CollectionConverters.*
 
 class SettingsFileSpec extends TempDirectorySuite:
@@ -42,13 +42,10 @@ class SettingsFileSpec extends TempDirectorySuite:
   private val terms =
     TradeTerms(TradeSizes(BigDecimal("40"), BigDecimal("400")), BigDecimal("0.0005"))
 
-  private def mode(path: Path): String =
-    PosixFilePermissions.toString(Files.getPosixFilePermissions(path))
-
   private def settingsFile(text: String): Path =
     val path = tempDirectory("settings").resolve("config.json")
     Files.writeString(path, text)
-    Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"))
+    Platform.setMode(path, "rw-------")
     path
 
   private def right[A](result: Either[String, A]): A =
@@ -98,6 +95,9 @@ class SettingsFileSpec extends TempDirectorySuite:
   test("a write replaces the file whole by an atomic move, private, with no temporary file left") {
     val path = settingsFile(full)
     val original = Files.readAttributes(path, classOf[BasicFileAttributes]).fileKey
+    // Windows has no file key. A hard link made before the write keeps the old text only when
+    // the write replaced the file rather than rewriting it in place.
+    val before = Files.createLink(tempDirectory("settings-before").resolve("config.json"), path)
     var seen = ""
     var waiting = Vector.empty[(String, String)]
     val written = SettingsFile.write(
@@ -112,8 +112,10 @@ class SettingsFileSpec extends TempDirectorySuite:
     // The compare runs after the new text is in its temporary file, just before the move.
     assertEquals(waiting.map(_._2), Vector(Files.readString(path)))
     assert(waiting.forall((name, _) => name.startsWith(".desk-") && name.endsWith(".tmp")), waiting)
-    assertNotEquals(Files.readAttributes(path, classOf[BasicFileAttributes]).fileKey, original)
-    assertEquals(mode(path), "rw-------")
+    if original != null then
+      assertNotEquals(Files.readAttributes(path, classOf[BasicFileAttributes]).fileKey, original)
+    assertEquals(Files.readString(before), full)
+    assert(Platform.hasMode(path, "rw-------"))
     assertEquals(leftovers(path), Vector.empty)
   }
 
@@ -145,12 +147,9 @@ class SettingsFileSpec extends TempDirectorySuite:
     val home = tempDirectory("settings-home")
     val absent = right(SettingsFile.read(None, home))
     val made = home.resolve(".config/desk/config.json")
-    Files.createDirectories(
-      made.getParent,
-      PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))
-    )
+    Files.createDirectories(made.getParent, LocalFiles.privateFolder*)
     Files.writeString(made, full)
-    Files.setPosixFilePermissions(made, PosixFilePermissions.fromString("rw-------"))
+    Platform.setMode(made, "rw-------")
     assertEquals(SettingsFile.write(absent, terms), Left(changed))
     assertEquals(Files.readString(made), full)
     assertEquals(leftovers(made), Vector.empty)
@@ -191,8 +190,8 @@ class SettingsFileSpec extends TempDirectorySuite:
     val json = ujson.read(Files.readString(path)).obj
     assertEquals(json.keys.toVector, Vector("small", "big", "slippage"))
     assertEquals(json.values.map(_.str).toVector, Vector("40", "400", "0.0005"))
-    assertEquals(mode(path), "rw-------")
-    assertEquals(mode(path.getParent), "rwx------")
+    assert(Platform.hasMode(path, "rw-------"))
+    assert(Platform.hasMode(path.getParent, "rwx------"))
     assertEquals(leftovers(path), Vector.empty)
     val again = SettingsFile.write(written, terms.copy(slippage = BigDecimal("0.01")))
     assertEquals(again.map(_.config.slippage), Right(BigDecimal("0.01")))
@@ -203,17 +202,17 @@ class SettingsFileSpec extends TempDirectorySuite:
   test("a folder the group or others can use refuses the write and leaves the file as it was") {
     Vector("rwxr-xr-x", "rwxr-x---", "rwxrwx---").foreach { folderMode =>
       val path = settingsFile(full)
-      Files.setPosixFilePermissions(path.getParent, PosixFilePermissions.fromString(folderMode))
+      Platform.setMode(path.getParent, folderMode)
       val result = SettingsFile.write(snapshot(path), terms)
       assertEquals(result, Left(s"local storage must be private (${path.getParent})"), folderMode)
       assertEquals(Files.readString(path), full)
-      assertEquals(mode(path), "rw-------")
+      assert(Platform.hasMode(path, "rw-------"))
       assertEquals(leftovers(path), Vector.empty)
     }
     val home = tempDirectory("settings-home")
     val folder = home.resolve(".config/desk")
     Files.createDirectories(folder)
-    Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwxr-xr-x"))
+    Platform.setMode(folder, "rwxr-xr-x")
     val absent = right(SettingsFile.read(None, home))
     assertEquals(
       SettingsFile.write(absent, terms),
@@ -224,19 +223,20 @@ class SettingsFileSpec extends TempDirectorySuite:
   }
 
   test("a folder Desk cannot write refuses with a fixed text and leaves the file as it was") {
+    assume(LocalFiles.posix, "a folder the owner cannot write needs POSIX bits")
     val path = settingsFile(full)
     val read = snapshot(path)
-    Files.setPosixFilePermissions(path.getParent, PosixFilePermissions.fromString("r-x------"))
+    Platform.setMode(path.getParent, "r-x------")
     try
       val result = SettingsFile.write(read, terms)
       assertEquals(result, Left("The settings file could not be read or written"))
       assertEquals(Files.readString(path), full)
       assertEquals(leftovers(path), Vector.empty)
-    finally
-      Files.setPosixFilePermissions(path.getParent, PosixFilePermissions.fromString("rwx------"))
+    finally Platform.setMode(path.getParent, "rwx------")
   }
 
   test("a folder reached through a link, or a file swapped for a link, is refused") {
+    assume(Platform.links, "symbolic links need developer mode on Windows")
     val real = settingsFile(full)
     val link = tempDirectory("settings-link").resolve("desk")
     Files.createSymbolicLink(link, real.getParent)
@@ -287,20 +287,21 @@ class SettingsFileSpec extends TempDirectorySuite:
     val default = home.resolve(".config/desk/config.json")
     Files.createDirectories(default.getParent)
     Files.copy(path, default)
-    Files.setPosixFilePermissions(default, PosixFilePermissions.fromString("rw-------"))
+    Platform.setMode(default, "rw-------")
     val found = right(SettingsFile.read(None, home))
     assertEquals(found.path, default)
     assertEquals(found.config, read.config)
     val refusal = Left("invalid trading settings: settings must be a private regular file")
     assertEquals(SettingsFile.read(Some(path.resolveSibling("missing.json")), home), refusal)
-    val dangling = tempDirectory("settings-home")
-    val link = dangling.resolve(".config/desk/config.json")
-    Files.createDirectories(link.getParent)
-    Files.createSymbolicLink(link, dangling.resolve("nowhere.json"))
-    assertEquals(SettingsFile.read(None, dangling), refusal)
-    Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-r--r--"))
+    if Platform.links then
+      val dangling = tempDirectory("settings-home")
+      val link = dangling.resolve(".config/desk/config.json")
+      Files.createDirectories(link.getParent)
+      Files.createSymbolicLink(link, dangling.resolve("nowhere.json"))
+      assertEquals(SettingsFile.read(None, dangling), refusal)
+    Platform.setMode(path, "rw-r--r--")
     assertEquals(SettingsFile.read(Some(path), home), refusal)
-    Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"))
+    Platform.setMode(path, "rw-------")
     Files.writeString(path, """{"small":"0"}""")
     assertEquals(
       SettingsFile.read(Some(path), home),

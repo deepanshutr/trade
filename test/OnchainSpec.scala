@@ -1,7 +1,6 @@
 package desk
 
 import java.nio.file.{Files, Paths}
-import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.LinkedBlockingQueue
 
 class OnchainSpec extends TempDirectorySuite:
@@ -358,7 +357,7 @@ class OnchainSpec extends TempDirectorySuite:
     val path = directory.resolve("config.json")
     def load(text: String) =
       Files.writeString(path, text)
-      Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"))
+      Platform.setMode(path, "rw-------")
       TradingConfig.load(Some(path))
     val good =
       s"""{"onchain": [{"name": "DEMO", "pair": "$pair", "quotePool": "$pool", "rpc": ["https://rpc-bsc.48.club", "https://bsc-dataseed.binance.org"]}]}"""

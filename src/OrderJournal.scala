@@ -123,13 +123,12 @@ final class OrderJournal private (
     val bytes = ujson.write(body).getBytes(java.nio.charset.StandardCharsets.UTF_8)
     require(bytes.length <= 32768, "saved state is too large")
     val temporary = directory.resolve(UUID.randomUUID().toString + ".tmp")
-    val permissions =
-      PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+    val permissions = LocalFiles.privateFile
     try
       val out = FileChannel.open(
         temporary,
         java.util.Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE),
-        permissions
+        permissions*
       )
       try
         val buffer = ByteBuffer.wrap(bytes)
@@ -144,9 +143,7 @@ final class OrderJournal private (
         StandardCopyOption.REPLACE_EXISTING
       )
       afterReplace()
-      val parent = FileChannel.open(directory, StandardOpenOption.READ)
-      try parent.force(true)
-      finally parent.close()
+      LocalFiles.flushFolder(directory)
       lastNonce = nonce
       saved = next
       held = nextResting
@@ -232,19 +229,20 @@ object OrderJournal:
       afterReplace: () => Unit = () => ()
   ): OrderJournal =
     require(identity.matches("(mainnet|testnet)-[0-9a-f]{40}"), "invalid state identity")
-    require(!Files.isSymbolicLink(directory), "state directory is symbolic")
+    require(!LocalFiles.linked(directory), "state directory is symbolic")
     Files.createDirectories(directory)
-    Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwx------"))
+    if LocalFiles.posix then
+      Files.setPosixFilePermissions(directory, PosixFilePermissions.fromString("rwx------"))
+    require(LocalFiles.isPrivate(directory), "state directory must be private")
     val lockPath = directory.resolve(identity + ".lock")
-    require(!Files.isSymbolicLink(lockPath), "state lock is symbolic")
-    val permissions =
-      PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+    require(!LocalFiles.linked(lockPath), "state lock is symbolic")
+    val permissions = LocalFiles.privateFile
     val options = java.util.Set.of[java.nio.file.OpenOption](
       StandardOpenOption.CREATE,
       StandardOpenOption.WRITE,
       LinkOption.NOFOLLOW_LINKS
     )
-    val channel = FileChannel.open(lockPath, options, permissions)
+    val channel = FileChannel.open(lockPath, options, permissions*)
     var held = Option.empty[FileLock]
     try
       held = Option(channel.tryLock())

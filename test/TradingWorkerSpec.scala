@@ -1144,12 +1144,18 @@ class TradingWorkerSpec extends TempDirectorySuite:
     val f =
       new Fixture(orderPermission = run => AccountGate.withOrder(root, "mainnet", owner)(run()))
     def probe(): Int =
-      val process = new ProcessBuilder(
-        "/usr/bin/python3",
-        "-c",
-        "import fcntl,sys\nf=open(sys.argv[1],'r+')\ntry: fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(73)",
-        root.resolve("mainnet-" + owner.drop(2) + ".lock").toString
-      ).start()
+      val process = Platform
+        .lockChild(
+          new ProcessBuilder(
+            "/usr/bin/python3",
+            "-c",
+            "import fcntl,sys\nf=open(sys.argv[1],'r+')\ntry: fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(73)",
+            root.resolve("mainnet-" + owner.drop(2) + ".lock").toString
+          ),
+          "probe",
+          root.resolve("mainnet-" + owner.drop(2) + ".lock").toString
+        )
+        .start()
       try
         assert(process.waitFor(3, TimeUnit.SECONDS), "lock probe did not exit")
         process.exitValue()

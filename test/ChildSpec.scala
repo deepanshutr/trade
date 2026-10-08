@@ -15,13 +15,13 @@ import sun.misc.{Signal, SignalHandler}
 class ChildSpec extends TempDirectorySuite:
   private val java = "/opt/jdk/bin/java"
   private val jar = "/home/test/.local/lib/desk.jar"
-  private val python = "/opt/tools/bin/python3"
+  private val python = Platform.absolute("/opt/tools/bin/python3")
   // A vault folder with an empty desk_vault.py. Nothing runs it.
   private lazy val folder =
     val directory = suiteDirectory("child-vault")
     Files.write(directory.resolve("desk_vault.py"), Array.emptyByteArray)
     directory.toString
-  private lazy val script = folder + "/desk_vault.py"
+  private lazy val script = Path.of(folder).resolve("desk_vault.py").toString
   private lazy val env = Map("DESK_PYTHON" -> python, "DESK_VAULT" -> folder)
   private val notInstalled = "Owner tooling is not installed"
 
@@ -292,9 +292,9 @@ class ChildSpec extends TempDirectorySuite:
 
   test("the JVM keeps SIGQUIT for itself, so Control backslash only prints a thread dump") {
     // Reopen trigger: when a JDK lets Java handle SIGQUIT, this fails and the guard can take it.
-    val signal = new Signal("QUIT")
-    val accepted = scala.util.Try(Signal.handle(signal, _ => ()))
-    accepted.foreach(previous => Signal.handle(signal, previous))
+    // Windows has no QUIT signal at all, so there the JVM refuses the name itself.
+    val accepted = scala.util.Try(Signal.handle(new Signal("QUIT"), _ => ()))
+    accepted.foreach(previous => Signal.handle(new Signal("QUIT"), previous))
     assert(accepted.failed.toOption.exists(_.isInstanceOf[IllegalArgumentException]))
   }
 

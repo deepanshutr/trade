@@ -3,7 +3,6 @@ package desk
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.{Files, LinkOption, Path, StandardOpenOption}
-import java.nio.file.attribute.PosixFilePermissions
 import scala.jdk.CollectionConverters.*
 import upickle.default.{ReadWriter, macroRW, read, write}
 
@@ -190,7 +189,7 @@ final class MarketArchive private (
             StandardOpenOption.WRITE,
             LinkOption.NOFOLLOW_LINKS
           ),
-          PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+          LocalFiles.privateFile*
         )
         output = Some((path, channel, at))
       val buffer = ByteBuffer.wrap(encoded)

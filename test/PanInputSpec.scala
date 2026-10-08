@@ -42,6 +42,7 @@ class PanInputSpec extends TempDirectorySuite:
   }
 
   test("actual input orders resize before an immediate pan while the fold waits") {
+    assume(!Term.windows, "the playback harness drives a Unix pseudo terminal through python3")
     val directory = tempDirectory("desk-resize-runtime-", keepOnFailure = true)
     val log = directory.resolve("runner.log")
     val process = new ProcessBuilder(

@@ -1,12 +1,11 @@
 package desk
 
 import java.nio.file.{Files, Path}
-import java.nio.file.attribute.PosixFilePermissions
 
 class TradingConfigSpec extends munit.FunSuite:
   private def setting(text: String): Path =
     val p = Files.createTempFile("desk-settings", ".json")
-    Files.setPosixFilePermissions(p, PosixFilePermissions.fromString("rw-------"))
+    Platform.setMode(p, "rw-------")
     Files.writeString(p, text)
     p
 
@@ -232,9 +231,10 @@ class TradingConfigSpec extends munit.FunSuite:
     val p = setting("{}")
     val link = p.resolveSibling(p.getFileName.toString + ".link")
     try
-      Files.setPosixFilePermissions(p, PosixFilePermissions.fromString("rw-r--r--"))
+      Platform.setMode(p, "rw-r--r--")
       assert(TradingConfig.load(Some(p)).isLeft)
-      Files.setPosixFilePermissions(p, PosixFilePermissions.fromString("rw-------"))
+      Platform.setMode(p, "rw-------")
+      assume(Platform.links, "symbolic links need developer mode on Windows")
       Files.createSymbolicLink(link, p)
       assert(TradingConfig.load(Some(link)).isLeft)
     finally

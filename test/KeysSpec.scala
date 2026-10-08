@@ -23,10 +23,7 @@ class KeysSpec extends munit.FunSuite:
             file,
             """{"version":1,"bindings":{"quit":["t"]}}"""
           )
-          java.nio.file.Files.setPosixFilePermissions(
-            file,
-            java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
-          )
+          Platform.setMode(file, "rw-------")
           file
         }
       )
@@ -53,10 +50,7 @@ class KeysSpec extends munit.FunSuite:
     val dir = java.nio.file.Files.createTempDirectory("desk-keys")
     val file = dir.resolve("b.json")
     java.nio.file.Files.writeString(file, """{"version":1,"bindings":{"close":["a"]}}""")
-    java.nio.file.Files.setPosixFilePermissions(
-      file,
-      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
-    )
+    Platform.setMode(file, "rw-------")
     val loaded = Bindings.load(file).toOption.get
     assertEquals(feed(Vector(97), bindings = loaded)._2, Vector(Command.Place))
   }
