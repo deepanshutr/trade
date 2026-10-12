@@ -249,13 +249,15 @@ class PlaybackSpec(unittest.TestCase):
 
     def test_nonblocking_claim_needs_held_work_at_quit_and_a_real_queue_trace(self):
         events = ("key Quit", "key PromptSubmit", "key ZoomOut", "quote ETH")
-        good = {"forbidden": [], "metadata_calls": 1, "held_work": True,
+        good = {"forbidden": [], "metadata_calls": 1, "polymarket_calls": 2, "polymarket_failures": 0,
+                "polymarket_reader_alive": False, "held_work": True,
                 "hold_finished": False,
                 "queue": {"samples": [{"event": e, "age_ns": "1",
                     "method": "offer" if e.startswith("quote ") else "put"} for e in events]}}
         playback.validate_result(good, "send")
         for field, value in (("forbidden", ["submission"]), ("metadata_calls", 0),
-                             ("held_work", False), ("hold_finished", True)):
+                             ("polymarket_calls", 0), ("polymarket_calls", 1), ("polymarket_failures", 1),
+                             ("polymarket_reader_alive", True), ("held_work", False), ("hold_finished", True)):
             with self.subTest(field=field):
                 with self.assertRaises(AssertionError):
                     playback.validate_result({**good, field: value}, "send")
@@ -265,7 +267,8 @@ class PlaybackSpec(unittest.TestCase):
 
     def test_shutdown_can_interrupt_held_work_only_after_quit(self):
         events = ("key Quit", "key PromptSubmit", "key ZoomOut", "quote ETH")
-        result = {"forbidden": [], "metadata_calls": 1, "held_work": True,
+        result = {"forbidden": [], "metadata_calls": 1, "polymarket_calls": 2, "polymarket_failures": 0,
+                  "polymarket_reader_alive": False, "held_work": True,
                   "hold_finished": True, "hold_finished_ns": "11",
                   "queue": {"samples": [{"event": event, "age_ns": "1", "entered_ns": "10",
                       "method": "offer" if event.startswith("quote ") else "put"} for event in events]}}
@@ -276,7 +279,8 @@ class PlaybackSpec(unittest.TestCase):
 
     def test_normal_result_requires_both_scrub_commands(self):
         keys = ("key Quit", "key ScrubBack", "key ScrubForward")
-        good = {"forbidden": [], "metadata_calls": 1,
+        good = {"forbidden": [], "metadata_calls": 1, "polymarket_calls": 2, "polymarket_failures": 0,
+                "polymarket_reader_alive": False,
                 "queue": {"samples": [{"event": key, "age_ns": "1", "method": "put"} for key in keys]}}
         playback.validate_result(good, "normal")
         for omitted in keys[1:]:

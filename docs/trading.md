@@ -357,6 +357,22 @@ reduce-only order as an ordinary one, so resolve any saved order before installi
 older build. An older build also cannot read the saved order file while orders rest.
 Cancel every resting order first. See [saved orders](#saved-orders).
 
+## Polymarket reads
+
+Desk reads the chance of up for bitcoin and gold from Polymarket's public API for the
+[Polymarket band](workspace.md#the-polymarket-band). The reads go to Polymarket's hosts,
+not the venue's, with their own pacer, the count that holds them to six requests in any
+minute. They never count against the venue budget, the pace Desk keeps to stay under the
+venue's request limit. They carry no account, key or cookie. They run in live, prop and
+view alike. The recorder started with `--record` makes none. After a failed read Desk
+waits one minute, and twice as long after each further failure, up to five minutes.
+
+The reads go straight from your own internet address, so Polymarket and the networks
+in between see that address. They run at fixed times: one at start, one five seconds
+after each five minute mark, and a price read every 30 seconds while a market is open.
+Each read names the Java version in its user agent. So a server log can tell when Desk
+runs and from where, though not your account, your orders or the market you watch.
+
 ## Limit orders
 
 Press `t` in the workspace to switch to limit orders. The

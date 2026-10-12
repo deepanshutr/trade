@@ -101,6 +101,7 @@ class MainRuntimeSpec extends TempDirectorySuite:
     val loaders = ArrayBuffer.empty[(TradingConfig, Boolean, String, Path, () => Array[Byte])]
     val created = ArrayBuffer.empty[(TradingConfig, Boolean, String, Path)]
     var sourcesCalled = 0
+    var polymarketBuilt = 0
     val present = scala.collection.mutable.Set.empty[String]
     var onScreen: KeyScreen.Context => Option[String] = _ => None
     var read: () => Array[Byte] = () => keyBytes.clone()
@@ -161,7 +162,8 @@ class MainRuntimeSpec extends TempDirectorySuite:
           throw new Reached
         },
         // The home is named at the call, as the guard test below requires.
-        keys = hooks.copy(home = home)
+        keys = hooks.copy(home = home),
+        polymarket = () => { polymarketBuilt += 1; OfflinePolymarket.client() }
       )
 
   private def withOwner(network: String = "testnet"): String =
@@ -190,6 +192,7 @@ class MainRuntimeSpec extends TempDirectorySuite:
     assertEquals(s.sourcesCalled, 0)
     assertEquals(s.created.size, 0)
     assertEquals(s.reads.size, 0)
+    assertEquals(s.polymarketBuilt, 0)
     assert(!Files.exists(s.state), "the key screen made workspace state")
   }
 
@@ -760,7 +763,8 @@ class MainRuntimeSpec extends TempDirectorySuite:
     assertEquals(Bindings.load(Bindings.path(home)), Right(Bindings.defaults))
   }
 
-  test("every test start of Desk names its home, so no test reads the owner's own files") {
+  // Every start of Desk in the test folder, as the file name and the text of the call.
+  private def testStarts(): Vector[(String, String)] =
     val folder = Path.of("test")
     assert(Files.isDirectory(folder), Path.of("").toAbsolutePath)
     val openings = Vector("Main" + ".run(", "WorkspaceApp" + ".run(")
@@ -781,7 +785,19 @@ class MainRuntimeSpec extends TempDirectorySuite:
           end += 1
         (file.getFileName.toString, text.slice(start, end))
     assert(calls.size >= 6, calls)
-    val unnamed = calls.filterNot((_, call) => call.contains("keys =") && call.contains("home ="))
+    calls
+
+  test("every test start of Desk names its home, so no test reads the owner's own files") {
+    val unnamed =
+      testStarts().filterNot((_, call) => call.contains("keys =") && call.contains("home ="))
+    assertEquals(unnamed.map(_._1), Vector.empty[String])
+  }
+
+  // A start that names the real client reaches Polymarket, so it is refused like one that names none.
+  test("every test start of Desk names an offline Polymarket client") {
+    val unnamed = testStarts().filterNot((_, call) =>
+      call.contains("polymarket =") && !call.contains("PolymarketReader.http")
+    )
     assertEquals(unnamed.map(_._1), Vector.empty[String])
   }
 

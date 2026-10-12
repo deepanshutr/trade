@@ -32,7 +32,6 @@ class DataQualitySpec extends munit.FunSuite:
     assertEquals(first.tape.size, 2)
     val replay = State.reduce(first, batch(Vector(12, 13)), now)
     assertEquals(replay.tape.size, 3)
-    assertEquals(Gauges.tapeStats(replay.tape, now + 1, Vector(10L)).head._2, 3)
   }
 
   test("backfill adds missing candles and preserves overlapping live observations") {

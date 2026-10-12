@@ -194,6 +194,175 @@ class RefineDiagnosticsSpec extends TempDirectorySuite:
       assert(exited.await(2, TimeUnit.SECONDS))
   }
 
+  test("Polymarket requests and failures are recorded once a minute when they rose") {
+    val clock = new AtomicLong(10000L)
+    val saved = new Memory
+    val counts = new java.util.concurrent.atomic.AtomicReference((0L, Map.empty[Int, Long]))
+    val log = new Diagnostics(
+      () => saved,
+      clock.get,
+      2000L,
+      monotonic = clock.get,
+      polymarket = () => counts.get
+    )
+    def records = saved.lines.map(ujson.read(_)).filter(_("event").str == "polymarket")
+    log.start()
+    try
+      counts.set((3L, Map(429 -> 1L)))
+      log.tick()
+      clock.addAndGet(59_999L)
+      log.tick()
+      clock.addAndGet(1L)
+      log.tick()
+      Wait.until("first polymarket record")(records.size == 1)
+      assertEquals(records(0)("at").str, "70000")
+      assertEquals(records(0)("requests").num, 3.0)
+      assertEquals(
+        records(0)("failures").obj.toMap,
+        Map[String, ujson.Value]("429" -> ujson.Num(1))
+      )
+      assertEquals(records(0).obj.keySet.toSet, Set("at", "event", "requests", "failures"))
+      counts.set((5L, Map(429 -> 1L)))
+      clock.addAndGet(60_000L)
+      log.tick()
+      Wait.until("second polymarket record")(records.size == 2)
+      assertEquals(records(1)("requests").num, 2.0)
+      assertEquals(records(1)("failures").obj.toMap, Map.empty[String, ujson.Value])
+      clock.addAndGet(60_000L)
+      log.tick()
+      counts.set((5L, Map(429 -> 1L, 0 -> 2L)))
+      clock.addAndGet(60_000L)
+      log.tick()
+      Wait.until("third polymarket record")(records.size == 3)
+      assertEquals(records(2)("requests").num, 0.0)
+      assertEquals(
+        records(2)("failures").obj.toMap,
+        Map[String, ujson.Value]("0" -> ujson.Num(2))
+      )
+      assertEquals(records.size, 3)
+    finally log.close()
+  }
+
+  test("Polymarket rises count from the reading at start, by ascending status, at minute marks") {
+    val clock = new AtomicLong(10000L)
+    val saved = new Memory
+    val counts = new java.util.concurrent.atomic.AtomicReference((2L, Map(429 -> 1L)))
+    val log = new Diagnostics(
+      () => saved,
+      clock.get,
+      2000L,
+      monotonic = clock.get,
+      polymarket = () => counts.get
+    )
+    def records = saved.lines.map(ujson.read(_)).filter(_("event").str == "polymarket")
+    log.start()
+    try
+      counts.set((5L, Map(429 -> 2L, 0 -> 1L, -1 -> 1L)))
+      clock.addAndGet(60_000L)
+      log.tick()
+      Wait.until("first polymarket record")(records.size == 1)
+      assertEquals(records(0)("requests").num, 3.0)
+      assertEquals(records(0)("failures").obj.keys.toVector, Vector("-1", "0", "429"))
+      counts.set((6L, Map(429 -> 2L, 0 -> 1L, -1 -> 1L)))
+      clock.addAndGet(1_000L)
+      log.tick()
+      clock.addAndGet(59_000L)
+      log.tick()
+      Wait.until("second polymarket record")(records.size == 2)
+      assertEquals(records(1)("at").str, "130000")
+      clock.addAndGet(60_000L)
+      log.tick()
+      counts.set((7L, Map(429 -> 2L, 0 -> 1L, -1 -> 1L)))
+      clock.addAndGet(1_000L)
+      log.tick()
+      clock.addAndGet(59_000L)
+      log.tick()
+      Wait.until("third polymarket record")(records.size == 3)
+      assertEquals(records(2)("at").str, "250000")
+    finally log.close()
+  }
+
+  test("the default reads the reader's own counters") {
+    val clock = new AtomicLong(10000L)
+    val saved = new Memory
+    val log = new Diagnostics(() => saved, clock.get, 2000L, monotonic = clock.get)
+    def records = saved.lines.map(ujson.read(_)).filter(_("event").str == "polymarket")
+    log.start()
+    try
+      Polymarket.countRequest()
+      clock.addAndGet(60_000L)
+      log.tick()
+      Wait.until("default polymarket record")(records.nonEmpty)
+      assert(records(0)("requests").num >= 1.0)
+    finally log.close()
+  }
+
+  test("Polymarket failure rises count from the failures read at start") {
+    val clock = new AtomicLong(10000L)
+    val saved = new Memory
+    val counts = new java.util.concurrent.atomic.AtomicReference((2L, Map(429 -> 1L)))
+    val log = new Diagnostics(
+      () => saved,
+      clock.get,
+      2000L,
+      monotonic = clock.get,
+      polymarket = () => counts.get
+    )
+    def records = saved.lines.map(ujson.read(_)).filter(_("event").str == "polymarket")
+    log.start()
+    try
+      counts.set((2L, Map(429 -> 3L)))
+      clock.addAndGet(60_000L)
+      log.tick()
+      Wait.until("first polymarket record")(records.size == 1)
+      assertEquals(records(0)("requests").num, 0.0)
+      assertEquals(
+        records(0)("failures").obj.toMap,
+        Map[String, ujson.Value]("429" -> ujson.Num(2))
+      )
+    finally log.close()
+  }
+
+  test("Polymarket rises count from the reading the last record used") {
+    val clock = new AtomicLong(10000L)
+    val saved = new Memory
+    val readings = Vector(0L, 3L, 5L, 8L).map(n => (n, Map.empty[Int, Long]))
+    val reads = new java.util.concurrent.atomic.AtomicInteger(0)
+    val log = new Diagnostics(
+      () => saved,
+      clock.get,
+      2000L,
+      monotonic = clock.get,
+      polymarket = () => readings(reads.getAndIncrement().min(readings.size - 1))
+    )
+    def records = saved.lines.map(ujson.read(_)).filter(_("event").str == "polymarket")
+    log.start()
+    try
+      clock.addAndGet(60_000L)
+      log.tick()
+      Wait.until("first polymarket record")(records.size == 1)
+      clock.addAndGet(60_000L)
+      log.tick()
+      Wait.until("second polymarket record")(records.size == 2)
+      assertEquals(records.map(_("requests").num), Vector(3.0, 2.0))
+    finally log.close()
+  }
+
+  test("the default reads the reader's failures") {
+    val clock = new AtomicLong(10000L)
+    val saved = new Memory
+    val log = new Diagnostics(() => saved, clock.get, 2000L, monotonic = clock.get)
+    def records = saved.lines.map(ujson.read(_)).filter(_("event").str == "polymarket")
+    log.start()
+    try
+      Polymarket.countFailure(418)
+      clock.addAndGet(60_000L)
+      log.tick()
+      Wait.until("default failure record")(records.nonEmpty)
+      assertEquals(records(0)("failures").obj.get("418").map(_.num), Some(1.0))
+    finally log.close()
+  }
+
   test("overflow stays visible until the drop record is written") {
     val entered = new CountDownLatch(1)
     val release = new CountDownLatch(1)

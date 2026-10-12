@@ -101,15 +101,6 @@ object Chart:
       }
       out.toString
 
-  def referenceColumns(
-      r: Ref,
-      count: Int,
-      s: Snapshot,
-      now: Long
-  ): Vector[Option[Column]] =
-    val (first, z) = window(s, count, now)
-    columnsOf(r.samples, Vector.empty, r.candles, first, z, count)
-
   def styled(cells: Vector[(Char, String)]): String =
     val sb = new StringBuilder
     var current = ""
@@ -226,8 +217,6 @@ object Chart:
     val digits = if hi < 1 then 0 else hi.toLong.toString.length
     (5 - digits).max(0)
 
-  def line(columns: Vector[Option[Column]], a: Axis): Vector[String] = lineCanvas(columns, a).lines
-
   private def lineCanvas(columns: Vector[Option[Column]], a: Axis): Canvas =
     val cv = Canvas(columns.size / 2, a.rows)
     var previous: Option[(Int, Int)] = None
@@ -245,12 +234,6 @@ object Chart:
     }
     newest.foreach((cell, row) => cv.restyle(cell, row, Screen.bold))
     cv
-
-  def candleRows(
-      columns: Vector[Option[Column]],
-      a: Axis,
-      cells: Int
-  ): Vector[String] = candleGrid(columns, a, cells).toVector.map(row => new String(row))
 
   private def candleGrid(
       columns: Vector[Option[Column]],
@@ -283,15 +266,6 @@ object Chart:
       }
     }
     out
-
-  def plot(
-      columns: Vector[Option[Column]],
-      a: Axis,
-      cells: Int,
-      mode: ChartMode
-  ): Vector[String] = mode match
-    case ChartMode.Line    => line(columns, a)
-    case ChartMode.Candles => candleRows(columns, a, cells)
 
   // The plot with a ticket row of dots on its empty cells, then the marks over their cells.
   def decorated(
@@ -433,30 +407,6 @@ object Chart:
     val fixed = s"%.${dec}f".format(price)
     if fixed.length <= width || !price.isFinite then fixed
     else Trading.display(BigDecimal(price), width)
-
-  // The prices beside a small plot in width columns: the top, the middle and the bottom of the
-  // axis right aligned before a space, and the current price in bold with > after it on its row.
-  def scaleRows(
-      ax: Option[Axis],
-      rows: Int,
-      midRow: Option[Int],
-      mid: Option[String],
-      width: Int
-  ): Vector[String] =
-    ax.fold(Vector.fill(rows)(" " * width)) { a =>
-      val dec = decimals(a.hi)
-      val middle = a.hi - (a.hi - a.lo) * (rows / 2) / (rows - 1).max(1)
-      val labels = Map(0 -> a.hi, rows / 2 -> middle, rows - 1 -> a.lo)
-      (0 until rows).toVector.map { row =>
-        (midRow, mid) match
-          case (Some(m), Some(text)) if m == row =>
-            Screen.bold + rjust(text, width - 1) + ">" + Screen.reset
-          case _ =>
-            labels.get(row).fold(" " * width) { v =>
-              rjust(fitted(v, dec, width - 1), width - 1) + " "
-            }
-      }
-    }
 
   def volumeRows(
       columns: Vector[Option[Column]],

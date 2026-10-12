@@ -105,50 +105,8 @@ object Workspace:
       }
       .take(30000)
 
-  def indicatorRows(s: Snapshot, now: Long, width: Int, style: Style): Vector[String] =
-    val h = ((width - 24) / 2).max(1).min(20)
-    def row(compact: String, seconds: Long, ink: String): String =
-      val fitted = Chart.fit(compact, width)
-      val marked = if style.colour && seconds * 1000 > now - s.since then
-        fitted.take(5) + Screen.dim + fitted.slice(5, 8) + Screen.reset + ink + fitted.drop(8)
-      else fitted
-      style.wrap(ink, marked)
-    val books = Gauges.bookLenses.indices.map { i =>
-      row(
-        Chart.plain(Gauges.bookRow(s, i, now, h, Style.mono, labelWidth = 3)),
-        Gauges.bookLenses(i)._2,
-        style.book
-      )
-    }
-    val tape = Gauges.tapeLenses.indices.map { i =>
-      val original = Chart.plain(Gauges.compactTapeRow(s, i, now, h, Style.mono))
-      val compact = if original.length > width then original.replace(" n", "n") else original
-      row(compact, Gauges.tapeLenses(i)._2, style.tape)
-    }
-    val correlations = State.refCoins.flatMap { coin =>
-      Gauges.horizons.map { (label, interval, n) =>
-        val r = if coin == s.coin then Comparison(None, 0, n, "same market")
-        else
-          Quant.compare(
-            s.candles.getOrElse(interval, Vector.empty),
-            s.refs.getOrElse(coin, Ref.empty).candles.getOrElse(interval, Vector.empty),
-            interval,
-            n,
-            now
-          )
-        val name = if coin == "PAXG" then "GOLD" else "BTC"
-        val count = s"${r.count}/$n"
-        val half = ((width - name.length - label.length - count.length - 10) / 2).max(1).min(20)
-        val rail = Gauges.track(r.value, half, "")
-        val value = r.value.fold("   --")(v => f"$v%+.2f")
-        val reading = if r.value.nonEmpty then s"$name $label $rail $value $count"
-        else s"$name $label ${r.status} $count"
-        style.wrap(if coin == "PAXG" then style.gold else style.bitcoin, Chart.fit(reading, width))
-      }
-    }
-    (books ++ tape).zip(correlations).map((left, right) => left + " " + right).toVector
-
-  // Mono keeps no style but the inverse that marks the axis cursor, and the reset that ends it.
+  // Mono keeps no style but the inverse that marks the axis cursor or a clamped rail marker, and
+  // the reset that ends it.
   private def mono(line: String): String =
     var inverse = false
     (Screen.esc + "\\[[0-9;]*m").r.replaceAllIn(
@@ -264,7 +222,8 @@ object Workspace:
       zone: java.time.ZoneId,
       style: Style,
       logsUnavailable: Boolean = false,
-      orderResultsUnavailable: Boolean = false
+      orderResultsUnavailable: Boolean = false,
+      odds: Odds = Odds.none
   ): WorkspaceFrame =
     if view.coin != s.coin then
       return draw(
@@ -277,7 +236,8 @@ object Workspace:
         zone,
         style,
         logsUnavailable,
-        orderResultsUnavailable
+        orderResultsUnavailable,
+        odds
       )
     if cols < Layout.minCols || rows < Layout.minRows then
       WorkspaceFrame(
@@ -294,10 +254,6 @@ object Workspace:
       val tradeTop = rows - 12
       val warnings = (if logsUnavailable then " !logs" else "") +
         (if orderResultsUnavailable then " !results" else "")
-      // The chart block fills every row above the band: the header, the price rows, the volume
-      // row, three rows for each reference market and the time axis.
-      val references = State.refCoins.distinct.count(_ != s.coin)
-      val priceRows = tradeTop - 3 - Layout.referenceRows * references
       // View has no account, so its axis and plot carry no entry, order, ticket or fill.
       val trades = panel.mode != "VIEW"
       val held = if trades then view.position.filter(_ != 0) else None
@@ -369,12 +325,19 @@ object Workspace:
         now,
         zone,
         style,
-        regions.copy(priceRows = priceRows),
+        regions,
         decor,
+        Band.rows(s, odds, now, regions.left, regions.plot, regions.band, style),
         headerWidth = Some(chartWidth - warnings.length)
       )
-      val gauges = indicatorRows(s, now, (regions.bandRight - 1) / 2, style)
-        .map(Chart.fit(_, regions.bandRight))
+      // The groups are built once a frame, since an hour or longer measure reads up to 5200 bars.
+      val colourKey = Indicators.key(s.coin, style, w => odds.live(Band.coin(s.coin), w))
+      val rails = Rails.lines(
+        Indicators.groups(s, odds.chance, now, style),
+        regions.bandRight,
+        colourKey,
+        style.overlap
+      )
       val outlook = if panel.outlook.coin.isEmpty then Outlook.empty(s.coin)
       else panel.outlook
       val outlookRows = OutlookScreen
@@ -662,8 +625,9 @@ object Workspace:
           (if style.colour then publicLine else mono(publicLine)) + "|" + content
         else
           val row = i - tradeTop
-          val gauge = gauges.lift(row).getOrElse(" " * regions.bandRight)
-          coloured(row) + "|" + (if style.colour then gauge else mono(gauge))
+          // The rails keep their glyphs, so they pass through mono only, never safeText.
+          val rail = rails.lift(row).getOrElse(" " * regions.bandRight)
+          coloured(row) + "|" + (if style.colour then rail else mono(rail))
       }
       WorkspaceFrame(
         lines,

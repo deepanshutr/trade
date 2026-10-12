@@ -183,26 +183,6 @@ class UiBoundarySpec extends munit.FunSuite:
       assert(frame.lines.forall(line => Chart.plain(line).length == cols))
   }
 
-  test("gold label and exact paired count survive the equal-width correlation pane") {
-    val candles = (0 to 15).toVector.map { i =>
-      val price = (i + 10).toDouble
-      Candle(now - (16L - i) * 60000L, price, price + 1, price - 1, price, 1)
-    }
-    val data = snapshot.copy(
-      candles = Map("1m" -> candles),
-      refs = snapshot.refs.updated("PAXG", Ref.empty.copy(candles = Map("1m" -> candles)))
-    )
-    val frame = Workspace.draw(data, view, PanelView(), 100, 30, now, zone, Style.mono)
-    assert(frame.lines.exists(_.startsWith("PAXG (token tied to gold)")))
-    // The gauges fill the band's right region, after the panel and its bar.
-    val pane = (Layout.regions(100, 30).bandRight - 1) / 2
-    val row = frame.lines.map(_.drop(39)).find(_.startsWith("TAPE")).get
-    val correlation = row.slice(pane + 1, 2 * pane + 1).trim
-    assert(correlation.startsWith("GOLD 15m"))
-    assert(correlation.endsWith("+1.00 15/15"))
-    assert(correlation.contains("⣿"))
-  }
-
   test("terminal size is measured before context and a changed size refuses the old frame") {
     val f = new Fixture
     f.draw()

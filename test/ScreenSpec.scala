@@ -9,18 +9,12 @@ class ScreenSpec extends munit.FunSuite:
       zone: java.time.ZoneId,
       style: Style
   ): Vector[String] =
+    val r = Layout.regions(cols, rows)
     Screen
-      .renderMarket(
-        s,
-        now,
-        zone,
-        style,
-        Layout
-          .regions(cols, rows)
-          .copy(priceRows = rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin)),
-        AxisDecor.plain
-      )
+      .renderMarket(s, now, zone, style, r, AxisDecor.plain, blank(r))
       .lines
+  // The band rows the chart block leaves for the band, blank across the chart's width.
+  private def blank(r: Regions): Vector[String] = Vector.fill(r.band)(" " * (r.left + r.plot))
   val t0 = 1_700_000_000_000L
   val zone = java.time.ZoneId.of("UTC")
   def lv(px: String, sz: String) = Level(px, sz, 1)
@@ -110,17 +104,17 @@ class ScreenSpec extends munit.FunSuite:
   test("render yields the chart block rows at the chart width at the golden sizes") {
     for (cols, rows) <- Vector((100, 30), (110, 30), (120, 40), (166, 50)) do
       val frame = market(Golden.snapshot, cols, rows, Golden.now, zone, Style.colour)
-      assertEquals(frame.size, rows - 10)
+      assertEquals(frame.size, rows - 12)
       assert(frame.map(plain).forall(_.length == cols - 39), frame.map(plain).map(_.length))
   }
 
   test("the current price row alone carries the marker and the right scale is gone") {
     val frame = market(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour)
-    val priceRows = frame.slice(1, 12)
+    val priceRows = frame.slice(1, 14)
     val marked = priceRows.zipWithIndex.filter((line, _) => plain(line).charAt(16) == '>')
     assertEquals(marked.size, 1)
     val axis = Chart
-      .axis(Chart.columns(Golden.snapshot, 46, Golden.now), Golden.snapshot.book, 11)
+      .axis(Chart.columns(Golden.snapshot, 46, Golden.now), Golden.snapshot.book, 13)
       .get
     val mid = Golden.snapshot.book.flatMap(_.mid).get.toDouble
     assertEquals(marked.head._2, axis.trueRow(mid))
@@ -129,48 +123,31 @@ class ScreenSpec extends munit.FunSuite:
     assert(priceRows.forall(line => plain(line).length == 61))
   }
 
-  test("the colour frame keeps side colours and reference plots read without them") {
+  test("the colour frame keeps side colours and the rows under the price rows read without them") {
     val colour = market(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour)
     val mono = market(Golden.snapshot, 120, 40, Golden.now, zone, Style.mono)
     assert(colour.exists(_.contains(Style.colour.bid)))
     assert(colour.exists(_.contains(Style.colour.ask)))
-    assert(!colour.slice(12, 19).exists(_.contains(Screen.esc + "[3")))
+    assert(!colour.slice(14, 18).exists(_.contains(Screen.esc + "[3")))
     assert(!mono.exists(_.contains(Screen.esc + "[3")))
   }
 
   test("the price rows carry braille bars from column 18 and no hash marks") {
     val frame = market(Golden.snapshot, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    val bars = frame.slice(1, 12).map(_.slice(17, 38))
+    val bars = frame.slice(1, 14).map(_.slice(17, 38))
     assert(bars.count(_.trim.nonEmpty) >= 10, bars)
     assert(!frame.exists(_.contains("#")))
     assert(bars.exists(_.contains(Chart.FULL)))
-    assert(frame.slice(1, 12).forall(_.slice(0, 16).forall(c => c == ' ' || c == '.' || c.isDigit)))
-  }
-
-  test("when the main market is itself a reference market, that reference draws no line") {
-    val asBtc = Golden.snapshot.copy(coin = "BTC")
-    val withBtcRefData = market(asBtc, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    val withoutBtcRefData = market(
-      asBtc.copy(refs = asBtc.refs.updated("BTC", Ref.empty)),
-      100,
-      30,
-      Golden.now,
-      zone,
-      Style.mono
-    )
-      .map(plain)
-    assertEquals(withBtcRefData, withoutBtcRefData)
+    assert(frame.slice(1, 14).forall(_.slice(0, 16).forall(c => c == ' ' || c == '.' || c.isDigit)))
   }
 
   test("volume and the time axis occupy their own rows") {
     val frame = market(Golden.snapshot, 100, 30, Golden.now, zone, Style.colour).map(plain)
-    assertEquals(frame(12).take(38), " " * 31 + "volume ")
-    assertEquals(frame(12).length, 61)
-    assert(frame(13).startsWith("BTC"))
-    assert(frame(16).startsWith("PAXG"))
-    assertEquals(frame(19).take(38), " " * 24 + "c line 2s/col ")
-    assert(frame(19).drop(38).matches("[ |0-9:]*"), frame(19))
-    assert("""\|\d\d:\d\d:\d\d""".r.findFirstIn(frame(19)).nonEmpty, frame(19))
+    assertEquals(frame(14).take(38), " " * 31 + "volume ")
+    assertEquals(frame(14).length, 61)
+    assertEquals(frame(17).take(38), " " * 24 + "c line 2s/col ")
+    assert(frame(17).drop(38).matches("[ |0-9:]*"), frame(17))
+    assert("""\|\d\d:\d\d:\d\d""".r.findFirstIn(frame(17)).nonEmpty, frame(17))
   }
 
   test("a coarse zoom draws the minute series, the cell caption and the volume") {
@@ -181,34 +158,33 @@ class ScreenSpec extends munit.FunSuite:
     }
     val s = Golden.snapshot.copy(candles = Map("1m" -> candles), zoom = 5)
     val frame = market(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    assertEquals(frame.size, 20)
+    assertEquals(frame.size, 18)
     assert(frame.forall(_.length == 61), frame.map(_.length))
-    assert(frame(19).take(38).endsWith("c line 2m/col "), frame(19))
-    val braille = frame.slice(1, 12).filter(_.drop(38).exists(c => c >= 0x2800 && c <= 0x28ff))
-    assert(braille.nonEmpty, frame.slice(1, 12).mkString("\n"))
-    assert(frame(12).drop(38).exists(c => c >= 0x2800 && c <= 0x28ff), frame(12))
+    assert(frame(17).take(38).endsWith("c line 2m/col "), frame(17))
+    val braille = frame.slice(1, 14).filter(_.drop(38).exists(c => c >= 0x2800 && c <= 0x28ff))
+    assert(braille.nonEmpty, frame.slice(1, 14).mkString("\n"))
+    assert(frame(14).drop(38).exists(c => c >= 0x2800 && c <= 0x28ff), frame(14))
   }
 
   test("a day zoom draws history from the series and dates its day ticks") {
     val s = Golden.snapshot.copy(zoom = State.zooms.indexOf(86400))
     val frame = market(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    assert(frame(19).take(38).endsWith("c line 2d/col "), frame(19))
-    assert("""\|\d\d-\d\d""".r.findFirstIn(frame(19).drop(38)).nonEmpty, frame(19))
-    assert(frame.slice(1, 12).exists(_.drop(38).exists(c => c >= 0x2800 && c <= 0x28ff)))
+    assert(frame(17).take(38).endsWith("c line 2d/col "), frame(17))
+    assert("""\|\d\d-\d\d""".r.findFirstIn(frame(17).drop(38)).nonEmpty, frame(17))
+    assert(frame.slice(1, 14).exists(_.drop(38).exists(c => c >= 0x2800 && c <= 0x28ff)))
   }
 
   test("candles name the seconds per candle in the caption") {
     val s = Golden.snapshot.copy(chartMode = ChartMode.Candles, zoom = State.candleMinZoom)
     val frame = market(s, 100, 30, Golden.now, zone, Style.mono).map(plain)
-    assertEquals(frame(19).take(38), " " * 18 + "c candles 1m/candle ")
+    assertEquals(frame(17).take(38), " " * 18 + "c candles 1m/candle ")
     val history = market(s.copy(offsetSec = 600), 100, 30, Golden.now, zone, Style.mono)
-    assertEquals(plain(history(19)).take(38), " " * 10 + "c candles 1m/candle history ")
+    assertEquals(plain(history(17)).take(38), " " * 10 + "c candles 1m/candle history ")
   }
 
   // The chart block of lane L5. The fixture series spans 544.00 to 552.00 and the book holds
   // three levels a side, so the axis is 543.60 to 552.40 and every expected row can be worked
-  // out by hand from the rules. BTC runs from 95000 to 96000 and PAXG from 2300 to 2310, so
-  // their axes centred on the current price are 94950 to 97050 and 2299.5 to 2320.5.
+  // out by hand from the rules. BTC and PAXG hold samples too, and no row of the block draws them.
   private val pinNow = 1_800_000_000_000L
   private def pinned: Snapshot =
     val sec = pinNow / 1000
@@ -238,19 +214,74 @@ class ScreenSpec extends munit.FunSuite:
       style: Style,
       decor: AxisDecor = AxisDecor.plain
   ): Screen.MarketFrame =
-    Screen.renderMarket(s, pinNow, zone, style, Layout.regions(cols, rows), decor)
+    val r = Layout.regions(cols, rows)
+    Screen.renderMarket(s, pinNow, zone, style, r, decor, blank(r))
 
   test("the regions give the left pane, the plot, the outlook, the price rows and the band") {
-    assertEquals(Layout.regions(100, 30), Regions(38, 23, 38, 9, 61, 38))
-    assertEquals(Layout.regions(120, 40), Regions(38, 43, 38, 19, 81, 38))
-    assertEquals(Layout.regions(237, 71), Regions(38, 160, 38, 50, 198, 38))
-    assertEquals(Layout.regions(269, 73), Regions(38, 192, 38, 52, 230, 38))
+    assertEquals(Layout.regions(100, 30), Regions(38, 23, 38, 13, 61, 38, 2))
+    assertEquals(Layout.regions(120, 40), Regions(38, 43, 38, 21, 81, 38, 4))
+    assertEquals(Layout.regions(237, 71), Regions(38, 160, 38, 52, 198, 38, 4))
+    assertEquals(Layout.regions(269, 73), Regions(38, 192, 38, 54, 230, 38, 4))
+    assertEquals(Layout.regions(100, 39).band, 2)
+    assertEquals(Layout.regions(100, 40).band, 4)
+  }
+
+  test("the band rows sit between the volume row and the time axis") {
+    val r = Layout.regions(100, 30)
+    val band = Vector("<" + " " * 59 + ">", "[" + " " * 59 + "]")
+    val text = Screen
+      .renderMarket(pinned, pinNow, zone, Style.mono, r, AxisDecor.plain, band)
+      .lines
+      .map(plain)
+    assertEquals(text.size, 18)
+    assert(text(14).startsWith(" " * 31 + "volume "), text(14))
+    assertEquals(text(15), band(0))
+    assertEquals(text(16), band(1))
+    assert(text(17).contains("c line 2s/col"), text(17))
+    intercept[IllegalArgumentException](
+      Screen.renderMarket(pinned, pinNow, zone, Style.mono, r, AxisDecor.plain, band.take(1))
+    )
+  }
+
+  test("the chart block refuses a band of more rows than the regions give") {
+    for (cols, rows) <- Vector((100, 30), (120, 40)) do
+      val r = Layout.regions(cols, rows)
+      val tall = Vector.fill(r.band + 1)(" " * (r.left + r.plot))
+      intercept[IllegalArgumentException](
+        Screen.renderMarket(pinned, pinNow, zone, Style.mono, r, AxisDecor.plain, tall)
+      )
+  }
+
+  test("no frame draws a reference row") {
+    // Each reference market holds two samples, so a reference row would have a plot to draw.
+    val sec = pinNow / 1000
+    val held = Ref(Vector((sec - 40, 100.0), (sec - 1, 101.0)), Map.empty)
+    for
+      coin <- Vector("XMR", "BTC", "PAXG")
+      (cols, rows) <- Vector((100, 30), (120, 40))
+    do
+      val s = Snapshot.initial(coin, pinNow).copy(refs = Map("BTC" -> held, "PAXG" -> held))
+      val text = Workspace
+        .draw(
+          s,
+          TradingView(coin, message = "ready"),
+          PanelView(),
+          cols,
+          rows,
+          pinNow,
+          zone,
+          Style.mono
+        )
+        .lines
+        .map(plain)
+      assert(!text.exists(_.contains("PAXG (token tied to gold)")), s"$coin $cols x $rows")
+      assert(!text.exists(_.startsWith("BTC" + " " * 27)), s"$coin $cols x $rows")
   }
 
   test("the header and the left pane match the hand written fixtures") {
     // Each fixture line ends with a bar so that its trailing spaces stay visible. The lines are
-    // the header, the left 38 columns of every price row, the volume row and the six reference
-    // rows, and the time axis.
+    // the header, the left 38 columns of every price row, the volume row and the band rows, and
+    // the time axis.
     for (cols, rows) <- Vector((100, 30), (120, 40)) do
       val r = Layout.regions(cols, rows)
       val frame = chart(pinned, cols, rows, Style.mono)
@@ -264,40 +295,42 @@ class ScreenSpec extends munit.FunSuite:
         Vector(text.head) ++ text.slice(1, text.size - 1).map(_.take(r.left)) ++ Vector(text.last)
       assertEquals(actual, expected)
       assertEquals(frame.priceRows, r.priceRows)
-      assertEquals(text.size, r.priceRows + 9)
+      assertEquals(text.size, r.priceRows + 3 + r.band)
       assert(text.forall(_.length == r.left + r.plot), text.map(_.length))
   }
 
   test("the marker sits on the current price's true row") {
-    // The mid 547.47 is on true row 5 of the 543.60 to 552.40 axis, where the rounded row is 4.
-    val touch = Book(Vector(lv("547.46", "1")), Vector(lv("547.48", "1")), pinNow)
+    // The mid 545.50 is on true row 10 of the 543.60 to 552.40 axis at 13 rows, where the
+    // rounded row is 9.
+    val touch = Book(Vector(lv("545.49", "1")), Vector(lv("545.51", "1")), pinNow)
     val frame = chart(pinned.copy(book = Some(touch)), 100, 30, Style.mono)
     assertEqualsDouble(frame.axis.get.lo, 543.6, 1e-9)
     assertEqualsDouble(frame.axis.get.hi, 552.4, 1e-9)
-    val marked = frame.lines.slice(1, 10).map(plain).zipWithIndex.collect {
+    assertEquals(frame.axis.get.row(545.5), 9)
+    val marked = frame.lines.slice(1, 14).map(plain).zipWithIndex.collect {
       case (line, row) if line.charAt(16) == '>' => row
     }
-    assertEquals(marked, Vector(5))
+    assertEquals(marked, Vector(10))
   }
 
   test("the plot takes the cells the right scale held") {
     val text = chart(pinned, 100, 30, Style.mono).lines.map(plain)
-    val newest = text.slice(1, 10).map(_.charAt(60))
+    val newest = text.slice(1, 14).map(_.charAt(60))
     assert(newest.exists(c => c >= 0x2800 && c <= 0x28ff), newest)
     assert(
-      text.slice(1, 10).forall(_.drop(38).forall(c => c == ' ' || (c >= 0x2800 && c <= 0x28ff)))
+      text.slice(1, 14).forall(_.drop(38).forall(c => c == ' ' || (c >= 0x2800 && c <= 0x28ff)))
     )
   }
 
   test("the price rows keep the side colours, faint plain numbers and a bold marker") {
     val lines = chart(pinned, 100, 30, Style.colour).lines
-    assert(lines(4).contains(Style.colour.ask + Chart.FULL * 21), lines(4))
-    assert(lines(6).contains(Style.colour.ask), lines(6))
-    assert(lines(7).contains(Style.colour.bid) && lines(8).contains(Style.colour.bid))
-    assert(lines(9).contains(Style.colour.bid), lines(9))
-    assert(lines(2).startsWith(Screen.dim + " " * 8 + "  550.93 " + Screen.reset), lines(2))
-    assert(lines(7).startsWith(" " * 16 + Screen.bold + ">" + Screen.reset), lines(7))
-    assert(!lines.slice(1, 10).exists(_.contains(Screen.inverse)))
+    assert(lines(6).contains(Style.colour.ask + Chart.FULL * 21), lines(6))
+    assert(lines(8).contains(Style.colour.ask), lines(8))
+    assert(lines(10).contains(Style.colour.bid) && lines(11).contains(Style.colour.bid))
+    assert(lines(13).contains(Style.colour.bid), lines(13))
+    assert(lines(2).startsWith(Screen.dim + " " * 8 + "  551.38 " + Screen.reset), lines(2))
+    assert(lines(10).startsWith(" " * 16 + Screen.bold + ">" + Screen.reset), lines(10))
+    assert(!lines.slice(1, 14).exists(_.contains(Screen.inverse)))
   }
 
   test("the header starts with the market in bold and ends with a faint ping before the outlook") {
@@ -330,7 +363,7 @@ class ScreenSpec extends munit.FunSuite:
     val ink = Style.colour.bid + Screen.bold
     val ticket = Style.colour.ask + Screen.bold
     val marks =
-      Vector(PlotMark(3, 2, '▲', ink), PlotMark(23, 2, '▼', ink), PlotMark(0, 9, '▼', ink))
+      Vector(PlotMark(3, 2, '▲', ink), PlotMark(23, 2, '▼', ink), PlotMark(0, 13, '▼', ink))
     val decor = AxisDecor(Vector.empty, Chart.plainLabels, _ => marks, _ => Some((4, ticket)))
     val marked = chart(pinned, 100, 30, Style.colour, decor).lines
     val bare = chart(pinned, 100, 30, Style.colour).lines
@@ -343,7 +376,7 @@ class ScreenSpec extends munit.FunSuite:
     assert(marked(3).contains(ink + "▲" + Screen.reset), marked(3))
     assertEquals(plain(marked(3)).length, 61)
     assertEquals(marked.map(plain).mkString.count(_ == '▼'), 0)
-    assertEquals(marked.drop(10).map(plain), bare.drop(10).map(plain))
+    assertEquals(marked.drop(14).map(plain), bare.drop(14).map(plain))
   }
 
   test("held prices from the decor widen the chart's axis") {
@@ -388,6 +421,12 @@ class ScreenSpec extends munit.FunSuite:
           Style.mono
         )
         .lines
+      // With no odds the workspace's band reads unreachable on its first row, 50 on its third
+      // when it has four, and 0 on its last.
+      val label = " " * 10 + "Polymarket unreachable  100 "
+      val band =
+        (if r.band == 4 then Vector(label, " " * 38, " " * 35 + "50 ", " " * 36 + "0 ")
+         else Vector(label, " " * 36 + "0 ")).map(_ + " " * r.plot)
       val block = Screen
         .renderMarket(
           pinned,
@@ -396,6 +435,7 @@ class ScreenSpec extends munit.FunSuite:
           Style.mono,
           r,
           AxisDecor.plain,
+          band,
           Some(width)
         )
         .lines
@@ -407,9 +447,9 @@ class ScreenSpec extends munit.FunSuite:
       assertEquals(text(tradeTop - 1).take(38), " " * 24 + "c line 2s/col ")
   }
 
-  test("a reference row's plot shares the main plot's columns and time scale") {
-    // The main market and both references hold samples 40 seconds and one second back. At two
-    // dots a cell the older one is dot 2 * plot - 41, so all three draw from that cell to the last.
+  test("the plot draws from the oldest sample's cell to the last") {
+    // The main market holds samples 40 seconds to one second back. At two dots a cell the oldest
+    // is dot 2 * plot - 41, so the plot draws from that cell to the last.
     for (cols, rows) <- Vector((100, 30), (120, 40)) do
       val r = Layout.regions(cols, rows)
       val text = chart(pinned, cols, rows, Style.mono).lines.map(plain)
@@ -421,8 +461,6 @@ class ScreenSpec extends munit.FunSuite:
           .sorted
       val expected = (r.left + (2 * r.plot - 41) / 2 until r.left + r.plot).toVector
       assertEquals(inked(text.slice(1, r.priceRows + 1)), expected)
-      assertEquals(inked(text.slice(r.priceRows + 2, r.priceRows + 5)), expected)
-      assertEquals(inked(text.slice(r.priceRows + 5, r.priceRows + 8)), expected)
       assert(text.forall(_.length == r.left + r.plot), text.map(_.length))
   }
 

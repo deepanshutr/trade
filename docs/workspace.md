@@ -22,16 +22,17 @@ shows the prop balance as `Prop`.
 | --- | --- | --- |
 | Price axis and depth, left of the chart | 38 columns | 38 columns |
 | Chart | 23 cells | 43 cells |
-| Price rows | 9 | 19 |
+| Price rows | 13 | 21 |
+| Polymarket band, under the volume row | 2 rows | 4 rows |
 | Outlook, right of the chart | 38 columns | 38 columns |
 | Panel, bottom left | 38 by 12 | 38 by 12 |
-| Gauges, bottom right | 61 by 12 | 81 by 12 |
+| Indicator band, bottom right | 61 by 12 | 81 by 12 |
 
-Under the price rows sit the volume row, three rows each for the bitcoin and gold
-references, and the time axis. On BTC and on gold the chart has three more price
-rows, since a market is not its own reference. The panel used to sit at the bottom
-right. It now sits at the bottom left, under the price axis. The gauges moved to the
-bottom right, and the price scale at the right of the chart is gone.
+Under the price rows sit the volume row, the Polymarket band and the time axis, the
+same rows on every market. The bitcoin and gold reference charts are gone. The panel
+used to sit at the bottom right. It now sits at the bottom left, under the price axis.
+The indicator band sits at the bottom right, and the price scale at the right of the
+chart is gone.
 
 The header starts with the market name in bold. The mid, mark, oracle, 24 hour
 change, funding, open interest and volume follow while whole fields fit. A faint
@@ -96,6 +97,81 @@ local time, 30 seconds apart at 2 seconds a cell. The step is the smallest of 5s
 15s, 30s, 1m, 5m, 15m, 1h, 4h and 1d that keeps the marks at least fourteen cells
 apart. Its time follows the mark when nine cells remain to the right edge. A day mark
 shows the date.
+
+### The Polymarket band
+
+The Polymarket band sits between the volume row and the time axis. It has 4 rows when
+the terminal has 40 rows or more, else 2. It shows the chance that a coin ends a period
+up, as Polymarket's crypto up or down markets price it. Polymarket has no XMR market, so
+the band shows bitcoin's odds under every market but PAXG, and gold's under PAXG. Its
+label names the coin, such as `Polymarket BTC up%  100`. It is faint and right aligned
+in 37 columns of the left pane, then a space, on the first row. `50` sits on the third
+row when the band has four rows, and `0` on the last row.
+
+One line for each window runs across the plot on one 0 to 100 scale: 5m, 15m, 1h, 4h
+and 1d. A cell where two or more lines meet is bold. The band shares the chart's time
+axis, so it scrolls and zooms with the chart. Desk reads a point for each window every
+30 seconds and keeps six hours of them, so the band covers up to six hours. While a
+window has a current market and a price read from it, its last point runs flat to now.
+When a window's period ends, its line keeps its history and stops there until the next
+market's first price, which usually comes within 35 seconds of the boundary. Until
+then the window's `●` reads `--`. While a window has a current market, a line whose
+newest point is older than two minutes is faint. An ended market's line keeps its
+colour however old it is.
+
+The 5m line is a sawtooth by nature. A 5 minute market runs to near 0 or 100 as its
+period ends, so the line reads the drift of the current period against its open, not
+conviction. The 1d line is the daily market, which resolves at a fixed New York hour on
+a calendar day, not over a rolling day. The rails name that row 24h and the key names it
+1d. Gold has the daily market only, and none on a weekend or a holiday, so under PAXG
+the band can be empty under its label.
+
+When Polymarket cannot be read, the label reads `Polymarket unreachable  100` and the
+band draws no line. Every `●` on the rails then reads `--`, and every window square of
+the key is faint. Nothing else waits on it. The band is the same in live, prop and view.
+
+### The indicator band
+
+The indicator band fills the twelve rows right of the panel. Row 1 holds each group's
+title in its colours. Row 2 holds each rail's ends and centre, faint: `0%`, `50%` and
+`100%` for book and tape, `down`, `neutral` and `up` for the others. Rows 3 to 7 are
+the windows 5m, 15m, 1h, 4h and 24h. Rows 8 to 11 are blank. Row 12 is the colour key.
+Each row has the window's name, its rail and its values. A rail is a row of faint dots
+with a faint `|` at its centre. The measures are defined in
+[outlook and alerts](outlook-and-alerts.md#rail-measures).
+
+| Group | Rail | Markers |
+| --- | --- | --- |
+| Book and tape | 0 to 100 percent | `◆` the book's share of buying, `●` the tape's, shown as `B 62%` and `T 55%` |
+| The selected market | down to up | `▲` its change, `◇` its distance from its average, `●` its chance of up |
+| BTC | down to up | `▲` bitcoin's change, `◆` its correlation with the selected market, `●` its chance of up |
+| Gold | down to up | `▲` gold's change, `◆` its correlation, `●` its chance of up on the 24h row only |
+
+Each row of the three market groups starts with its window and its scale: `5m  ±0.5%`,
+`15m ±1%`, `1h  ±2%`, `4h  ±3%` and `24h ±6%`. A change or a distance equal to the scale
+lands on the rail's end. The correlation runs from -1 at the left end to +1 at the right.
+The chance of up runs from 0 to 100, with 50 on the centre bar. A value past a rail's
+end sits on the end cell in inverse video, and its text shows the real figure. Two
+markers on one cell show `◉` in bold. A missing or stale measure shows `--` and no
+marker. A chance of up whose newest point is older than two minutes is faint. The
+selected market's `●` always reads `--` on every market but BTC and PAXG, such as XMR.
+With BTC selected the BTC group's correlation reads `--`, and with PAXG the gold
+group's does.
+
+Every rail has the same width, at most 41 cells, and an odd one, so a zero lands on the
+centre bar. Groups drop from the right until every rail has at least 17 cells. At 100 by
+30 and 120 by 40 only book and tape fit, with rails of 41. The selected market joins at
+126 columns, BTC at 178 and gold at 230.
+
+The key on row 12 is cut at the band's width:
+
+```
+■ XMR  ■ buy  ■ sell  ▲ buy fill  ▼ sell fill  ■ 5m  ■ 15m  ■ 1h  ■ 4h  ■ 1d  ◆ book  ● tape  ■ BTC  ■ gold  ▲ change  ◇ vs average  ◆ correlation  ● Polymarket  ◉ overlap
+```
+
+Each glyph is in its colour, and `XMR` is the selected market's name. A window square is
+faint while the band's coin has no current market for it. The 1d square is always faint,
+like its line. The indicator band is the same in live, prop and view.
 
 ### The panel
 
@@ -164,9 +240,11 @@ rounded down to the smallest size the market allows. So a `$20` press can show
 Buy, long, bids and buy fills use the terminal's own green. Sell, short, asks and
 sell fills use its red. The entry and the ticket take their side's colour in bold.
 The market name and the current price use the text colour in bold. Bitcoin is
-orange, gold is dark gold, book readings are green and tape readings are blue. Rails,
-scales and quiet labels are faint. Every fixed colour keeps at least 3 to 1 contrast
-on Solarized light, Solarized dark, white and black.
+orange, gold is dark gold, book readings are green and tape readings are blue. The
+Polymarket windows are blue for 5m, purple for 15m, magenta for 1h and pink for 4h.
+The 1d line is faint. Where band lines or rail markers meet, the cell is bold in the
+text colour. Rails, scales and quiet labels are faint. Every fixed colour keeps at
+least 3 to 1 contrast on Solarized light, Solarized dark, white and black.
 
 ## Market and limit orders
 
@@ -326,13 +404,18 @@ Control C can be rebound in settings. Buttons and labels show the current key.
 ## Outlook, markets and saved state
 
 The graph retains its three price-aligned columns. From left to right they show
-Short, Mid and Long levels. Book, tape, bitcoin and gold comparisons use equal
-widths and four distinct colors. Each correlation marker runs from -1 through
-zero to +1 and includes its observed sample count. Missing or incomplete data
-stays unavailable. Read the calculation in [outlook and alerts](outlook-and-alerts.md).
+Short, Mid and Long levels. The book, tape, bitcoin and gold readings sit on the
+rails of the [indicator band](#the-indicator-band). Each correlation runs from -1
+through zero to +1. Missing or incomplete data stays unavailable. Read the
+calculation in [outlook and alerts](outlook-and-alerts.md).
 Ask, text analysis, Details and news have been removed from the normal workspace.
-The Polymarket reader is in the code but not wired, so it sends no request. Project 5
-wires it.
+Desk reads Polymarket's public API with no account, key or cookie, in live, prop and
+view. The requests send only market slugs and token ids. A slug is a market's short name
+in its web address. A token id is the number Polymarket gives each outcome of a market.
+They reveal which coins Desk follows, BTC and PAXG, since the slugs name them and the
+token ids map to the same markets. The reads go straight from your own internet address,
+at fixed times, and name the Java version in their user agent, the line that names the
+program sending a request. See [Polymarket reads](trading.md#polymarket-reads).
 
 Returning to a market restores its retained chart history immediately, clears its
 old quote and depth, and requests full replacement history. Replies started before
@@ -495,3 +578,67 @@ plus native access objects on macOS, without creating or reading keychain items.
 `make live` runs tests tagged `live` against public endpoints.
 `WRITE_GOLDEN=1` is the historical golden-output write variable. The current
 screen tests have no golden-file writer, so setting it does not update fixtures.
+
+### Before merge, on macOS
+
+Windows cannot run the playback harness or `make slow`. So a change to the band, the
+rails or the render loop is checked on macOS before it merges. Run these in order from
+the root of a clean checkout of the branch.
+
+1. `make check`. It compiles with the tests and checks the format.
+2. `make test`. It runs the Python tests, then the Scala suite without `live` and `slow`
+   tests. Its playback test runs `tools/playback.py` on a real terminal and, in normal
+   mode, waits for the band label `Polymarket BTC up%  100`.
+3. If a playback fails, run the playback specs alone:
+   `python3 -m unittest discover -s test -p '*playback_spec.py'`.
+4. `make slow`. It runs the speed playback and the indicator slow tests: `IndicatorCostSpec`,
+   which holds the rails under the cost of the old measures, and `IndicatorClosesSpec`
+   T3, which allows one build of the minute closes per coin per frame.
+5. The red of the playback label wait, in a private copy. It is the only proof that the
+   render loop hands the odds to the frame. `repo` keeps the checkout's root for the
+   restore, and `copy` names the private copy, in `/tmp` when `TMPDIR` is not set.
+
+```sh
+repo=$(pwd)
+copy="${TMPDIR:-/tmp}/desk-red"
+mkdir -p "$copy"
+git archive HEAD | tar -x -C "$copy"
+cd "$copy"
+python3 - <<'EOF'
+p = "src/WorkspaceApp.scala"
+s = open(p).read()
+old = "                  orderResults.unavailable(),\n                  odds = Odds.of(reader)\n"
+new = "                  orderResults.unavailable()\n"
+assert s.count(old) == 1
+open(p, "w").write(s.replace(old, new))
+EOF
+scala-cli --power test . --server=false --test-only 'desk.OfflinePlaybackSpec' -- --exclude-tags=live,slow
+```
+
+The test "actual terminal input, fold and UTF-8 frames keep working while public work
+waits" must fail in normal mode, waiting for a frame with `Polymarket BTC up%  100`. The
+other tests pass. Then restore the file in the copy and run the same command again. All
+must pass.
+
+```sh
+git -C "$repo" show HEAD:src/WorkspaceApp.scala > src/WorkspaceApp.scala
+scala-cli --power test . --server=false --test-only 'desk.OfflinePlaybackSpec' -- --exclude-tags=live,slow
+```
+
+To call the harness directly in place of either test run, run this in the copy, since
+the harness reads `fixtures` from the current folder. It stops if its output folder
+exists, so the first line clears it. The Java is the one the launcher uses.
+
+```sh
+rm -rf "$copy-out"
+python3 tools/playback.py --java "${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" \
+  --classpath "$(scala-cli compile --test . --server=false --print-class-path)" \
+  --output "$copy-out" --mode normal
+```
+
+Then go back to the checkout and delete the copy:
+
+```sh
+cd "$repo"
+rm -rf "$copy" "$copy-out"
+```

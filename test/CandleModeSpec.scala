@@ -12,21 +12,17 @@ class CandleModeSpec extends munit.FunSuite:
       style: Style
   ): Vector[String] =
     // cols is the chart area here, so the terminal is that plus the outlook and its bar.
-    Screen
-      .renderMarket(
-        s,
-        now,
-        zone,
-        style,
-        Layout
-          .regions(cols + Layout.outlookWidth + 1, rows)
-          .copy(priceRows = rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin)),
-        AxisDecor.plain
-      )
-      .lines
+    val r = Layout.regions(cols + Layout.outlookWidth + 1, rows)
+    val band = Vector.fill(r.band)(" " * (r.left + r.plot))
+    Screen.renderMarket(s, now, zone, style, r, AxisDecor.plain, band).lines
   private val now = 1_700_000_000_000L
   private def press(s: Snapshot, command: Command): Snapshot =
     State.reduce(s, Event.Key(command), now)
+  // The plot as the chart draws it, with no ticket row and no marks.
+  private def candleRows(columns: Vector[Option[Column]], a: Axis, cells: Int) =
+    Chart.decorated(columns, a, cells, ChartMode.Candles, None, Vector.empty)
+  private def line(columns: Vector[Option[Column]], a: Axis) =
+    Chart.decorated(columns, a, columns.size / 2, ChartMode.Line, None, Vector.empty)
   private def bits(ch: Char): Int = if ch == ' ' then 0 else ch.toInt - 0x2800
   private def dots(lines: Vector[String]): Set[(Int, Int)] =
     val masks = Vector(Vector(1, 8), Vector(2, 16), Vector(4, 32), Vector(64, 128))
@@ -106,14 +102,12 @@ class CandleModeSpec extends munit.FunSuite:
     )
     assertEquals(Chart.columns(s, 2, 119_000L), Vector(Some(Column(10, 8, 13, 12, 7)), None))
     assertEquals(Chart.columns(s.copy(candles = Map.empty), 2, 119_000L), Vector(None, None))
-    val ref = Ref(Vector(0L -> 999.0), s.candles)
-    assertEquals(Chart.referenceColumns(ref, 2, s, 119_000L), Chart.columns(s, 2, 119_000L))
   }
 
   test("rising bodies are hollow and falling bodies are filled with separate wicks") {
     val rising = Some(Column(2, 0, 6, 4, 1))
     val falling = Some(Column(4, 0, 6, 2, 1))
-    val rows = Chart.candleRows(Vector(rising, falling), Axis(0, 6, 7), 8)
+    val rows = candleRows(Vector(rising, falling), Axis(0, 6, 7), 8)
     assertEquals(
       rows,
       Vector(
@@ -134,7 +128,7 @@ class CandleModeSpec extends munit.FunSuite:
     val flat = Some(Column(3, 0, 6, 3, 1))
     val rising = Some(Column(3, 0, 6, 3.1, 1))
     val falling = Some(Column(3.1, 0, 6, 3, 1))
-    val rows = Chart.candleRows(Vector(flat, rising, falling, None), Axis(0, 6, 3), 16)
+    val rows = candleRows(Vector(flat, rising, falling, None), Axis(0, 6, 3), 16)
     assertEquals(rows(1), "───  □  ███     ")
     assert(rows.forall(_.drop(12) == " " * 4))
     assert(rows.head.startsWith(" │   │   │  "))
@@ -143,8 +137,8 @@ class CandleModeSpec extends munit.FunSuite:
 
   test("body height follows open and close while wick height follows high and low") {
     val axis = Axis(0, 10, 11)
-    val first = Chart.candleRows(Vector(Some(Column(3, 1, 9, 6, 1))), axis, 4)
-    val changedBody = Chart.candleRows(Vector(Some(Column(2, 1, 9, 7, 1))), axis, 4)
+    val first = candleRows(Vector(Some(Column(3, 1, 9, 6, 1))), axis, 4)
+    val changedBody = candleRows(Vector(Some(Column(2, 1, 9, 7, 1))), axis, 4)
     assertEquals(first(1), " │  ")
     assertEquals(first(9), " │  ")
     assertEquals(first(4), "┌─┐ ")
@@ -181,14 +175,14 @@ class CandleModeSpec extends munit.FunSuite:
       Some(Column(4, 0, 8, 4, 0))
     )
     val axis = Axis(0, 8, 3)
-    val rows = Chart.line(columns, axis)
+    val rows = line(columns, axis)
     val ink = dots(rows)
     assertEquals(ink.filter(_._1 == 0), Set((0, axis.dot(2))))
     assert(!ink.exists(_._1 == 1))
     assert(ink.contains((2, axis.dot(6))) && ink.contains((3, axis.dot(4))))
     assert(rows.exists(_.contains(Screen.bold)))
     val changedWicks = columns.map(_.map(_.copy(low = 1, high = 7)))
-    assertEquals(Chart.line(changedWicks, axis), rows)
+    assertEquals(line(changedWicks, axis), rows)
   }
 
   test("candle volume is centred beneath each candle and keeps its total") {
@@ -211,7 +205,7 @@ class CandleModeSpec extends munit.FunSuite:
     )
   }
 
-  test("both modes preserve all screen rows with plain reference plots and no magenta") {
+  test("both modes preserve all screen rows with no magenta") {
     for
       mode <- Vector(ChartMode.Line, ChartMode.Candles)
       (cols, rows) <- Vector((100, 30), (101, 31), (120, 40))
@@ -221,18 +215,18 @@ class CandleModeSpec extends munit.FunSuite:
         zoom = if mode == ChartMode.Candles then State.candleMinZoom else 0
       )
       val frame = market(s, cols, rows, Golden.now, ZoneOffset.UTC, Style.colour)
-      assertEquals(frame.size, rows - 10)
+      assertEquals(frame.size, rows - 12)
       assert(frame.map(Chart.plain).forall(_.length == cols))
       assert(!frame.exists(_.contains(Screen.esc + "[35m")))
       val axis = frame(frame.size - 1)
       assert(axis.contains(if mode == ChartMode.Candles then "1m/candle" else "2s/col"))
       if mode == ChartMode.Candles then
-        val count = rows - 19
+        val count = Layout.regions(cols + Layout.outlookWidth + 1, rows).priceRows
         val main = frame.slice(1, count + 1).map(Chart.plain).map(_.drop(38))
         assert(!main.exists(_.exists(c => c >= 0x2800 && c <= 0x28ff)))
   }
 
-  test("candle frames draw the last two candles in the main plot, references, volume and ticks") {
+  test("candle frames draw the last two candles in the main plot, volume and ticks") {
     val at = 119_000L
     val candles = Vector(Candle(0L, 2, 6, 0, 4, 7), Candle(60_000L, 4, 6, 0, 2, 14))
     val s = Snapshot
@@ -240,47 +234,27 @@ class CandleModeSpec extends munit.FunSuite:
       .copy(
         chartMode = ChartMode.Candles,
         zoom = State.zooms.indexOf(60),
-        candles = Map("1m" -> candles),
-        refs = Map(
-          "BTC" -> Ref(
-            Vector.empty,
-            Map(
-              "1m" -> candles
-                .map(c => c.copy(o = c.o + 100, h = c.h + 100, l = c.l + 100, c = c.c + 100))
-            )
-          ),
-          "PAXG" -> Ref(
-            Vector.empty,
-            Map(
-              "1m" -> candles
-                .map(c => c.copy(o = c.o + 1000, h = c.h + 1000, l = c.l + 1000, c = c.c + 1000))
-            )
-          )
-        )
+        candles = Map("1m" -> candles)
       )
-    // cols is the chart area. The main plot and the reference plots start at column 38.
+    // cols is the chart area. The main plot starts at column 38.
     for cols <- Vector(100, 101, 120) do
       val cells = cols - 38
       val count = Layout.columnsIn(cells, ChartMode.Candles)
       val start = (count - 2) * Layout.candleW
       val end = start + 8
       val frame = market(s, cols, 30, at, ZoneOffset.UTC, Style.colour).map(Chart.plain)
-      val main = frame.slice(1, 12).map(_.drop(38))
+      val main = frame.slice(1, 14).map(_.drop(38))
       assert(main.exists(_.slice(start, end) == "┌─┐ ███ "))
       assert(main.exists(_.slice(start, end) == "│ │ ███ "))
       assert(main.exists(_.slice(start, end) == "└─┘ ███ "))
       assert(main.forall(row => row.take(start).trim.isEmpty && row.drop(end).trim.isEmpty))
-      for first <- Vector(13, 16) do
-        val ref = frame.slice(first, first + 3).map(_.drop(38))
-        assertEquals(ref.map(_.slice(start, end)), Vector(" │   │  ", " □  ███ ", "        "))
-        assert(ref.forall(row => row.take(start).trim.isEmpty && row.drop(end).trim.isEmpty))
-      val volume = frame(12).drop(38)
+      val volume = frame(14).drop(38)
       assertEquals(
         volume.zipWithIndex.collect { case (ch, i) if ch != ' ' => i },
         Vector(start + 1, start + 5)
       )
       // Five minute ticks at fifteen seconds a cell, the last labelled one on the candle at 00:00.
-      val clock = frame(19).drop(38)
+      val clock = frame(17).drop(38)
       assertEquals(clock.length, cells)
       assertEquals(clock.slice(start, start + 9), "|00:00:00")
       assertEquals(

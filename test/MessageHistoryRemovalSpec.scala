@@ -17,7 +17,8 @@ object HistorylessWorkspaceProcess:
           new Rest:
             def post(body: String): Option[String] = throw new AssertionError("unexpected request")
         ),
-      keys = KeyStartup.Hooks(home = Path.of(args(0)))
+      keys = KeyStartup.Hooks(home = Path.of(args(0))),
+      polymarket = OfflinePolymarket.client
     )
 
 class MessageHistoryRemovalSpec extends TempDirectorySuite:

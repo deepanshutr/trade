@@ -213,6 +213,8 @@ object Main:
       sources: TradingConfig => (Connector, Rest) = publicSources,
       createWorker: (TradingConfig, Boolean, String, Path) => TradingWorker = withoutKey,
       queue: LinkedBlockingQueue[Event] = new LinkedBlockingQueue[Event](),
-      keys: KeyStartup.Hooks = KeyStartup.Hooks()
+      keys: KeyStartup.Hooks = KeyStartup.Hooks(),
+      polymarket: () => (String => Either[Int, String], (String, String) => Either[Int, String]) =
+        () => PolymarketReader.http()
   ): Unit =
-    WorkspaceApp.run(args, sources, createWorker, queue, keys)
+    WorkspaceApp.run(args, sources, createWorker, queue, keys, polymarket)

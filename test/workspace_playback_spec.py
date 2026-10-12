@@ -29,13 +29,13 @@ class WorkspaceCaptureSpec(unittest.TestCase):
 
     # A frame as Desk draws it: above the band the chart area of cols - 39 columns, a bar and the
     # outlook of 38. The band is the last twelve rows: the panel of 38 columns, a bar and the
-    # gauges. The panel's rows are given from its first row down.
+    # rails. The panel's rows are given from its first row down.
     def frame(self, panel, cols=100, rows=30):
         top = rows - 12
         lines = [" " * (cols - 39) + "|" + "SHORT 1h -- |MID 4h --   |LONG 1d --  " for _ in range(top)]
         lines[0] = "XMR  mid 522.26".ljust(cols - 49) + "ping 0.3s " + lines[0][cols - 39:]
-        gauges = "BOOK now .⣿.|... D-0.55 Q-0.73 BTC 15m unavailable 0/15".ljust(cols - 39)
-        band = [row.ljust(38) + "|" + gauges for row in (panel + [""] * 12)[:12]]
+        rails = "15m ········|········ B -- T --".ljust(cols - 39)
+        band = [row.ljust(38) + "|" + rails for row in (panel + [""] * 12)[:12]]
         return {"lines": lines + band}
 
     def prop(self, status="", sell="[3 SHORT $500 x1]"):
@@ -74,7 +74,8 @@ class WorkspaceCaptureSpec(unittest.TestCase):
 
     def test_prop_is_ready_only_with_its_heading_and_a_blank_status_row(self):
         self.assertTrue(playback.prop_ready(self.frame(self.prop())))
-        # The gauges right of the bar carry text on the status row, so a reader past the bar fails.
+        # The rails text right of the bar keeps the status row as Desk draws it. A reader past the
+        # panel fails here on the bar alone, with or without that text, and fails the width test above.
         self.assertTrue(playback.prop_ready(self.frame(self.prop(), cols=120, rows=40)))
         self.assertFalse(playback.prop_ready(self.frame(self.prop(status="Waiting for prices"))))
         view = self.prop()

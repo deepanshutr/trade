@@ -596,7 +596,8 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
         (_, _, _, _) => {
           factories.incrementAndGet(); throw new IllegalStateException("account factory called")
         },
-        keys = KeyStartup.Hooks(home = directory)
+        keys = KeyStartup.Hooks(home = directory),
+        polymarket = OfflinePolymarket.client
       )
     )
     assert(result.isFailure)

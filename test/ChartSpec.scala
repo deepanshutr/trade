@@ -7,6 +7,9 @@ class ChartSpec extends munit.FunSuite:
   private def lvl(px: String, sz: String = "1"): Level = Level(px, sz, 1)
   private def col(v: Double, vol: Double = 0.0): Option[Column] = Some(Column(v, v, v, v, vol))
   private val t0 = 1_700_000_000_000L
+  // The line plot as the chart draws it, with no ticket row and no marks.
+  private def line(columns: Vector[Option[Column]], a: Axis) =
+    Chart.decorated(columns, a, columns.size / 2, ChartMode.Line, None, Vector.empty)
   private def s0: Snapshot = Snapshot.initial("XMR", t0)
   private val FULL = (0x28ff).toChar.toString
   private val LHALF = (0x2847).toChar.toString
@@ -132,7 +135,7 @@ class ChartSpec extends munit.FunSuite:
     )
   }
 
-  test("columns pick the zoom series and references retain the same complete candle") {
+  test("columns pick the zoom series and keep its complete candle") {
     val candle = Candle(0L, 2, 3, 1, 2.5, 1)
     val s = s0.copy(
       candles = Map("5m" -> Vector(candle), "1m" -> Vector(Candle(0L, 9, 9, 9, 9, 9))),
@@ -140,10 +143,6 @@ class ChartSpec extends munit.FunSuite:
     )
     val expected = Vector(Some(Column(2.0, 1.0, 3.0, 2.5, 1.0)), None)
     assertEquals(Chart.columns(s, 2, 599_000L), expected)
-    val ref = Ref(Vector.empty, Map("5m" -> Vector(candle)))
-    assertEquals(Chart.referenceColumns(ref, 2, s, 599_000L), expected)
-    val sampled = Ref(Vector(999L -> 1.0), Map.empty)
-    assertEquals(Chart.referenceColumns(sampled, 2, s0, 1_000_000L), Vector(col(1), col(1)))
   }
 
   test("the axis pads five percent around the columns and the book and maps rows and dots") {
@@ -174,9 +173,9 @@ class ChartSpec extends munit.FunSuite:
 
   test("the line joins closing points and bolds the newest cell") {
     val axis = Axis(1.0, 3.0, 1)
-    val lines = Chart.line(Vector(col(1.0), col(3.0)), axis)
+    val lines = line(Vector(col(1.0), col(3.0)), axis)
     assertEquals(lines, Vector(Screen.bold + br(0x5c) + Screen.reset))
-    assertEquals(Chart.line(Vector(None, None), axis), Vector(" "))
+    assertEquals(line(Vector(None, None), axis), Vector(" "))
   }
 
   test("a bucket width follows the significant figures") {
@@ -340,22 +339,6 @@ class ChartSpec extends munit.FunSuite:
     assertEquals(a.trueRow(543.6), 8)
     assertEquals(a.trueRow(600.0), 0)
     assertEquals(a.trueRow(500.0), 8)
-  }
-
-  test("scale rows print the top, the bottom and the current price in bold with its marker") {
-    val a = Axis(98.35, 112.65, 14)
-    val rows = Chart.scaleRows(Some(a), 14, Some(7), Some("105.5"), 8)
-    assertEquals(rows(0), " 112.65 ")
-    assertEquals(rows(7), Screen.bold + "  105.5>" + Screen.reset)
-    assertEquals(rows(13), "  98.35 ")
-    assertEquals(rows(1), " " * 8)
-    val lower = Chart.scaleRows(Some(a), 14, Some(8), Some("105.5"), 8)
-    assertEquals(lower(7), " 104.95 ")
-    assertEquals(lower(8), Screen.bold + "  105.5>" + Screen.reset)
-    assertEquals(Chart.scaleRows(None, 2, None, None, 8), Vector(" " * 8, " " * 8))
-    // A price too wide for its column is shortened, never cut.
-    val wide = Chart.scaleRows(Some(Axis(1.0e8, 3.0e8, 3)), 3, None, None, 8)
-    assertEquals(wide, Vector("   ~3e8 ", "   ~2e8 ", "   ~1e8 "))
   }
 
   test("one volume row scales to the largest column with at least one dot") {
