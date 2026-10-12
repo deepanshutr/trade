@@ -30,8 +30,10 @@ install: build install-launcher
 # DESK_VAULT, when given, is the absolute folder of the owner vault. It is checked the same way
 # before anything is written and recorded next to the other two.
 # The launcher is trade on every system, because Windows opens Display settings for a bare desk.
-# Earlier installs wrote it as desk. That file is removed when it names the Desk jar, so the old
-# name cannot start a stale launcher, and any other file by that name is kept.
+# The install replaces or removes a file only when its text names the Desk jar. A trade that does
+# not stops the install before anything is written. A desk that does, from an earlier install, is
+# removed after the new launcher is in place, so the old name cannot start a stale launcher.
+# The launcher is written to trade.new and moved onto trade, so a link named trade is replaced.
 install-launcher:
 	set -e; \
 	python=$$(command -v python3) || { echo "python3 not found" >&2; exit 1; }; \
@@ -41,14 +43,19 @@ install-launcher:
 	real=$$("$$python" -c 'import sys; print(sys.executable)'); \
 	case "$$real" in /*) ;; *) echo "python3 did not report an absolute interpreter path" >&2; exit 1;; esac; \
 	case "$$real" in *[\"\`\\\$$]*) echo "unsafe character in an install path" >&2; exit 1;; esac; \
+	launcher="$$HOME/.local/bin/trade"; \
+	if { [ -e "$$launcher" ] || [ -L "$$launcher" ]; } && ! grep -qsF '/.local/lib/desk.jar' "$$launcher"; then \
+	  echo "$$launcher is not a Desk launcher, so nothing was installed" >&2; exit 1; fi; \
 	mkdir -p "$$HOME/.local/bin" "$$HOME/.local/lib"; \
 	cp tools/keychain_wallet.py "$$HOME/.local/lib/desk-keychain.py"; \
 	chmod 600 "$$HOME/.local/lib/desk-keychain.py"; \
 	{ printf '#!/bin/sh\nexport DESK_PYTHON="$${DESK_PYTHON:-%s}"\nexport DESK_KEY_HELPER="$${DESK_KEY_HELPER:-%s}"\n' "$$real" "$$HOME/.local/lib/desk-keychain.py"; \
 	if [ -n "$$DESK_VAULT" ]; then printf 'export DESK_VAULT="$${DESK_VAULT:-%s}"\n' "$$DESK_VAULT"; fi; \
-	printf 'exec "$${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" -XX:+DisableAttachMechanism -jar "$$HOME/.local/lib/desk.jar" "$$@"\n'; } > "$$HOME/.local/bin/trade"; \
-	chmod +x "$$HOME/.local/bin/trade"; \
-	if grep -qsF '/.local/lib/desk.jar' "$$HOME/.local/bin/desk"; then rm -f "$$HOME/.local/bin/desk"; fi
+	printf 'exec "$${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" -XX:+DisableAttachMechanism -jar "$$HOME/.local/lib/desk.jar" "$$@"\n'; } > "$$launcher.new"; \
+	chmod +x "$$launcher.new"; \
+	mv -f "$$launcher.new" "$$launcher"; \
+	if grep -qsF '/.local/lib/desk.jar' "$$HOME/.local/bin/desk"; then rm -f "$$HOME/.local/bin/desk"; \
+	  echo "Removed the earlier launcher $$HOME/.local/bin/desk. The command is trade."; fi
 
 fmt:
 	$(SCALA_CLI) fmt .

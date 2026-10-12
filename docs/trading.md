@@ -187,8 +187,11 @@ private value.
 The key helper keeps the only Keychain write. `make install` copies it to
 `~/.local/lib/desk-keychain.py` and writes the launcher `~/.local/bin/trade` with the
 Python it will use. The command is `trade` on every system, because Windows opens
-Display settings for a bare `desk`. An earlier install's `~/.local/bin/desk` is removed
-when it names the Desk jar. Any other file by that name stays.
+Display settings for a bare `desk`. The install replaces or removes a file only when its
+text names `~/.local/lib/desk.jar`, as every earlier launcher did. So `~/.local/bin/desk`
+from an earlier install is removed, with one line saying so, and anything else by that
+name stays. A `~/.local/bin/trade` that does not name the jar stops the install before
+anything is written. Rename or remove it, then install again.
 Run `make install DESK_VAULT=/absolute/path/to/the/vault` once to give settings the
 owner tooling. The launcher then exports `DESK_VAULT` next to the other two variables.
 The path must be absolute and is checked the same way.

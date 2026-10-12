@@ -435,7 +435,7 @@ object WorkspaceApp:
           keyReload.session
         )
       val saved = enterTerminal(() => Term.enterRaw(), () => closeAll()).getOrElse {
-        System.err.println("desk needs a terminal")
+        System.err.println("Desk needs a terminal")
         sys.exit(1)
       }
       print(mouse(true))
