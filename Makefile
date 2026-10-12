@@ -30,8 +30,8 @@ install: build install-launcher
 # DESK_VAULT, when given, is the absolute folder of the owner vault. It is checked the same way
 # before anything is written and recorded next to the other two.
 # The launcher is trade on every system, because Windows opens Display settings for a bare desk.
-# The install replaces or removes a file only when its text names the Desk jar. A trade that does
-# not stops the install before anything is written. A desk that does, from an earlier install, is
+# In ~/.local/bin the install replaces trade or removes desk only when its text names the Desk
+# jar. A trade that does not stops the install before anything is written. A desk that does, from an earlier install, is
 # removed after the new launcher is in place, so the old name cannot start a stale launcher.
 # The launcher is written to trade.new and moved onto trade, so a link named trade is replaced.
 install-launcher:
