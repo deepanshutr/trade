@@ -29,6 +29,9 @@ install: build install-launcher
 # The launcher starts Java with attach disabled so other programs cannot read its memory.
 # DESK_VAULT, when given, is the absolute folder of the owner vault. It is checked the same way
 # before anything is written and recorded next to the other two.
+# The launcher is trade on every system, because Windows opens Display settings for a bare desk.
+# Earlier installs wrote it as desk. That file is removed when it names the Desk jar, so the old
+# name cannot start a stale launcher, and any other file by that name is kept.
 install-launcher:
 	set -e; \
 	python=$$(command -v python3) || { echo "python3 not found" >&2; exit 1; }; \
@@ -43,8 +46,9 @@ install-launcher:
 	chmod 600 "$$HOME/.local/lib/desk-keychain.py"; \
 	{ printf '#!/bin/sh\nexport DESK_PYTHON="$${DESK_PYTHON:-%s}"\nexport DESK_KEY_HELPER="$${DESK_KEY_HELPER:-%s}"\n' "$$real" "$$HOME/.local/lib/desk-keychain.py"; \
 	if [ -n "$$DESK_VAULT" ]; then printf 'export DESK_VAULT="$${DESK_VAULT:-%s}"\n' "$$DESK_VAULT"; fi; \
-	printf 'exec "$${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" -XX:+DisableAttachMechanism -jar "$$HOME/.local/lib/desk.jar" "$$@"\n'; } > "$$HOME/.local/bin/desk"; \
-	chmod +x "$$HOME/.local/bin/desk"
+	printf 'exec "$${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" -XX:+DisableAttachMechanism -jar "$$HOME/.local/lib/desk.jar" "$$@"\n'; } > "$$HOME/.local/bin/trade"; \
+	chmod +x "$$HOME/.local/bin/trade"; \
+	if grep -qsF '/.local/lib/desk.jar' "$$HOME/.local/bin/desk"; then rm -f "$$HOME/.local/bin/desk"; fi
 
 fmt:
 	$(SCALA_CLI) fmt .
