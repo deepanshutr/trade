@@ -771,6 +771,12 @@ class StoreModeTests(unittest.TestCase):
 ROOT = Path(__file__).parents[1]
 MAKE = shutil.which("make")
 REAL_HOME = os.path.expanduser("~")
+# The launcher an earlier install wrote as desk. Windows opens Display settings for a bare
+# desk, so the command is trade on every system, and an install removes this one.
+EARLIER_LAUNCHER = (
+    '#!/bin/sh\nexport DESK_PYTHON="${DESK_PYTHON:-/usr/bin/python3}"\n'
+    'exec "${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" -XX:+DisableAttachMechanism '
+    '-jar "$HOME/.local/lib/desk.jar" "$@"\n')
 
 
 @unittest.skipUnless(MAKE, "make is required")
@@ -822,7 +828,7 @@ class InstallLauncherTests(unittest.TestCase):
         java.write_text("#!/bin/sh\nprintf '%s\\n' \"$DESK_PYTHON\" \"$DESK_KEY_HELPER\" \"$@\"\n")
         java.chmod(0o755)
         env = {"HOME": str(self.home), "PATH": "/usr/bin:/bin", "DESK_JAVA": str(java), **variables}
-        done = subprocess.run([str(self.home / ".local/bin/desk"), *arguments], env=env,
+        done = subprocess.run([str(self.home / ".local/bin/trade"), *arguments], env=env,
                               capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
         return done.stdout.splitlines()
@@ -863,12 +869,44 @@ class InstallLauncherTests(unittest.TestCase):
         done = self.install()
         self.assertNotEqual(done.returncode, 0)
         self.assertFalse((self.home / ".local").exists())
-        launcher = self.home / ".local/bin/desk"
+        launcher = self.home / ".local/bin/trade"
+        earlier = self.home / ".local/bin/desk"
         launcher.parent.mkdir(parents=True)
         launcher.write_bytes(b"old launcher")
+        earlier.write_text(EARLIER_LAUNCHER)
         self.assertNotEqual(self.install().returncode, 0)
         self.assertEqual(launcher.read_bytes(), b"old launcher")
+        self.assertEqual(earlier.read_text(), EARLIER_LAUNCHER)
         self.assertFalse((self.home / ".local/lib").exists())
+
+    def test_the_launcher_is_trade_and_an_earlier_desk_launcher_is_removed(self):
+        self.fake_python(self.bin)
+        folder = self.home / ".local/bin"
+        for name, earlier in (("no earlier launcher", None), ("earlier launcher", EARLIER_LAUNCHER)):
+            with self.subTest(name):
+                folder.mkdir(parents=True, exist_ok=True)
+                if earlier:
+                    (folder / "desk").write_text(earlier)
+                done = self.install()
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertTrue(os.access(folder / "trade", os.X_OK))
+                self.assertFalse((folder / "desk").exists())
+
+    def test_a_desk_that_an_earlier_install_did_not_write_is_kept(self):
+        self.fake_python(self.bin)
+        folder = self.home / ".local/bin"
+        other = folder / "desk"
+        folder.mkdir(parents=True)
+        other.write_bytes(b"#!/bin/sh\necho another program\n")
+        done = self.install()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(other.read_bytes(), b"#!/bin/sh\necho another program\n")
+        self.assertTrue((folder / "trade").exists())
+        other.unlink()
+        other.mkdir()
+        done = self.install()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertTrue(other.is_dir())
 
     def test_a_missing_python_stops_the_install(self):
         tools = self.root / "tools"
@@ -897,7 +935,7 @@ class InstallLauncherTests(unittest.TestCase):
     def test_launcher_text_keeps_the_jar_line_and_names_absolute_defaults(self):
         python = self.fake_python(self.bin)
         self.assertEqual(self.install().returncode, 0)
-        launcher = self.home / ".local/bin/desk"
+        launcher = self.home / ".local/bin/trade"
         helper = self.home / ".local/lib/desk-keychain.py"
         self.assertTrue(os.access(launcher, os.X_OK))
         lines = launcher.read_text().splitlines()
@@ -935,7 +973,7 @@ class InstallLauncherTests(unittest.TestCase):
         shim = self.fake_python(self.bin, executable=real)
         self.assertNotEqual(shim, real)
         self.assertEqual(self.install().returncode, 0)
-        text = (self.home / ".local/bin/desk").read_text()
+        text = (self.home / ".local/bin/trade").read_text()
         self.assertIn('export DESK_PYTHON="${DESK_PYTHON:-' + str(real) + '}"', text)
         self.assertNotIn(str(shim), text)
         self.assertEqual(self.launch("--keys")[0], str(real))
@@ -976,7 +1014,7 @@ class InstallLauncherTests(unittest.TestCase):
     def test_desk_vault_is_written_next_to_the_other_two_only_when_given(self):
         python = self.fake_python(self.bin)
         helper = self.home / ".local/lib/desk-keychain.py"
-        launcher = self.home / ".local/bin/desk"
+        launcher = self.home / ".local/bin/trade"
         for given in ((), ("DESK_VAULT=",)):
             with self.subTest(given=given):
                 self.assertEqual(self.install(*given).returncode, 0)

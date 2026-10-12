@@ -176,6 +176,10 @@ class MainRuntimeSpec extends TempDirectorySuite:
     assert(!Main.usage.contains("--keys"), Main.usage)
   }
 
+  test("the usage line names trade, the command on every system") {
+    assert(Main.usage.startsWith("usage: trade [COIN] "), Main.usage)
+  }
+
   test("--keys opens the key screen with the settings and exits before any feed or state") {
     val s = new Startup(withOwner())
     val stop = intercept[Stopped](s.run(s.args(keys = true)))
