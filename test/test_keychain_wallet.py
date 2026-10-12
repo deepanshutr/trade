@@ -771,8 +771,11 @@ class StoreModeTests(unittest.TestCase):
 ROOT = Path(__file__).parents[1]
 MAKE = shutil.which("make")
 REAL_HOME = os.path.expanduser("~")
-# The launcher an earlier install wrote as desk. Windows opens Display settings for a bare
-# desk, so the command is trade on every system, and an install removes this one.
+# Launchers earlier installs wrote as desk: the first form without the attach flag, and the
+# form since key setup. Windows opens Display settings for a bare desk, so the command is trade
+# on every system, and an install removes a desk that names the Desk jar.
+FIRST_LAUNCHER = ('#!/bin/sh\nexec "${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" '
+                  '-jar "$HOME/.local/lib/desk.jar" "$@"\n')
 EARLIER_LAUNCHER = (
     '#!/bin/sh\nexport DESK_PYTHON="${DESK_PYTHON:-/usr/bin/python3}"\n'
     'exec "${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" -XX:+DisableAttachMechanism '
@@ -872,41 +875,103 @@ class InstallLauncherTests(unittest.TestCase):
         launcher = self.home / ".local/bin/trade"
         earlier = self.home / ".local/bin/desk"
         launcher.parent.mkdir(parents=True)
-        launcher.write_bytes(b"old launcher")
+        launcher.write_text(EARLIER_LAUNCHER)
         earlier.write_text(EARLIER_LAUNCHER)
         self.assertNotEqual(self.install().returncode, 0)
-        self.assertEqual(launcher.read_bytes(), b"old launcher")
+        self.assertEqual(launcher.read_text(), EARLIER_LAUNCHER)
         self.assertEqual(earlier.read_text(), EARLIER_LAUNCHER)
         self.assertFalse((self.home / ".local/lib").exists())
 
-    def test_the_launcher_is_trade_and_an_earlier_desk_launcher_is_removed(self):
+    def test_the_launcher_is_trade_and_a_desk_that_names_the_jar_is_removed(self):
         self.fake_python(self.bin)
         folder = self.home / ".local/bin"
-        for name, earlier in (("no earlier launcher", None), ("earlier launcher", EARLIER_LAUNCHER)):
+        for name, earlier in (("no desk", None), ("first form", FIRST_LAUNCHER),
+                              ("key setup form", EARLIER_LAUNCHER)):
             with self.subTest(name):
                 folder.mkdir(parents=True, exist_ok=True)
+                (folder / "trade").unlink(missing_ok=True)
                 if earlier:
                     (folder / "desk").write_text(earlier)
                 done = self.install()
                 self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual(done.stderr, "")
                 self.assertTrue(os.access(folder / "trade", os.X_OK))
                 self.assertFalse((folder / "desk").exists())
+                # The removal says so in one line, and no line of the old file is printed.
+                # make also prints the recipe, so only an exact line counts.
+                said = done.stdout.splitlines()
+                notice = "Removed the earlier launcher " + str(folder / "desk") + ". The command is trade."
+                self.assertEqual(said.count(notice), 1 if earlier else 0)
+                for line in (earlier or "").splitlines():
+                    self.assertNotIn(line, said)
 
-    def test_a_desk_that_an_earlier_install_did_not_write_is_kept(self):
+    def test_a_desk_that_does_not_name_the_jar_is_kept(self):
         self.fake_python(self.bin)
         folder = self.home / ".local/bin"
         other = folder / "desk"
         folder.mkdir(parents=True)
-        other.write_bytes(b"#!/bin/sh\necho another program\n")
-        done = self.install()
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(other.read_bytes(), b"#!/bin/sh\necho another program\n")
-        self.assertTrue((folder / "trade").exists())
+        for name, text in (("another program", "#!/bin/sh\necho another program\n"),
+                           ("names desk only", '#!/bin/sh\nexec /opt/desk/bin/desk "$@"\n'),
+                           ("dots read as any character", "#!/bin/sh\n# /opt/xlocal/lib/desk-jar\n")):
+            with self.subTest(name):
+                other.write_text(text)
+                done = self.install()
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual(other.read_text(), text)
+                self.assertTrue((folder / "trade").exists())
         other.unlink()
         other.mkdir()
         done = self.install()
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue(other.is_dir())
+
+    def test_a_launcher_that_cannot_be_written_leaves_the_earlier_desk(self):
+        # The launcher is written to trade.new and moved onto trade. A folder there makes the
+        # write fail after every check, so the earlier desk must still be in place.
+        self.fake_python(self.bin)
+        folder = self.home / ".local/bin"
+        (folder / "trade.new").mkdir(parents=True)
+        (folder / "desk").write_text(EARLIER_LAUNCHER)
+        self.assertNotEqual(self.install().returncode, 0)
+        self.assertEqual((folder / "desk").read_text(), EARLIER_LAUNCHER)
+        self.assertFalse((folder / "trade").exists())
+
+    def test_a_trade_that_does_not_name_the_jar_stops_the_install(self):
+        self.fake_python(self.bin)
+        folder = self.home / ".local/bin"
+        folder.mkdir(parents=True)
+        trade = folder / "trade"
+        for name, make in (("another program", lambda: trade.write_text("#!/bin/sh\necho mine\n")),
+                           ("a folder", trade.mkdir),
+                           ("a link to another program",
+                            lambda: trade.symlink_to(self.root / "elsewhere"))):
+            with self.subTest(name):
+                (self.root / "elsewhere").write_text("#!/bin/sh\necho mine\n")
+                make()
+                (folder / "desk").write_text(EARLIER_LAUNCHER)
+                done = self.install()
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("not a Desk launcher", done.stderr)
+                self.assertFalse((self.home / ".local/lib").exists())
+                self.assertEqual((folder / "desk").read_text(), EARLIER_LAUNCHER)
+                self.assertEqual((self.root / "elsewhere").read_text(), "#!/bin/sh\necho mine\n")
+                if trade.is_dir() and not trade.is_symlink():
+                    trade.rmdir()
+                else:
+                    trade.unlink()
+
+    def test_a_link_named_trade_is_replaced_and_not_written_through(self):
+        self.fake_python(self.bin)
+        folder = self.home / ".local/bin"
+        folder.mkdir(parents=True)
+        target = self.root / "stopgap"
+        target.write_text(EARLIER_LAUNCHER)
+        (folder / "trade").symlink_to(target)
+        done = self.install()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertFalse((folder / "trade").is_symlink())
+        self.assertTrue(os.access(folder / "trade", os.X_OK))
+        self.assertEqual(target.read_text(), EARLIER_LAUNCHER)
 
     def test_a_missing_python_stops_the_install(self):
         tools = self.root / "tools"
