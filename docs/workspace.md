@@ -15,8 +15,8 @@ differs. View has no account. It draws no position, order, ticket or fill on the
 price axis or the chart, and its order controls are faint. Its panel reads
 `VIEW XMR --`, `--` for every figure and `View only: p Prop or l Live to trade`.
 Every order key in view answers with that sentence. Prop's heading reads
-`PROP XMR 1x`, since prop trades at one times leverage for now, and its third row
-shows the prop balance as `Prop`.
+`PROP XMR 5x` and the direction, such as `PROP XMR 5x SHORT`, since prop trades at
+five times leverage as live does, and its third row shows the prop collateral as `Prop`.
 
 | Region | 100 by 30 | 120 by 40 |
 | --- | --- | --- |
@@ -71,10 +71,11 @@ row reads `2 more above` or `2 more below`. An amount is faint while the account
 is stale, while a cancel of that row runs, or after live trading stopped on a failure.
 Then the status row says to restart, and fills and cancels no longer show.
 
-The live position's liquidation price sits on the axis too, but it never widens the
-range. Beyond the range it sits on the nearest edge row, with `'` below the range or `,`
-above it. It takes a row only where the orders leave one, so it never pushes an order
-off the axis. The cursor never stops on it. Prop has no liquidation price.
+The live or prop position's liquidation price sits on the axis too, but it never
+widens the range. Beyond the range it sits on the nearest edge row, with `'` below the
+range or `,` above it. It takes a row only where the orders leave one, so it never
+pushes an order off the axis. The cursor never stops on it. A prop long whose cash
+covers its whole entry has no liquidation price.
 
 ### The chart and the time axis
 
@@ -120,7 +121,7 @@ Size $10.98 of $21.84 held  fee $0.01
 | --- | --- |
 | 1 | The mode in bold, the market, the leverage and the direction in its side's colour |
 | 2 | The position value, the open profit and the net profit |
-| 3 | The stables and the usable margin, or the prop balance and its usable cash |
+| 3 | The stables and the usable margin, or in prop the prop collateral and its usable margin |
 | 4 | The status row |
 | 5 | The two sizes and CLOSE |
 | 6 | The order type, the orders on the axis, the sound and Desk's resting orders on other markets, such as `1 on BTC` |
@@ -149,9 +150,9 @@ Outcomes that land together, such as two venue cancels from one CLOSE, each take
 own number and their own line in the order result log, in order. The status row keeps
 the last, with its number. Desk keeps the last 50 outcomes for this.
 
-A prop market fill reads `Bought $20.00 #14` or `Sold $20.00 #15`, the money it put up
-at the fill price, and `Part filled` when the depth held less. Its full text, such as
-`PROP XMR buy filled $20.00 at 546.09` with the fee after it, goes to the order result
+A prop market fill reads `Bought $19.99 #14` or `Sold $19.99 #15`, the money it put up
+at 5x at the fill price, and `Part filled` when the depth held less. Its full text, such
+as `PROP XMR buy filled $19.99 at 546.09` with the fee after it, goes to the order result
 log.
 
 Every size on screen is the money put up: the quantity times the price divided by
@@ -246,24 +247,28 @@ prompt, then the ticket, then the mode confirmation, then the axis.
 
 ## Trade buttons and CLOSE
 
-In prop trading, the panel shows the token's current dollar value as `Val`, open
-profit, total net profit, the prop balance and `Usable`. Usable is the balance left
-after the value and maker fee of every resting buy. Open profit covers the tokens
-still held at their current price, excluding past sales and fees. Buy spends stables plus the fee.
-Sell returns stables minus the fee and sells at most the tokens held. A sell that
-would leave less than ten dollars of tokens at the quote sells all of them. Net profit
-equals stables plus the current token value minus the starting balance.
+In prop trading, the panel shows the position's signed value at the mark as `Val`,
+open profit, total net profit, the prop collateral and `Usable`. Prop's mark is the
+midpoint of the best bid and ask, which the header shows as `mid`. It is not the
+header's `mark`, the venue's own price. Prop values `Val`, open profit and `Usable` at
+its mark, and liquidates when its mark reaches the liquidation price. Open profit is
+the mark less the entry, times the signed size, excluding fees and past results. Net
+profit equals the collateral plus the open profit minus the starting balance. Usable
+is the free collateral at the mark: the collateral plus the open profit, less a fifth
+of the position's value and less what the resting orders reserve. Like live, it never
+reads below `$0.00`. It reads `--` while a held position has no fresh mark or sits on
+another market.
 For real trading, the token value is signed position exposure and the stable
 figure depends on the venue's account mode. Unknown or stale values show `--`.
 Real open profit comes from the venue. Real lifetime net profit is currently unavailable.
 The live heading shows the observed leverage and the current position direction.
 Real orders on every market require observed leverage of five times.
 
-In real trading, a button amount is the money put up. The position value is the
-amount times the observed leverage, so at 5x `$20` means a $100 position. The two
-trade buttons keep their place and keys, and their labels follow the position. Each
-label starts with its key. `x5` is the observed leverage. It is missing while the
-leverage is unknown. Prop's buttons read `x1`.
+In live and prop trading, a button amount is the money put up. The position value is
+the amount times the leverage, so at 5x `$20` means a $100 position. The two trade
+buttons keep their place and keys, and their labels follow the position. Each label
+starts with its key. `x5` is the leverage, the observed one in live and always 5 in
+prop. It is missing while the leverage is unknown.
 
 | Position | Key 1 or 2 | Key 3 or 4 |
 | --- | --- | --- |
@@ -277,9 +282,9 @@ the button still shows the same label.
 REDUCE only shrinks the position and stops at flat. It never opens the other side.
 To turn a long into a short, press CLOSE, then SHORT. For 2 seconds after a REDUCE or
 CLOSE finishes, or after a resting order fills in whole or in part and shrinks the
-position, real trading refuses any order that would open or grow a position, with the
+position, live and prop refuse any order that would open or grow a position, with the
 notice "Opening paused for 2 s after closing". The pause stops only new sends. An order already resting fills
-whenever the market reaches it. Prop pauses only after a CLOSE or a resting sell fill.
+whenever the market reaches it.
 
 CLOSE sits on row 5 after the two amounts. Press `x`, click it, or press Enter on the
 entry row of the axis to exit the whole position at once. Its label names the money
@@ -290,8 +295,9 @@ saved, no mode confirmation or market prompt is open, no market change is pendin
 and the heading fits the row. Otherwise it reads `x Close` and is faint. In live, `x`
 pressed while a row cancel runs still acts: CLOSE goes after the current cancel. With
 ready account data and no position, `x` shows "Not sent: controls changed". A close that
-fills in part leaves the rest open. Press CLOSE again. In prop, CLOSE sells the whole
-holding at once with the prop fee. CLOSE never cancels a resting order. See
+fills in part leaves the rest open. Press CLOSE again. In prop, CLOSE sells a long or
+buys a short, the whole position at once, with the prop fee. CLOSE never cancels a
+resting order. See
 [CLOSE and resting orders](trading.md#close-and-resting-orders). In view `x` answers
 the view sentence. See [live trading settings](trading.md) for amounts and the price
 allowance.
@@ -340,7 +346,8 @@ the switch cannot overwrite the new selection. Up to 32 selected markets retain
 bounded chart history. A configured pool market remains view-only and has no
 history before observation began. See [market settings](trading.md).
 
-Prop trading starts with $10,000 and a 0.05 percent fee per market fill. It uses
+Prop trading starts with $10,000 of collateral and a 0.045 percent fee per market fill,
+the venue's base taker rate. It uses
 fresh received depth, permits partial fills, and saves the account before
 reporting success. A newer quote can reduce known quantity without extending
 the age of the full depth. Delayed older depth cannot restore that quantity.
@@ -351,18 +358,75 @@ order until the result is known. A failed save preserves the last confirmed acco
 Prop limit orders rest in the wallet and fill from the market's trades with the maker
 fee of 0.015 percent, not the prop fee. See [prop limit orders](trading.md#prop-limit-orders).
 
-The prop wallet holds one market at a time. Cash, fees, realized results and
-held tokens survive restarts. The latest 1,000 fills and lifetime count are retained.
-Selling cannot borrow tokens or open a short position. Funding and liquidation
-are excluded. The new wallet starts at the configured prop balance and saves
-to `prop/wallet-mainnet.json` or `prop/wallet-testnet.json`. The old `paper/` folder,
-with its wallets and old margin simulation files, stays untouched and is never
-read again. Later settings changes do not reset an existing wallet.
-The wallet saves its starting deposit so net profit follows current wallet value.
-Incomplete saved wallets are refused and left untouched.
+Prop trades long and short at 5x with the same buttons, labels, refusals, reduce-only
+rule and CLOSE as live. It uses cross margin: one account whose whole cash backs the
+position. The cash is the collateral. Opening or growing a position spends only the
+fee. Fees, funding and realized results move the cash. An opening fill needs free
+collateral, valued at the fill price, of a fifth of the value it opens plus its fee.
+An open profit adds to what is free and an open loss takes from it, as at the venue. A
+fill that fails this, or that would take the cash below zero, is refused with "Prop
+limit: not enough stables including fees. Lower order sizes in settings. The change
+applies to the next order.", and the status row reads `Insufficient funds`.
+
+The margin wallet holds one market at a time. Cash, fees, funding, realized results
+and the position survive restarts. The latest 1,000 history lines and the lifetime
+count are retained. Each fill, rest, cancel, liquidation and reset adds a line. A new
+wallet starts at the configured prop balance and saves to
+`prop/margin-mainnet.json` or `prop/margin-testnet.json`. The spot wallet of earlier
+builds, `prop/wallet-mainnet.json` or `prop/wallet-testnet.json`, stays untouched with
+its holding and resting orders and is never read again, so its result does not carry
+over. The old `paper/` folder, with its wallets and old margin simulation files, is
+never read again either. Later settings changes do not reset an existing wallet. Only
+Reset prop does. The wallet saves its starting deposit so net profit follows current
+wallet value. Incomplete saved wallets are refused and left untouched.
 Prop and real accounts remain separate, and prop mode does not poll the
 real account. No fill, partial fill, refusals and repeated results appear in one
 short status row, with a separate action number for each result.
+
+Funding and liquidation start the first time a run enters prop, with `--prop` or with
+`p`, and keep running until Desk quits, also while live is selected. A run that never
+enters prop pays no funding. From then on, funding is paid at the start of each UTC hour
+while a position is held on the selected market. In a time zone offset by half an hour,
+payments land at half past the local hour. Each hour is charged once at most. The
+payment is the signed size times the oracle price times the hourly funding rate. The
+oracle price is the venue's reference price, the header's `oracle`. The hourly funding
+rate is the header's `fund`, shown in percent. Both come from that market's latest
+context, the venue's update for that market, when it arrived within the last hour. At a
+positive rate a long pays and a short receives. A payment above the cash takes the cash
+to zero and no further. Funding runs only while Desk runs and shows that market. An
+hour while Desk is closed, while another market shows or without a fresh context is
+skipped and never charged later. Each payment moves `Prop` and `Net` with no outcome
+and no line. The running sum shows only in the wallet file, as its `funding` field, the
+sum paid, negative when received. A payment leaves the history and the lifetime count
+as they were, so an order reviewed before it still fills.
+
+Prop liquidates at maintenance margin. The initial margin is the position's value over
+the market's maximum leverage. Maintenance margin is half of it, 10 percent of the
+position's value on XMR while its maximum leverage is 5x. Like funding, this check runs
+from the first time a run enters prop, also while live is selected. Once a second, while
+the position's market shows with fresh prices and no prop order is pending, Desk checks
+the account at the mark. When the collateral plus the open profit falls to maintenance
+or below, prop closes the whole position at the mark with no penalty. It
+keeps what is left as cash, never below zero, and removes every resting order. The
+status row reads `XMR liquidated $80.00 at 400 #21`, the money the position put up at
+the mark. The order result log adds `Resting orders removed: 2` when any rested. While
+live is selected, a prop liquidation shows on neither the status row nor the order
+result log, and only the prop wallet's history records it. Back in prop it shows on
+both, unless a live result came after it. The liquidation price on the axis is the mark
+where this happens. A position on a market Desk is not showing is neither funded nor
+liquidated until you return to that market. If the clock meets an unexpected error, the
+status row reads `Prop clock failed. Restart to recover #N` once, where N is its result
+number. The account keeps what was saved, and the clock tries again a second later.
+
+`Reset prop`, the fourth Trading row in settings, starts the wallet over. In prop it
+reads `starts over at $10000`, the `propBalance` of the settings file. Enter asks
+"Reset the prop wallet to $10000? y confirms. Any other key cancels." `y` saves a fresh
+wallet at that balance with no position and no resting order. It keeps the history and
+adds the line `PROP reset to $10000 | <time>`, with the reset's time in UTC. Settings
+shows that answer, and the status row reads `PROP reset to $10000 #22` once you leave.
+Any other key cancels and changes nothing. While a prop order is pending, `y` answers
+"Wait for the pending prop order" and resets nothing. In live or view the row reads
+`switch to prop first` and Enter answers "Switch to prop first".
 
 Local state defaults to `~/.local/state/desk`. Change it with `--state /absolute/path`.
 Message history is no longer kept. Existing message files are left untouched.

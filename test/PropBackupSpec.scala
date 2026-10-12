@@ -50,7 +50,7 @@ class PropBackupSpec extends TempDirectorySuite:
       assert(f.worker.submitReviewed(review))
       Wait.until("the simulated fill did not complete")(!f.worker.view.pending)
       assertEquals(f.ledger.account.count, 1L)
-      assertEquals(f.worker.view.position, Some(BigDecimal(5)))
+      assertEquals(f.worker.view.position, Some(BigDecimal(25)))
       f.now.addAndGet(1001)
       assert(!f.worker.view.ready)
       f.book()
@@ -134,7 +134,7 @@ class PropBackupSpec extends TempDirectorySuite:
       )
       Wait.until("the reviewed fill did not complete")(!f.worker.view.pending)
       assertEquals(f.ledger.account.count, 1L)
-      assertEquals(f.worker.view.position, Some(BigDecimal(5)))
+      assertEquals(f.worker.view.position, Some(BigDecimal(25)))
       assert(!f.worker.submitReviewed(review))
     finally f.worker.close()
   }

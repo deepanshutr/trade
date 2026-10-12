@@ -13,7 +13,7 @@ class PropBoundaryReviewSpec extends TempDirectorySuite:
     val terms = TradeTerms(config.sizes, config.slippage)
     if held > 0 then
       LocalFiles.write(
-        directory.resolve("wallet-mainnet.json"),
+        directory.resolve(PropLedger.file("mainnet")),
         s"""{"cash":"${config.propBalance}","deposit":"${config.propBalance + held * 100}","realized":"0","fees":"0","orders":[],"count":"0","positions":{"XMR":{"quantity":"$held","entry":"100"}}}"""
       )
     val ledger = PropLedger.open(directory, "mainnet", config.propBalance, config.propFee)
@@ -80,8 +80,8 @@ class PropBoundaryReviewSpec extends TempDirectorySuite:
       changedIntents.foreach(intent =>
         assert(!f.worker.submitReviewed(review.copy(intent = intent)), intent.toString)
       )
-      assert(!f.worker.submitReviewed(review.copy(leverage = Some(5))))
-      assert(!f.worker.submitReviewed(review.copy(marginMode = Some("cross"))))
+      assert(!f.worker.submitReviewed(review.copy(leverage = Some(1))))
+      assert(!f.worker.submitReviewed(review.copy(marginMode = Some("isolated"))))
       assertEquals(f.ledger.account.count, 0L)
       assert(f.worker.submitReviewed(review))
       f.settle()
@@ -247,7 +247,8 @@ class PropBoundaryReviewSpec extends TempDirectorySuite:
   for side <- Vector(Side.Buy, Side.Sell) do
     for scenario <- Vector("improved", "adverse within limit", "partial", "outside limit") do
       test(s"$side uses fresh $scenario depth at the captured quantity and limit") {
-        val f = new Fixture(if side == Side.Sell then BigDecimal(10) else BigDecimal(0))
+        // The sell reduces a holding twice its size, so it is not turned into a Close.
+        val f = new Fixture(if side == Side.Sell then BigDecimal(50) else BigDecimal(0))
         try
           f.open()
           val review = f.review(OrderIntent(side, OrderKind.Hard))

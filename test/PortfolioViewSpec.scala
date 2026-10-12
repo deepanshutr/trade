@@ -5,8 +5,9 @@ import java.time.ZoneOffset
 class RefinePortfolioSpec extends munit.FunSuite:
   private val now = 1800000000000L
   test("simulated holdings and net include realized results, open results and fees exactly") {
+    // A margin account: cash is the deposit plus realized less fees.
     val account = PropAccount(
-      BigDecimal("9519.75"),
+      BigDecimal("10019.75"),
       BigDecimal(20),
       BigDecimal("0.25"),
       Map("XMR" -> PropPosition(BigDecimal(5), BigDecimal(100))),
@@ -14,15 +15,15 @@ class RefinePortfolioSpec extends munit.FunSuite:
     )
     val p = PortfolioView.prop(account, "XMR", Some(BigDecimal(102)))
     assertEquals(p.tokenValue, Some(BigDecimal(510)))
-    assertEquals(p.stables, Some(BigDecimal("9519.75")))
+    assertEquals(p.stables, Some(BigDecimal("10019.75")))
     assertEquals(p.net, Some(BigDecimal("29.75")))
     assertEquals(p.entry, Some(BigDecimal(100)))
     assertEquals(p.liquidation, None)
-    assertEquals(p.net, Some(p.stables.get + p.tokenValue.get - BigDecimal(10000)))
+    assertEquals(p.net, Some(p.stables.get + p.openProfit.get - BigDecimal(10000)))
     val lower = PortfolioView.prop(account, "XMR", Some(BigDecimal(98)))
     assertEquals(lower.tokenValue, Some(BigDecimal(490)))
     assertEquals(lower.net, Some(BigDecimal("9.75")))
-    assertEquals(lower.net, Some(lower.stables.get + lower.tokenValue.get - BigDecimal(10000)))
+    assertEquals(lower.net, Some(lower.stables.get + lower.openProfit.get - BigDecimal(10000)))
     assertEquals(PortfolioView.prop(account, "XMR", None).net, None)
     assertEquals(PortfolioView.prop(account, "BTC", Some(BigDecimal(100))).net, None)
     val multiple = account.copy(positions = account.positions.updated("BTC", PropPosition(1, 100)))

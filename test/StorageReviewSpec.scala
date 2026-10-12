@@ -18,7 +18,7 @@ class StorageReviewSpec extends TempDirectorySuite:
 
   test("a refused persistent write leaves the previous account and disables fills") {
     val directory = tempDirectory("desk-prop-write-failure")
-    val path = directory.resolve("wallet-mainnet.json")
+    val path = directory.resolve(PropLedger.file("mainnet"))
     val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
       assert(ledger.fill(plan(Side.Buy, "1", "100"), now).isRight)
@@ -52,7 +52,8 @@ class StorageReviewSpec extends TempDirectorySuite:
       assertEquals(ledger.account.positions("XMR").entry, BigDecimal(101))
       assertEquals(ledger.account.realized, BigDecimal(18))
       val before = ledger.account
-      assert(ledger.fill(plan(Side.Sell, "4", "90"), now + 3).isLeft)
+      // A reduce-only sell larger than the position is refused.
+      assert(ledger.fill(plan(Side.Sell, "4", "90").copy(reduceOnly = true), now + 3).isLeft)
       assertEquals(ledger.account, before)
       assert(ledger.fill(plan(Side.Sell, "2", "90"), now + 3).isRight)
       assertEquals(ledger.account.positions, Map.empty[String, PropPosition])
@@ -63,7 +64,8 @@ class StorageReviewSpec extends TempDirectorySuite:
       assertEquals(ledger.account.positions("XMR").entry, BigDecimal(85))
       assertEquals(ledger.account.positions("XMR").quantity, BigDecimal(3))
       assertEquals(ledger.account.realized, BigDecimal(-4))
-      assertEquals(ledger.account.cash, BigDecimal("739.941"))
+      // Opening spends only its fee.
+      assertEquals(ledger.account.cash, BigDecimal("994.941"))
     finally ledger.close()
   }
 

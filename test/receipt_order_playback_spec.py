@@ -1,12 +1,14 @@
 """Checks under the production invariant that a pending refusal precedes its fill."""
 from decimal import Decimal
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 
 spec = importlib.util.spec_from_file_location('tested_playback', Path('tools/playback.py'))
 playback = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(playback)
+CONTEXT = json.loads(Path('fixtures/activeAssetCtx.json').read_text())['data']
 
 
 def trace(start, count):
@@ -24,13 +26,13 @@ def trace(start, count):
             delayed = None
         side = 'buy' if click % 2 else 'sell'
         if side == 'sell' and held == 0:
-            result = {'kind': 'order', 'text': 'No XMR to sell'}
+            result = {'kind': 'order', 'text': 'Opening paused for 2 s after closing'}
         else:
             direction = 1 if side == 'buy' else -1
-            held += direction
-            cash -= direction * 500 + Decimal('0.25')
-            fees += Decimal('0.25')
-            text = f'PROP XMR {side} filled $500.00 at 500\nFee $0.25 | #{len(filled)+1} offline'
+            held += direction * 5
+            cash -= Decimal('1.125')
+            fees += Decimal('1.125')
+            text = f'PROP XMR {side} filled $500.00 at 500\nFee $1.125 | #{len(filled)+1} offline'
             filled.append(text)
             result = {'kind': 'order', 'text': text}
         if click == start:
@@ -52,7 +54,7 @@ class ReceiptOrderFinder(unittest.TestCase):
             for count in (1, 2, 3, 4, 7, 20):
                 with self.subTest(start=start, count=count):
                     saved, results, book, delayed = trace(start, count)
-                    accepted, refused = playback.validate_wallet(saved, results, book)
+                    accepted, refused = playback.validate_wallet(saved, results, book, CONTEXT)
                     self.assertEqual(len(accepted), saved['count'])
                     self.assertEqual(len(accepted) + len(refused), 600)
                     text = results[delayed]['text']
@@ -60,4 +62,4 @@ class ReceiptOrderFinder(unittest.TestCase):
                     results[delayed]['text'] = text.replace(old, new)
                     saved['orders'] = [r['text'] for r in results if ' filled ' in r['text']]
                     with self.assertRaisesRegex(AssertionError, 'fill side differs'):
-                        playback.validate_wallet(saved, results, book)
+                        playback.validate_wallet(saved, results, book, CONTEXT)

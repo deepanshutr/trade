@@ -7,7 +7,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 import scala.collection.mutable.ArrayBuffer
 
-class SettingsScreenSpec extends munit.FunSuite:
+class SettingsScreenSpec extends TempDirectorySuite:
   private val esc = "\u001b"
   private val up = esc + "[A"
   private val down = esc + "[B"
@@ -97,6 +97,9 @@ class SettingsScreenSpec extends munit.FunSuite:
     var pending = false
     var size = (100, 30)
     var approve: Either[String, Seq[String]] = Right(Nil)
+    var prop = false
+    var resets = 0
+    var resetAnswer: () => Either[String, String] = () => Right("PROP reset to $10000")
     def context: SettingsScreen.Context = SettingsScreen.Context(
       network = "mainnet",
       settings = () => {
@@ -146,7 +149,12 @@ class SettingsScreenSpec extends munit.FunSuite:
       now = () => clock,
       size = () => size,
       approveConfig = approve,
-      activeKey = () => active
+      activeKey = () => active,
+      prop = () => prop,
+      resetProp = () => {
+        resets += 1
+        resetAnswer()
+      }
     )
     val out = new ByteArrayOutputStream()
     def run(chunks: String*): Boolean =
@@ -179,6 +187,8 @@ class SettingsScreenSpec extends munit.FunSuite:
 
   test("the page shows the three sections, their values and the help line") {
     val f = new Fixture
+    // The whole page takes 31 lines.
+    f.size = (100, 31)
     f.owned = Some((Right(status()), start - 3000L))
     assert(!f.run(esc))
     val page = f.frames.head
@@ -190,35 +200,37 @@ class SettingsScreenSpec extends munit.FunSuite:
     assertEquals(page(3), "> Small amount         $500")
     assertEquals(page(4), "  Big amount           $1000")
     assertEquals(page(5), "  Slippage             0.10%")
-    assert(page(7).startsWith("Keys"), page(7))
-    assert(page(7).endsWith("owner read 3 s ago"), page(7))
-    assertEquals(page(8), "  Trading key          Main   0xaaaa...aaaa   active, in Keychain")
-    assertEquals(page(9), "  Owner                ready   0x1234...1234")
-    assertEquals(page(10), "  Approval             not approved")
+    assertEquals(page(6), "  Reset prop           switch to prop first")
+    assertEquals(page(7), "")
+    assert(page(8).startsWith("Keys"), page(8))
+    assert(page(8).endsWith("owner read 3 s ago"), page(8))
+    assertEquals(page(9), "  Trading key          Main   0xaaaa...aaaa   active, in Keychain")
+    assertEquals(page(10), "  Owner                ready   0x1234...1234")
+    assertEquals(page(11), "  Approval             not approved")
     assertEquals(
-      page(11),
+      page(12),
       "  Funding              $12.34 at the venue, read 12 s ago. Enter copies the address."
     )
-    assertEquals(page(13), "Key bindings")
+    assertEquals(page(14), "Key bindings")
     assertEquals(
-      page.slice(14, 28).map(_.take(23).trim),
+      page.slice(15, 29).map(_.take(23).trim),
       Bind.values.toVector.map(_.label)
     )
     assertEquals(
-      page.slice(14, 28).map(value),
+      page.slice(15, 29).map(value),
       Vector("q", "p", "l", "m", "c", "v", "1", "2", "3", "4", "x", "s", "t", "o")
     )
     assertEquals(
-      page(28),
+      page(29),
       "Up and Down move. Enter edits or acts. r reads the owner again. Esc leaves."
     )
-    assertEquals(page.size, 30)
+    assertEquals(page.size, 31)
   }
 
   test("Up and Down move the cursor and the page scrolls to keep it visible") {
     val f = new Fixture
     f.size = (60, 12)
-    assert(!f.run(up + down * 30, esc))
+    assert(!f.run(up + down * 31, esc))
     val page = f.last
     assertEquals(page.size, 12)
     assert(page.forall(_.length <= 60), page)
@@ -313,6 +325,190 @@ class SettingsScreenSpec extends munit.FunSuite:
     assertEquals(f.written.size, 0)
   }
 
+  // Reset prop
+
+  private val confirm = "Reset the prop wallet to $10000? y confirms. Any other key cancels."
+
+  test("the fourth trading row resets prop after a confirm") {
+    val f = new Fixture
+    f.prop = true
+    assert(!f.run(down * 3 + enter, "y", esc))
+    assertEquals(f.resets, 1)
+    assertEquals(f.notice, "PROP reset to $10000")
+    val asked = f.frames.find(_.last == confirm).getOrElse(fail(s"no confirm in ${f.frames}"))
+    assert(asked.contains("> Reset prop           starts over at $10000"), asked)
+    // A capital Y confirms too.
+    val capital = new Fixture
+    capital.prop = true
+    assert(!capital.run(down * 3 + enter, "Y", esc))
+    assertEquals((capital.resets, capital.notice), (1, "PROP reset to $10000"))
+    // Without a settings file the balance is unknown, and the reset still asks first.
+    val unknown = new Fixture
+    unknown.prop = true
+    unknown.snapshot = Left("invalid trading settings: settings must be a private regular file")
+    assert(!unknown.run(down * 3 + enter, "y", esc))
+    assertEquals(unknown.resets, 1)
+    assert(
+      unknown.frames.exists(_.last == "Reset the prop wallet? y confirms. Any other key cancels."),
+      unknown.frames
+    )
+    assertEquals(value(unknown.row("Reset prop")), "--")
+  }
+
+  test("Esc at the confirm changes nothing") {
+    val f = new Fixture
+    f.prop = true
+    assert(!f.run(down * 3 + enter + esc, esc))
+    assert(f.frames.exists(_.last == confirm), f.frames)
+    assertEquals((f.resets, f.notice), (0, ""))
+    // Enter and any other key cancel the same way, and Control C quits at once.
+    for key <- Vector(enter, "n") do
+      val other = new Fixture
+      other.prop = true
+      assert(!other.run(down * 3 + enter, key, esc))
+      assert(other.frames.exists(_.last == confirm), other.frames)
+      assertEquals((other.resets, other.notice), (0, ""), key)
+    val quit = new Fixture
+    quit.prop = true
+    assert(quit.run(down * 3 + enter + interrupt + enter + "y"))
+    assertEquals(quit.resets, 0)
+  }
+
+  test("a double Enter at the row never resets the prop wallet") {
+    // Both presses arrive together, as a fast double press or a queued Enter does.
+    val f = new Fixture
+    f.prop = true
+    assert(!f.run(down * 3 + enter + enter, esc))
+    assert(f.frames.exists(_.last == confirm), f.frames)
+    assertEquals((f.resets, f.notice), (0, ""))
+  }
+
+  test("in live or view the row asks for prop and calls nothing") {
+    val f = new Fixture
+    assert(!f.run(down * 3 + enter + enter, esc))
+    assertEquals(f.resets, 0)
+    assertEquals(f.notice, "Switch to prop first")
+    assertEquals(f.row("Reset prop"), "> Reset prop           switch to prop first")
+  }
+
+  test("a refusal from the router shows as given") {
+    val f = new Fixture
+    f.prop = true
+    f.resetAnswer = () => Left("Wait for the pending prop order")
+    assert(!f.run(down * 3 + enter, "y", esc))
+    assertEquals(f.resets, 1)
+    assertEquals(f.notice, "Wait for the pending prop order")
+    // The answer is shown through the same filter as every other text from outside the screen.
+    val coloured = new Fixture
+    coloured.prop = true
+    coloured.resetAnswer = () => Right("PROP reset to $10000" + esc + "[31m")
+    assert(!coloured.run(down * 3 + enter, "y", esc))
+    assertEquals(coloured.notice, "PROP reset to $10000")
+  }
+
+  test("a reset that throws shows its message and the screen keeps running") {
+    val f = new Fixture
+    f.prop = true
+    f.resetAnswer = () => throw new IllegalStateException("prop store unavailable" + esc + "[31m")
+    assert(!f.run(down * 3 + enter, "y", esc))
+    assertEquals((f.resets, f.notice), (1, "prop store unavailable"))
+    // An exception without a message says the reset failed.
+    val bare = new Fixture
+    bare.prop = true
+    bare.resetAnswer = () => throw new IllegalStateException()
+    assert(!bare.run(down * 3 + enter, "y", esc))
+    assertEquals((bare.resets, bare.notice), (1, "Reset failed"))
+  }
+
+  test("a thrown reset whose message filters to nothing says Reset failed") {
+    val seen = Vector("", esc + "[31m").map { message =>
+      val f = new Fixture
+      f.prop = true
+      f.resetAnswer = () => throw new IllegalStateException(message)
+      assert(!f.run(down * 3 + enter, "y", esc))
+      (f.resets, f.notice)
+    }
+    assertEquals(seen, Vector((1, "Reset failed"), (1, "Reset failed")))
+  }
+
+  test("the keys section starts one row lower") {
+    val f = new Fixture
+    f.prop = true
+    assert(!f.run(down * 4 + enter, esc))
+    assertEquals((f.keyScreens, f.resets), (1, 0))
+    // On a short screen the cursor on the fourth trading row is the last line shown.
+    val short = new Fixture
+    short.size = (60, 8)
+    assert(!short.run(down * 3, esc))
+    assertEquals(
+      short.last.slice(2, 6).map(_.take(23).trim),
+      Vector("Small amount", "Big amount", "Slippage", "> Reset prop")
+    )
+  }
+
+  test("in live or view y at the row never resets") {
+    val f = new Fixture
+    assert(!f.run(down * 3 + enter, "y", esc))
+    assertEquals((f.resets, f.notice), (0, ""))
+    assert(f.frames.exists(_.last == "Switch to prop first"), f.frames)
+    assert(!f.frames.exists(_.last.startsWith("Reset the prop wallet")), f.frames)
+  }
+
+  test("only y or Y confirms: Enter as Control J, Option y and other keys cancel") {
+    for key <- Vector("\n", esc + "y", " ", "N") do
+      val f = new Fixture
+      f.prop = true
+      assert(!f.run(down * 3 + enter, key, esc), key)
+      assert(f.frames.exists(_.last == confirm), f.frames)
+      assertEquals((f.resets, f.notice), (0, ""), key)
+  }
+
+  test("a reset that throws any non-fatal exception shows its message") {
+    val f = new Fixture
+    f.prop = true
+    f.resetAnswer = () => throw new java.io.IOException("prop store unavailable")
+    assert(!f.run(down * 3 + enter, "y", esc))
+    assertEquals((f.resets, f.notice), (1, "prop store unavailable"))
+  }
+
+  test("the reset row and its confirm show the balance as the amounts do") {
+    val f = new Fixture
+    f.prop = true
+    f.snapshot = Right(
+      SettingsSnapshot(
+        Path.of("/nowhere/config.json"),
+        Array.emptyByteArray,
+        TradingConfig(propBalance = BigDecimal("12500.50"))
+      )
+    )
+    assert(!f.run(down * 3 + enter, esc, esc))
+    assert(
+      f.frames.exists(
+        _.last == "Reset the prop wallet to $12500.5? y confirms. Any other key cancels."
+      ),
+      f.frames
+    )
+    assertEquals(value(f.row("Reset prop")), "starts over at $12500.5")
+  }
+
+  test("on a short screen the cursor is the last line shown on every row past the top") {
+    val labels = Vector(
+      "Small amount",
+      "Big amount",
+      "Slippage",
+      "Reset prop",
+      "Trading key",
+      "Owner",
+      "Approval",
+      "Funding"
+    ) ++ Bind.values.toVector.map(_.label)
+    for n <- 2 until labels.size do
+      val f = new Fixture
+      f.size = (60, 8)
+      assert(!f.run(down * n, esc))
+      assert(f.last(5).startsWith("> " + labels(n).take(19)), (n, f.last))
+  }
+
   // Keys
 
   test("the owner rows read the status and show its age without waiting for it") {
@@ -327,7 +523,7 @@ class SettingsScreenSpec extends munit.FunSuite:
   test("without the owner tooling the owner rows say so and Enter runs nothing there") {
     val f = new Fixture
     f.owned = Some((Left(Child.notInstalled), start))
-    assert(!f.run(down * 4 + enter + down + enter + down + enter, esc))
+    assert(!f.run(down * 5 + enter + down + enter + down + enter, esc))
     for label <- Vector("Owner", "Approval", "Funding") do
       assertEquals(value(f.row(label)), Child.notInstalled)
     assertEquals((f.owners.size, f.copies.size), (0, 0))
@@ -339,7 +535,7 @@ class SettingsScreenSpec extends munit.FunSuite:
       val f = new Fixture
       f.owned =
         Some((Right(status(phase = phase, candidates = candidates, message = "msg")), start))
-      assert(!f.run(down * 4 + enter, esc))
+      assert(!f.run(down * 5 + enter, esc))
       f
     assertEquals(owning(None).owners.toVector, Vector(Seq("owner", "new", "--network", "mainnet")))
     assertEquals(
@@ -362,7 +558,7 @@ class SettingsScreenSpec extends munit.FunSuite:
       f.owned = Some((Right(s), start))
       f.key = key
       f.approve = extra
-      assert(!f.run(down * 5 + enter, esc))
+      assert(!f.run(down * 6 + enter, esc))
       f
     val words = Seq("owner", "approve", "--network", "mainnet")
     assertEquals(approving(status()).owners.toVector, Vector(words))
@@ -400,7 +596,7 @@ class SettingsScreenSpec extends munit.FunSuite:
   test("Enter on the funding row copies the owner's address and says Desk never sends money") {
     val f = new Fixture
     f.owned = Some((Right(status()), start))
-    assert(!f.run(down * 6 + enter, esc))
+    assert(!f.run(down * 7 + enter, esc))
     assertEquals(f.copies.toVector, Vector(owner))
     assertEquals(
       f.notice,
@@ -410,20 +606,20 @@ class SettingsScreenSpec extends munit.FunSuite:
     assert(f.last.forall(_.length <= 100), f.last)
     val none = new Fixture
     none.owned = Some((Right(status(ownerAddress = None, phase = None)), start))
-    assert(!none.run(down * 6 + enter, esc))
+    assert(!none.run(down * 7 + enter, esc))
     assertEquals(none.copies.size, 0)
     assertEquals(value(none.row("Funding")), "no owner yet")
     val failed = new Fixture
     failed.owned = Some((Right(status()), start))
     failed.copyResult = Left("Clipboard copy failed")
-    assert(!failed.run(down * 6 + enter, esc))
+    assert(!failed.run(down * 7 + enter, esc))
     assertEquals(failed.notice, "Clipboard copy failed")
   }
 
   test("Enter on the trading key row runs the key child, then reads the owner and settings again") {
     val f = new Fixture
     f.owned = Some((Right(status()), start))
-    assert(!f.run(down * 3 + enter, esc))
+    assert(!f.run(down * 4 + enter, esc))
     assertEquals(f.keyScreens, 1)
     assertEquals(f.notice, "Done")
     assert(f.refreshes >= 2, f.refreshes)
@@ -436,7 +632,7 @@ class SettingsScreenSpec extends munit.FunSuite:
     do
       val g = new Fixture
       g.keyResult = result
-      assert(!g.run(down * 3 + enter, esc))
+      assert(!g.run(down * 4 + enter, esc))
       assertEquals(g.notice, text)
   }
 
@@ -444,9 +640,9 @@ class SettingsScreenSpec extends munit.FunSuite:
     val f = new Fixture
     f.pending = true
     f.owned = Some((Right(status(phase = None)), start))
-    assert(!f.run(down * 3 + enter, esc))
-    assertEquals(f.notice, "Wait for the pending order")
     assert(!f.run(down * 4 + enter, esc))
+    assertEquals(f.notice, "Wait for the pending order")
+    assert(!f.run(down * 5 + enter, esc))
     assertEquals(f.notice, "Wait for the pending order")
     // A reload can replace the live worker too, so r reads only the owner status then.
     assert(!f.run("r", esc))
@@ -473,11 +669,11 @@ class SettingsScreenSpec extends munit.FunSuite:
 
   test("keys typed while a child or a reload ran are dropped, so each child takes a fresh Enter") {
     val key = new Fixture
-    assert(!key.run(down * 3 + enter + enter + enter, esc))
+    assert(!key.run(down * 4 + enter + enter + enter, esc))
     assertEquals(key.keyScreens, 1)
     val approving = new Fixture
     approving.owned = Some((Right(status()), start))
-    assert(!approving.run(down * 5 + enter + enter, esc))
+    assert(!approving.run(down * 6 + enter + enter, esc))
     assertEquals(approving.owners.size, 1)
     val again = new Fixture
     assert(!again.run("r" + "r", esc))
@@ -488,7 +684,7 @@ class SettingsScreenSpec extends munit.FunSuite:
     val late = new Fixture
     late.owned = Some((Right(status()), start - 1000L))
     // The child runs, then a deliberate Enter on the redrawn screen.
-    assert(!late.run(down * 5 + enter, enter, esc))
+    assert(!late.run(down * 6 + enter, enter, esc))
     assertEquals(late.owners.size, 1)
     assertEquals(late.notice, "Reading owner status")
     for label <- Vector("Owner", "Approval", "Funding") do
@@ -498,7 +694,7 @@ class SettingsScreenSpec extends munit.FunSuite:
     fresh.onRefresh = () =>
       if fresh.owners.nonEmpty then
         fresh.owned = Some((Right(status(approved = Some(true))), fresh.clock))
-    assert(!fresh.run(down * 5 + enter, enter, esc))
+    assert(!fresh.run(down * 6 + enter, enter, esc))
     assertEquals(fresh.owners.size, 1)
     assertEquals(fresh.notice, "The trading key is already approved")
   }
@@ -529,7 +725,7 @@ class SettingsScreenSpec extends munit.FunSuite:
     val other = new Fixture
     other.active = Some("0x" + "B" * 40)
     other.owned = Some((Right(status()), start))
-    assert(!other.run(down * 5 + enter, esc))
+    assert(!other.run(down * 6 + enter, esc))
     assertEquals(other.owners.size, 0)
     assertEquals(value(other.row("Approval")), "The status is for another key. Press r")
     assertEquals(other.notice, "The status is for another key. Press r")
@@ -537,7 +733,7 @@ class SettingsScreenSpec extends munit.FunSuite:
     val upper = new Fixture
     upper.active = Some("0x" + "A" * 40)
     upper.owned = Some((Right(status()), start))
-    assert(!upper.run(down * 5 + enter, esc))
+    assert(!upper.run(down * 6 + enter, esc))
     assertEquals(upper.owners.size, 1)
   }
 
@@ -547,7 +743,7 @@ class SettingsScreenSpec extends munit.FunSuite:
     assert(!f.run(enter, esc))
     assert(f.last(2).contains("The settings file could not be read or written"), f.last(2))
     assertEquals(f.notice, "The settings file could not be read or written")
-    assert(!f.run(down * 3 + enter, esc))
+    assert(!f.run(down * 4 + enter, esc))
     assertEquals(f.keyScreens, 1)
   }
 
@@ -568,11 +764,12 @@ class SettingsScreenSpec extends munit.FunSuite:
   // Key bindings
 
   test("a row for an unbound action reads unbound") {
-    val dir = java.nio.file.Files.createTempDirectory("desk-unbound")
+    val dir = tempDirectory("unbound")
     val saved = dir.resolve("bindings.json")
     java.nio.file.Files.writeString(saved, """{"version":1,"bindings":{"close":["t"]}}""")
     Platform.setMode(saved, "rw-------")
     val f = new Fixture
+    f.size = (100, 31)
     f.bindings = Bindings.load(saved).toOption.get
     assert(!f.run(esc))
     assertEquals(value(f.row("Order type")), "unbound")
@@ -580,8 +777,8 @@ class SettingsScreenSpec extends munit.FunSuite:
     assertEquals(value(f.row("Orders")), "o")
   }
 
-  private val quitRow = down * 7
-  private val marketRow = down * 10
+  private val quitRow = down * 8
+  private val marketRow = down * 11
 
   test("a captured key is confirmed, checked, written and applied, and its row shows its name") {
     val f = new Fixture
@@ -610,14 +807,14 @@ class SettingsScreenSpec extends munit.FunSuite:
     assert(!f.run(marketRow + enter + "gm" + "gm", esc))
     assertEquals(value(f.row("Market")), "g then m")
     val g = new Fixture
-    assert(!g.run(down * 17 + enter + "∫" + enter + "∫", esc))
+    assert(!g.run(down * 18 + enter + "∫" + enter + "∫", esc))
     assertEquals(
       g.bound.last.command(KeyGroup(Vector(0xe2, 0x88, 0xab))),
       Some(Command.Close)
     )
     assertEquals(value(g.row("Close")), "∫ Option B")
     val h = new Fixture
-    assert(!h.run(down * 18 + enter + esc + "[15~" + enter + esc + "[15~", esc))
+    assert(!h.run(down * 19 + enter + esc + "[15~" + enter + esc + "[15~", esc))
     assertEquals(value(h.row("Settings")), "F5")
   }
 
@@ -695,7 +892,7 @@ class SettingsScreenSpec extends munit.FunSuite:
     var idles = 0
     // Thirty-one idle seconds, then r, then the key child, then Esc, each one idle second apart.
     val input = new InputStream:
-      private val stages = Vector(31 -> "r", 32 -> (down * 3 + enter), 33 -> esc)
+      private val stages = Vector(31 -> "r", 32 -> (down * 4 + enter), 33 -> esc)
         .map((at, text) => (at, text.getBytes(UTF_8).toVector.map(_ & 0xff)))
       private var stage = 0
       private var at = 0
@@ -753,7 +950,7 @@ class SettingsScreenSpec extends munit.FunSuite:
         f.context.copy(ownerStatus = () => first.status, refreshOwner = () => first.refresh())
       val began = System.nanoTime()
       assert(
-        !SettingsScreen.run(context, new Script(Vector(down * 3, esc)), new PrintStream(f.out))
+        !SettingsScreen.run(context, new Script(Vector(down * 4, esc)), new PrintStream(f.out))
       )
       assert(System.nanoTime() - began < 3000000000L)
       assertEquals(value(f.row("Owner")), "Reading owner status")
@@ -1195,13 +1392,19 @@ class SettingsScreenSpec extends munit.FunSuite:
     val release = new CountDownLatch(1)
     val readers = ArrayBuffer.empty[String]
     val handed = ArrayBuffer.empty[Seq[String]]
-    def build(keyChild: Either[String, Seq[String]]): SettingsScreen.Context =
+    var resets = 0
+    val followed = ArrayBuffer.empty[BigDecimal]
+    def build(
+        keyChild: Either[String, Seq[String]],
+        config: Option[Path] = None,
+        desk: DeskController = controller
+    ): SettingsScreen.Context =
       SettingsWiring.context(
         network = "mainnet",
-        config = None,
+        config = config,
         home = Path.of("/nowhere"),
         bound = bound,
-        controller = controller,
+        controller = desk,
         keyRow = () => Right("Main"),
         reload = () => Right(()),
         ownerRead = () => {
@@ -1220,7 +1423,12 @@ class SettingsScreenSpec extends munit.FunSuite:
         livePending = () => false,
         size = () => (100, 30),
         now = () => start,
-        approve = Right(Nil)
+        approve = Right(Nil),
+        resetProp = () => {
+          resets += 1
+          Right("PROP reset to $10000")
+        },
+        followPropBalance = balance => followed += balance
       )
     val context = build(Right(Seq("java", "--keys")))
     try
@@ -1251,6 +1459,46 @@ class SettingsScreenSpec extends munit.FunSuite:
         Left("Settings children need the installed desk.jar")
       )
       assertEquals(handed.size, 1)
+      // The reset goes to the router once, and prop follows the controller's mode as it changes.
+      assertEquals((context.resetProp(), resets), (Right("PROP reset to $10000"), 1))
+      assert(!context.prop())
+      val market = Snapshot.initial("XMR", start)
+      val shown = TradingView("XMR", message = "View only", rules = Some(MarketRules(0, 2, 5)))
+      def drawn: WorkspaceFrame = Workspace.draw(
+        market,
+        shown,
+        controller.panel,
+        100,
+        30,
+        start,
+        java.time.ZoneOffset.UTC,
+        Style.mono
+      )
+      for command <- Vector(Command.Mode("PROP"), Command.Confirm) do
+        controller.publish(drawn)
+        controller.handle(command, market, shown, (100, 30), false)
+      assertEquals(controller.panel.mode, "PROP")
+      assert(context.prop())
+      val live = new DeskController(
+        PanelView(mode = "LIVE"),
+        () => start,
+        (_, _) => Left("no preview"),
+        _ => false,
+        _ => Right(())
+      )
+      assert(!build(Right(Nil), desk = live).prop())
+      // Each read of the settings file hands its prop balance to the router, so the reset row
+      // and the reset name one figure. A file that cannot be read hands nothing.
+      val folder = tempDirectory("wiring-balance-")
+      val file = folder.resolve("config.json")
+      java.nio.file.Files.writeString(file, """{"propBalance":"5000"}""")
+      Platform.setMode(file, "rw-------")
+      val reading = build(Right(Nil), Some(file))
+      assertEquals(followed.toVector, Vector.empty[BigDecimal])
+      assertEquals(reading.settings().map(_.config.propBalance), Right(BigDecimal("5000")))
+      assertEquals(followed.toVector, Vector(BigDecimal("5000")))
+      assert(build(Right(Nil), Some(folder.resolve("missing.json"))).settings().isLeft)
+      assertEquals(followed.toVector, Vector(BigDecimal("5000")))
     finally release.countDown()
   }
 

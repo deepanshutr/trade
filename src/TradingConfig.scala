@@ -12,7 +12,7 @@ final case class TradingConfig(
     quoteAgeMs: Long = 1000L,
     positionAgeMs: Long = 2000L,
     propBalance: BigDecimal = BigDecimal("10000"),
-    propFee: BigDecimal = BigDecimal("0.0005"),
+    propFee: BigDecimal = BigDecimal("0.00045"),
     slippage: BigDecimal = Trading.defaultSlippage,
     onchain: Vector[OnchainMarket] = Vector.empty
 ):

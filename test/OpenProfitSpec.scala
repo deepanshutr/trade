@@ -4,8 +4,9 @@ import java.time.ZoneOffset
 
 class OpenProfitSpec extends munit.FunSuite:
   private val now = 1_800_000_000_000L
+  // A margin account: cash is the deposit plus realized less fees.
   private val held = PropAccount(
-    cash = BigDecimal("9519.75"),
+    cash = BigDecimal("10019.75"),
     realized = BigDecimal(20),
     fees = BigDecimal("0.25"),
     positions = Map("XMR" -> PropPosition(5, 100)),

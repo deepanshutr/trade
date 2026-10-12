@@ -220,7 +220,10 @@ class PropModeSpec extends TempDirectorySuite:
       Wait.until("prop order did not finish")(r.route.view.outcome.nonEmpty)
       val receipt = r.route.view.outcome.get
       assert(receipt.startsWith("PROP XMR buy filled "), receipt)
-      val saved = ujson.read(Files.readString(r.directory.resolve("prop/wallet-mainnet.json")))
+      val saved =
+        ujson.read(
+          Files.readString(r.directory.resolve("prop").resolve(PropLedger.file("mainnet")))
+        )
       assertEquals(BigDecimal(saved("deposit").str), BigDecimal("20000"))
       assertEquals(saved("count").num.toLong, 1L)
       assertEquals(BigDecimal(saved("fees").str), plan.estimatedValue * BigDecimal("0.001"))

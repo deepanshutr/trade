@@ -720,6 +720,7 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       val pending = f.journal.pending.get
       f.push(ws(pending.id, Side.Sell, "546.2", "0.2", 4242L, "filled", "0", venueTime))
       Wait.until("lost reply fill not applied")(f.journal.pending.isEmpty)
+      Wait.until("lost reply fill outcome not shown")(f.worker.view.outcome.nonEmpty)
       assertEquals(f.worker.view.outcome, Some("XMR filled $21.85 at 546.2"))
       assertEquals(
         f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms),
@@ -1125,6 +1126,7 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       assert(f.worker.view.pending)
       hold.open()
       Wait.until("held fill did not complete the lost order")(f.journal.pending.isEmpty)
+      Wait.until("held fill outcome not shown")(f.worker.view.outcome.nonEmpty)
       assertEquals(f.resting, Vector.empty)
       assertEquals(f.worker.view.outcome, Some("XMR filled $19.99 at 546.09"))
       assertEquals(
@@ -1449,6 +1451,7 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     assertEquals(f.journal.pending.map(_.id), Some(pending.id), "released on two unknownOid")
     f.clock.addAndGet(10000L)
     Wait.until("lost post only order not released")(f.journal.pending.isEmpty)
+    Wait.until("release outcome not shown")(f.worker.view.outcome.nonEmpty)
     assertEquals(f.worker.view.outcome, Some("XMR not placed"))
     pending
 
@@ -1522,6 +1525,7 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       f.refreshes()
       f.clock.set(155002L)
       Wait.until("lost post only order not released")(f.journal.pending.isEmpty)
+      Wait.until("release outcome not shown")(f.worker.view.outcome.nonEmpty)
       assertEquals(f.worker.view.outcome, Some("XMR not placed"))
     }
   }
@@ -1551,6 +1555,7 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
       Wait.until("lost post only order not released 85 s after sending")(
         f.journal.pending.isEmpty
       )
+      Wait.until("release outcome not shown")(f.worker.view.outcome.nonEmpty)
       assertEquals(f.worker.view.outcome, Some("XMR not placed"))
     }
   }
@@ -1609,9 +1614,11 @@ class RestingOrdersWorkerSpec extends TempDirectorySuite:
     using(new Fixture(seeds)) { f =>
       val Vector(a, b, c) = f.seeded
       f.ready()
-      f.statuses.put(c.id, lookupReply(c, "canceled", "0.2"))
-      f.cancels =
-        cloid => if cloid == c.id then Some(cancelReply(gone)) else Some(cancelReply("success"))
+      f.cancels = cloid =>
+        if cloid == c.id then
+          f.statuses.put(c.id, lookupReply(c, "canceled", "0.2"))
+          Some(cancelReply(gone))
+        else Some(cancelReply("success"))
       val hold = new Hold
       f.cancelHolds.put(b.id, hold)
       val entries = f.gateEntries.get()

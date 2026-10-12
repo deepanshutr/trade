@@ -17,7 +17,7 @@ default file permits public viewing and prop trading with these defaults:
   "target": "1000",
   "network": "mainnet",
   "propBalance": "10000",
-  "propFee": "0.0005"
+  "propFee": "0.00045"
 }
 ```
 
@@ -52,13 +52,24 @@ are the money put up. The position value is the amount times the observed levera
 which must be five times. So the default small of $500 opens a $2,500 position and
 the default big of $1,000 opens a $5,000 position. Set `small` and `big` low, for
 example `"20"` and `"100"`, before a first live test. In prop trading, small and big
-are still the total order value before fees. Target has its own value ceiling.
-`propBalance` applies when creating a prop wallet. Existing saved wallet
-balances remain in place. Old margin simulation files remain separate and unchanged.
-`propFee` is the fraction charged on each simulated fill. It must be from 0 to
-`"0.01"` with at most eight decimal places. A settings file that still
-has `paperBalance` or `paperFee` stops Desk at start until the two keys are renamed
-`propBalance` and `propFee`.
+are the money put up too, at prop's fixed 5x. Target has its own value ceiling.
+`propBalance` is the starting collateral of a new prop margin wallet and the balance
+Reset prop starts over at. Reset prop takes it as settings last read the file, so a
+hand edit needs no restart. An existing wallet keeps its balance until Reset prop. The
+old spot wallet and the `paper/` files remain separate and unchanged.
+A margin wallet Desk cannot read is left as it is, and prop does not open. Choosing prop
+then leaves the mode as it was. In view the status row keeps
+`View only: p Prop or l Live to trade`. In live it reads `Save failed #N`, where N is its
+result number, unless live already shows a block of its own. A start with `--prop`
+stops, and Reset prop answers "Switch to prop first". To start prop over, move
+the wallet file, `margin-mainnet.json` or `margin-testnet.json`, out of the `prop` folder
+in the local state folder. Then choose prop again, and a new wallet starts at
+`propBalance`.
+`propFee` is the fraction charged on each prop market fill. The default `"0.00045"` is
+the venue's base taker rate of 0.045 percent. A taker is an order that fills at once.
+`propFee` must be from 0 to `"0.01"` with at most eight decimal places. A settings
+file that still has `paperBalance` or `paperFee` stops Desk at start until the two keys
+are renamed `propBalance` and `propFee`.
 
 `slippage` is the furthest an order may fill from the captured best quote, as a
 quoted fraction. It is optional. The default `"0.001"` is 0.1 percent. It must be
@@ -278,12 +289,38 @@ into a short, press CLOSE, then SHORT. A close that fills in part leaves the res
 open. Press CLOSE again. A close under ten dollars is still sent, and the venue may
 refuse it under its own minimum.
 
-In prop trading, Buy spends stables and Sell is capped at held tokens. A prop sell
-that would leave less than ten dollars of tokens at the quote sells the whole
-holding. The selected value excludes fees. Calculations retain full precision.
-Compact dollar figures are rounded for display. Best and Target orders are no longer
-exposed in the normal workspace. [Prop limit orders](#prop-limit-orders) have their own
-fill rules.
+In prop trading the two buttons, the reduce-only rule and CLOSE work as in real
+trading, at prop's fixed 5x with cross margin, one account whose whole cash backs the
+position. An opening press needs its amount, plus the prop fee on the value it opens,
+free in the collateral. The button on the side opposite the position only reduces it,
+and a reduce that would leave less than ten dollars at the quote closes the whole
+position. The amount excludes fees. Calculations retain full precision. Compact dollar
+figures are rounded for display. Best and Target orders are no longer exposed in the
+normal workspace. [Prop limit orders](#prop-limit-orders) have their own fill rules.
+The [workspace guide](workspace.md#outlook-markets-and-saved-state) describes prop's
+collateral, funding, liquidation and Reset prop.
+
+After installing a new build, three checks at the screen confirm prop:
+
+1. In prop on XMR with no position, press SHORT. The heading reads
+   `PROP XMR 5x SHORT`, and the buttons read `REDUCE` and `SHORT`, each ending in ` x5`.
+   With $10,000 behind a small position the liquidation price is far above the price,
+   so it sits on the top edge row of the axis with `,`.
+2. On the first live position, work out prop's liquidation price by hand and compare
+   it with the live axis. For a long it is `(entry - collateral / size) / (1 - m)`, and
+   for a short `(entry + collateral / size) / (1 + m)`. The collateral is the account
+   value less the open profit. `m` is one over twice the market's maximum leverage, 0.1
+   on XMR at 5x. A gap above one tick means prop's rule differs from the venue's.
+3. Hold a small prop position across the start of a UTC hour, with its market shown.
+   Before the hour, read the `funding` field of the margin wallet. In the last seconds
+   before the hour, note the header's `oracle` and `fund`. After the hour, read `funding`
+   again and take how much it changed. Expect the size held, negative for a short, times
+   the noted oracle times the noted `fund` divided by 100. The header rounds `fund` to
+   four decimals of a percent, so the two can differ by up to the size times the oracle
+   times 0.0000005, and a little more if the oracle or the rate moved at the hour. For 2
+   held at 500 with `fund 0.0013%`, expect 0.013, give or take 0.0005. At a positive rate
+   a long pays, so `funding` rises, and a short receives. A wrong sign means prop's
+   funding rule differs from the venue's.
 
 Live orders keep durable recovery state under the chosen state directory,
 separated by network and delegated signer. One process holds each account lock.
@@ -564,14 +601,14 @@ action uses once. If Desk stops during a cancel, the next start looks the order 
 ### Prop limit orders
 
 Prop takes limit orders with the same ticket, axis, cap, price rule and cancel as
-live. It keeps its resting orders in its wallet file, `prop/wallet-mainnet.json` or
-`prop/wallet-testnet.json`, so they survive restarts and settings. A cancel removes
+live. It keeps its resting orders in its wallet file, `prop/margin-mainnet.json` or
+`prop/margin-testnet.json`, so they survive restarts and settings. A cancel removes
 the order at once. Prop has no venue, so it fills resting orders from the market's
 trades:
 
 - A resting buy fills when a trade prints below its price, and a sell when a trade
   prints above it.
-- It fills whole at its own price, whatever the trade's size, with the maker fee of
+- It fills at its own price, whatever the trade's size, with the maker fee of
   0.015 percent, not the prop fee.
 - A trade at the order's price does not fill, since the place in the queue is unknown.
   So prop fills later than live would.
@@ -579,23 +616,33 @@ trades:
   and never while Desk uses backup prices.
 - One trade through two orders fills the nearest first.
 - An order on another market fills only once that market is selected.
-- Prop rests limit orders on one market at a time. While it holds tokens of one market,
-  or orders rest on one market, a limit order on another market is refused at the ticket
-  and at Enter with "Prop holds XMR. Return to that market".
-- A buy checks the cash when it rests. Its value and maker fee must fit the cash left
-  after the other resting buys, else "Not enough stables for order and fee". `Usable`
-  on the panel is that figure. A buy whose cash an immediate buy spent later is
-  cancelled at its fill with "(not enough stables)".
-- Prop holds only tokens it bought, so a limit sell needs tokens held. A sell larger
-  than the tokens held fills what is held, and the rest is cancelled with "(nothing
-  left to sell)".
+- Prop rests limit orders on one market at a time. While it holds a position on one
+  market, or orders rest on one market, a limit order on another market is refused at
+  the ticket and at Enter with "Prop holds XMR. Return to that market".
+- An order that is not reduce only, buy or sell, reserves a fifth of its value plus
+  the maker fee. It rests only when that fits what the account leaves free at its price
+  after the other resting orders, else "Not enough stables for order and fee". A
+  reduce-only order reserves nothing. `Usable` on the panel is what is left free at the
+  mark. While a position is open, the order is checked at its own price instead, where
+  the free figure can be higher or lower. So an order can be refused while `Usable`
+  shows more than it seems to need. An order whose collateral is gone by its fill is
+  cancelled there with "(not enough stables)".
+- A reduce-only order fills at most the position it faces, and the rest is cancelled
+  with "(nothing left to reduce)". With nothing left to face, it is cancelled whole
+  with that reason.
+- An order that is not reduce only fills whole. One that faces the position and is
+  larger than it closes the position and opens the rest on the other side at its
+  price, as a live order does. When the collateral cannot hold the part it opens, the
+  whole order is cancelled with "(not enough stables)".
 - The cap of 20 counts prop's resting orders and applies to limit presses only.
-- The two second pause starts only after a resting sell fills or a CLOSE. An immediate
-  sell does not pause, so its proceeds can fund the next buy at once.
+- The two second pause follows the live rule. It starts after a REDUCE or CLOSE fills
+  and after a resting order fills that faced the position.
 
-CLOSE in prop, from `x`, the CLOSE button or Enter on the entry row, sells the whole
-holding at once at market with the prop fee, whatever orders rest. Resting sells then
-left with nothing to sell are cancelled when their trade comes.
+CLOSE in prop, from `x`, the CLOSE button or Enter on the entry row, exits the whole
+position at once at market with the prop fee, whatever orders rest. It sells a long
+and buys a short. Resting reduce-only orders then left with nothing to reduce are
+cancelled with "(nothing left to reduce)" when their trade comes. An order that is not
+reduce only stays, and opens a position when its trade comes, as in live.
 
-A downgrade to an older Desk drops prop's resting orders on its next save. Only
-simulated money is affected.
+An older Desk reads only the spot wallet, so it never sees the margin wallet or its
+resting orders. Only simulated money is affected.

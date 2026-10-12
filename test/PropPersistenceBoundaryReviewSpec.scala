@@ -169,7 +169,7 @@ class PropPersistenceBoundaryReviewSpec extends TempDirectorySuite:
       release.countDown()
       f.complete()
       assertEquals(f.ledger.account.count, 1L)
-      assertEquals(f.router.view.position, Some(BigDecimal(5)))
+      assertEquals(f.router.view.position, Some(BigDecimal(25)))
     finally
       release.countDown()
       f.close()
@@ -192,7 +192,7 @@ class PropPersistenceBoundaryReviewSpec extends TempDirectorySuite:
       release.countDown()
       f.complete()
       assertEquals(f.ledger.account.count, 1L)
-      assertEquals(f.ledger.account.positions("XMR").quantity, BigDecimal(5))
+      assertEquals(f.ledger.account.positions("XMR").quantity, BigDecimal(25))
       assert(!f.ledger.account.positions.contains("BTC"))
       assertEquals(f.router.view.coin, "BTC")
       assertEquals(f.router.view.position, Some(BigDecimal(0)))

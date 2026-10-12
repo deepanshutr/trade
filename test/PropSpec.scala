@@ -12,18 +12,19 @@ class PropSpec extends TempDirectorySuite:
     val directory = tempDirectory("desk-prop-test")
     val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
+      // A margin fill moves cash only by its fee and what it realizes.
       assert(ledger.fill(plan(Side.Buy, "2", "100"), 1000L).isRight)
-      assertEquals(ledger.account.cash, BigDecimal("799.8"))
+      assertEquals(ledger.account.cash, BigDecimal("999.8"))
       assertEquals(ledger.account.positions("XMR").quantity, BigDecimal(2))
       assert(ledger.fill(plan(Side.Sell, "1", "110"), 2000L).isRight)
-      assertEquals(ledger.account.cash, BigDecimal("909.69"))
+      assertEquals(ledger.account.cash, BigDecimal("1009.69"))
       assertEquals(ledger.account.realized, BigDecimal(10))
       assertEquals(ledger.account.positions("XMR").quantity, BigDecimal(1))
       assertEquals(ledger.account.positions("XMR").entry, BigDecimal(100))
     finally ledger.close()
     val reopened = PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try
-      assertEquals(reopened.account.cash, BigDecimal("909.69"))
+      assertEquals(reopened.account.cash, BigDecimal("1009.69"))
       assertEquals(reopened.account.orders.size, 2)
     finally reopened.close()
   }
@@ -39,24 +40,24 @@ class PropSpec extends TempDirectorySuite:
     try
       assertEquals(
         first(ledger.fill(plan(Side.Buy, "0.183", "546.09"), 1000L)),
-        "PROP XMR buy filled $99.93 at 546.09"
+        "PROP XMR buy filled $19.99 at 546.09"
       )
-      // Half a cent rounds up: 0.5 at 40.01 is 20.005.
+      // Half a cent rounds up: 2.5 at 40.01 is 100.025, a fifth of it 20.005.
       assertEquals(
-        first(ledger.fill(plan(Side.Buy, "0.5", "40.01"), 2000L)),
+        first(ledger.fill(plan(Side.Buy, "2.5", "40.01"), 2000L)),
         "PROP XMR buy filled $20.01 at 40.01"
       )
       assertEquals(
         first(ledger.fill(plan(Side.Sell, "0.1", "550"), 3000L)),
-        "PROP XMR sell filled $55.00 at 550"
+        "PROP XMR sell filled $11.00 at 550"
       )
       val part = plan(Side.Buy, "3", "100")
         .copy(estimatedQuantity = BigDecimal("1.5"), estimatedValue = BigDecimal(150))
-      assertEquals(first(ledger.fill(part, 4000L)), "PROP XMR buy partial $150.00 at 100")
+      assertEquals(first(ledger.fill(part, 4000L)), "PROP XMR buy partial $30.00 at 100")
       // The log keeps the same text, the fee and the count after it, and no quantity.
       assert(
         ledger.account.orders.last
-          .startsWith("PROP XMR buy partial $150.00 at 100\nFee $0.15 | #4 "),
+          .startsWith("PROP XMR buy partial $30.00 at 100\nFee $0.15 | #4 "),
         ledger.account.orders.last
       )
       assert(!ledger.account.orders.exists(_.contains(" 0.183 ")), ledger.account.orders)
@@ -84,7 +85,8 @@ class PropSpec extends TempDirectorySuite:
       assertEquals(ledger.account.positions("XMR").quantity, BigDecimal("1.5"))
       assert(ledger.account.orders.last.contains("partial"))
       val before = ledger.account
-      assert(ledger.fill(plan(Side.Buy, "30", "100"), 2000L).isLeft)
+      // 60 at 100 needs 1200 of margin, beyond five times the collateral.
+      assert(ledger.fill(plan(Side.Buy, "60", "100"), 2000L).isLeft)
       assertEquals(ledger.account, before)
       assert(
         ledger
@@ -111,9 +113,9 @@ class PropSpec extends TempDirectorySuite:
       )
       assert(ledger.fill(plan(Side.Buy, "1", "100"), 1000L).isRight)
     finally ledger.close()
-    Files.writeString(directory.resolve("wallet-mainnet.json"), "broken")
+    Files.writeString(directory.resolve(PropLedger.file("mainnet")), "broken")
     intercept[Exception](
       PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     )
-    assertEquals(Files.readString(directory.resolve("wallet-mainnet.json")), "broken")
+    assertEquals(Files.readString(directory.resolve(PropLedger.file("mainnet"))), "broken")
   }

@@ -3,11 +3,14 @@ package desk
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import scala.util.Try
+import scala.util.control.NonFatal
 
 object PropWorker:
   // Prop's preview answers with these while its depth is not fit to plan from.
   val staleMessage: String = "Prop prices stale. Waiting for depth"
   val behindMessage: String = "Prop depth behind quote. Waiting"
+  val clockFailedMessage: String = "Prop clock failed. Restart to recover"
+  private val hourMs = 3600000L
 
 final class PropWorker(
     config: TradingConfig,
@@ -65,6 +68,12 @@ final class PropWorker(
   private var prepared = Option.empty[Prepared]
   private var reducedAt = Option.empty[Long]
   private var fills = Map.empty[String, Vector[Fill]]
+  private var failures = 0L
+  // The selected market's latest context with its monotonic and wall clock receipt times, and
+  // the last hour funding settled, charged or skipped. Hours while Desk was closed are never
+  // charged.
+  private var context = Option.empty[(Ctx, Long, Long)]
+  private var settledHour = Math.floorDiv(wall(), PropWorker.hourMs)
   // The (time, id) pairs of the trades already counted, kept for the tape window.
   private val seenTrades = scala.collection.mutable.TreeSet.empty[(Long, Long)]
   private val pending = new AtomicBoolean(false)
@@ -147,6 +156,16 @@ final class PropWorker(
     val message = if working then s"PROP $stage ${elapsed}s | $pendingCoin"
     else if dataReady then (if backup then "Prop ready: backup prices" else "Prop ready")
     else reason.get.text
+    // The mark is the touch's midpoint while prop is ready. Free collateral values the position
+    // there, so it is known while nothing is held or the selected market's position has a mark.
+    val mark = Option.when(dataReady)(touch.map(_.midpoint)).flatten
+    // Like live's, the figure shown never reads below zero. The ledger's checks keep the sign.
+    val free =
+      if !ledger.available then None
+      else if account.positions.isEmpty then Some(PropMargin.free(account, BigDecimal(0)))
+      else if account.positions.keySet == Set(coin) then mark.map(PropMargin.free(account, _))
+      else None
+    val usable = free.map(_.max(BigDecimal(0)))
     TradingView(
       coin,
       Some(held(account)),
@@ -161,15 +180,12 @@ final class PropWorker(
       outcome,
       outcomeId = outcomeId,
       portfolio = if ledger.available then
-        PortfolioView.prop(
-          account,
-          coin,
-          Option.when(dataReady)(touch.map(_.midpoint)).flatten
-        )
+        PortfolioView.prop(account, coin, mark, rules.map(PropMargin.maintenance))
       else PortfolioView(),
       blockCode = reason.fold(BlockCode.Blocked)(_.code),
-      usableMargin = Option.when(ledger.available)(ledger.usable),
-      leverage = Some(1),
+      usableMargin = usable,
+      leverage = Some(PropMargin.leverage),
+      marginMode = Some(PropMargin.mode),
       resting = resting(account),
       fills = fills.valuesIterator.flatten.toVector,
       stale = !touch.exists(t => fresh(t.receivedAt)),
@@ -186,6 +202,7 @@ final class PropWorker(
       rules = metadata.flatMap(m => Try(Exchange.market(m, next)).toOption)
       lastPlan = None
       prepared = None
+      context = None
   }
   def observe(event: Event): Unit = synchronized {
     val at = monotonic()
@@ -222,7 +239,8 @@ final class PropWorker(
           capped <- capBook(previous, quote)
         yield (capped, receivedAt)
       case Event.Trades(c, batch) if c == coin && !backup && !closed.get() => fillThrough(batch)
-      case _                                                               => ()
+      case Event.CtxUpdate(c, ctx) if c == coin => context = Some((ctx, at, wall()))
+      case _                                    => ()
   }
 
   // A trade fills every resting buy priced above it and every resting sell priced below it,
@@ -242,20 +260,31 @@ final class PropWorker(
               (if o.side == Side.Buy then o.price > price else o.price < price)
           )
           .sortBy(o => ((o.price - price).abs, o.createdAt))
-          .map(o => settle(o, trade.time))
+          .flatMap(o => settle(o, trade.time))
       }
     }
     if texts.nonEmpty then announce(texts.mkString("\n"))
 
-  private def settle(order: PropOrder, at: Long): String =
-    ledger.resolve(order.id, at) match
-      case Left(error)             => error
-      case Right((text, quantity)) =>
-        if quantity > 0 then
-          record(Fill(order.coin, order.side, at, order.price, quantity))
-          // Prop holds only longs, so every sell that fills reduces.
-          if order.side == Side.Sell then reducedAt = Some(monotonic())
-        text
+  // A fill that faced the position pauses opening, as a live resting fill does. The position is
+  // read under the ledger's lock, so no market fill lands between the read and the fill. A
+  // liquidation saving under the ledger's lock alone may remove the order after the trade read
+  // it, and an order already gone says nothing.
+  private def settle(order: PropOrder, at: Long): Option[String] =
+    val settled = ledger.synchronized {
+      Option.when(ledger.account.resting.exists(_.id == order.id)) {
+        val before = ledger.account.positions.get(order.coin).fold(BigDecimal(0))(_.quantity)
+        (before.signum == (if order.side == Side.Buy then -1 else 1), ledger.resolve(order.id, at))
+      }
+    }
+    settled.map { (facing, resolved) =>
+      resolved match
+        case Left(error)             => error
+        case Right((text, quantity)) =>
+          if quantity > 0 then
+            record(Fill(order.coin, order.side, at, order.price, quantity))
+            if facing then reducedAt = Some(monotonic())
+          text
+    }
   def preview(intent: OrderIntent, terms: TradeTerms): Either[String, OrderPlan] = synchronized {
     if closed.get() then Left("Prop worker is closed")
     else if pending.get() then Left("Wait for the pending prop order")
@@ -264,8 +293,7 @@ final class PropWorker(
       val position = held(account)
       val reserved = Trading.reserved(position, resting(account).filter(_.coin == coin))
       val result = block match
-        case Some(reason)                                      => Left(reason)
-        case None if intent.side == Side.Sell && position <= 0 => Left("No " + coin + " to sell")
+        case Some(reason) => Left(reason)
         case None if intent.price.nonEmpty && account.resting.size >= Trading.restingCap =>
           Left(Trading.restingCapText)
         case None =>
@@ -278,13 +306,9 @@ final class PropWorker(
               position,
               intent,
               terms.sizes,
-              1,
+              PropMargin.leverage,
               terms.slippage,
               reserved
-            )
-            .map(plan =>
-              if intent.side == Side.Sell then plan.copy(quantity = plan.quantity.min(position))
-              else plan
             )
             // For a short time after a fill reduced the position, only reducing plans pass.
             .filterOrElse(
@@ -293,7 +317,7 @@ final class PropWorker(
                   reducedAt.forall(at => monotonic() - at >= TradingWorker.openingPauseMs),
               TradingWorker.openingPausedMessage
             )
-            // A posted order has no depth inside its price. It rests if the cash holds it.
+            // A posted order has no depth inside its price. It rests if the collateral holds it.
             .flatMap(plan =>
               if plan.post then ledger.checkResting(order(plan, "", 0L), account).map(_ => plan)
               else
@@ -315,7 +339,8 @@ final class PropWorker(
     def validRequest: Boolean =
       review.plan.coin == coin && review.createdAt <= wall() && wall() < review.expiresAt &&
         BigInt(review.expiresAt) - BigInt(review.createdAt) <= 30000L &&
-        review.leverage.forall(_ == 1) && review.marginMode.isEmpty
+        review.leverage.forall(_ == PropMargin.leverage) &&
+        review.marginMode.forall(_ == PropMargin.mode)
     def samePreparation: Boolean = prepared.exists(p =>
       p.intent == review.intent && p.plan == review.plan && p.terms == review.terms &&
         rules.contains(p.rules) &&
@@ -349,6 +374,61 @@ final class PropWorker(
       else
         pending.set(false)
         false
+  }
+  // A reset waits for the pending order, and the review, the last plan and the pause go with the
+  // old account.
+  def reset(balance: BigDecimal): Either[String, String] = synchronized {
+    if closed.get() then Left("Prop worker is closed")
+    else if pending.get() then Left("Wait for the pending prop order")
+    else
+      val result = ledger.reset(balance, wall())
+      result.foreach { text =>
+        prepared = None
+        lastPlan = None
+        reducedAt = None
+        announce(text)
+      }
+      result
+  }
+  // One clock step. It decides under the worker lock and saves outside it, so the view never
+  // waits behind a save, and the ledger decides each change again under its own lock. Funding
+  // takes the oracle and rate of a context from the last hour on both clocks, since a sleep may
+  // pause the monotonic one. Nothing runs while an order is pending.
+  private[desk] def tick(): Unit =
+    val (market, funding, check) = synchronized {
+      if closed.get() || pending.get() then (coin, None, None)
+      else
+        val now = wall()
+        val hour = Math.floorDiv(now, PropWorker.hourMs)
+        val due = hour > settledHour
+        if due then settledHour = hour
+        val funding = context
+          .filter((_, at, wallAt) =>
+            due && monotonic() - at <= PropWorker.hourMs && now - wallAt <= PropWorker.hourMs
+          )
+          .flatMap((ctx, _, _) => Try((BigDecimal(ctx.oracle), BigDecimal(ctx.funding))).toOption)
+          .filter(_._1 > 0)
+        val check =
+          if ready then touch.map(t => (t.midpoint, PropMargin.maintenance(rules.get))) else None
+        (coin, funding, check)
+    }
+    funding.foreach((oracle, rate) => ledger.fund(market, oracle, rate))
+    check
+      .flatMap((mark, maintenance) =>
+        ledger.liquidate(market, mark, maintenance, wall()).toOption.flatten
+      )
+      .foreach(text =>
+        synchronized {
+          announce(text)
+          prepared = None
+        }
+      )
+  // A tick that throws keeps only what the ledger saved before the throw. The first failure
+  // shows, and the clock goes on to the next tick.
+  private[desk] def clockFailures: Long = synchronized(failures)
+  private def clockFailed(): Unit = synchronized {
+    failures += 1
+    if failures == 1 then announce(PropWorker.clockFailedMessage)
   }
   // Prop has no venue to ask, so a cancel removes the orders at once.
   def cancel(ids: Vector[String]): Boolean = synchronized {
@@ -386,6 +466,12 @@ final class PropWorker(
             }
           Thread.sleep(1000L)
       }
+      spawn("prop-clock") {
+        while !closed.get() do
+          try tick()
+          catch case NonFatal(_) => clockFailed()
+          Thread.sleep(1000L)
+      }
       spawn("prop-orders") {
         while !closed.get() do
           val review = orders.take()
@@ -414,17 +500,19 @@ final class PropWorker(
               plan.average.foreach(price =>
                 record(Fill(plan.coin, plan.side, at, price, plan.estimatedQuantity))
               )
-              // A CLOSE pauses opening, as in live. Any other immediate sell does not, so its
-              // proceeds can fund the next buy at once, as before resting orders.
-              if review.intent.kind == OrderKind.Close then reducedAt = Some(monotonic())
+              // A reduce-only fill, a CLOSE among them, pauses opening, as in live.
+              if plan.reduceOnly then reducedAt = Some(monotonic())
             }
             prepared = None
             announce(result.fold(identity, _._1))
             pending.set(false)
           }
       }
+  // Desk's failure handler may close the worker on one of its own threads, so the close never
+  // interrupts or waits for the thread it runs on.
   def close(): Unit =
     if closed.compareAndSet(false, true) then
-      threads.foreach(_.interrupt())
-      threads.foreach(_.join(1000L))
+      val others = threads.filterNot(_ eq Thread.currentThread())
+      others.foreach(_.interrupt())
+      others.foreach(_.join(1000L))
       ledger.close()

@@ -1136,15 +1136,38 @@ class LimitControllerSpec extends munit.FunSuite:
     assertEquals(f.ticket, None)
   }
 
-  test("x in prop previews and submits a sell close once, and asks a sell even when flat") {
-    val f = new Fixture("PROP", rested.copy(leverage = Some(1), marginMode = None))
+  test("x in prop closes a long with a sell and a short with a buy, as live") {
+    val f = new Fixture("PROP", rested)
     f.frame()
     f.key(Command.Close)
     assertEquals(f.planned, Vector(close))
     assertEquals(f.sent.map(_.intent), Vector(close))
-    val flat = new Fixture("PROP", ready.copy(leverage = Some(1)))
-    flat.frame()
-    flat.key(Command.Close)
-    assertEquals(flat.planned, Vector(close))
-    assertEquals(flat.sent, Vector.empty)
+    val buyClose = OrderIntent(Side.Buy, OrderKind.Close)
+    val short = new Fixture("PROP", rested.copy(position = Some(d("-0.2"))))
+    short.frame()
+    short.key(Command.Close)
+    assertEquals(short.planned, Vector(buyClose))
+    assertEquals(short.sent.map(_.intent), Vector(buyClose))
+  }
+
+  test("x in prop with no position asks a buy close, as live, and sends nothing") {
+    val f = new Fixture("PROP", ready)
+    f.frame()
+    f.key(Command.Close)
+    assertEquals(f.planned, Vector(OrderIntent(Side.Buy, OrderKind.Close)))
+    assertEquals(f.sent, Vector.empty)
+    assertEquals(f.notice, Some("No position to close"))
+  }
+
+  test("x sells a long of one lot and asks a buy on an unknown position, in prop as in live") {
+    for mode <- Vector("PROP", "LIVE") do
+      val lot = new Fixture(mode, rested.copy(position = Some(d("0.001"))))
+      lot.frame()
+      lot.key(Command.Close)
+      assertEquals(lot.planned, Vector(close), mode)
+      val unknown = new Fixture(mode, ready.copy(position = None))
+      unknown.frame()
+      unknown.key(Command.Close)
+      assertEquals(unknown.planned, Vector(OrderIntent(Side.Buy, OrderKind.Close)), mode)
+      assertEquals(unknown.sent, Vector.empty, mode)
   }
