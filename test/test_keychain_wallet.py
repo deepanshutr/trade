@@ -946,11 +946,13 @@ class InstallLauncherTests(unittest.TestCase):
         cases += [("a folder", trade.mkdir),
                   ("a link to another program", lambda: trade.symlink_to(elsewhere)),
                   ("a dangling link", lambda: trade.symlink_to(self.root / "missing"))]
-        # A file that cannot be read cannot be shown to be a Desk launcher. Root reads it anyway.
-        if not (hasattr(os, "geteuid") and os.geteuid() == 0):
-            cases.append(("unreadable", lambda: (trade.write_text(EARLIER_LAUNCHER), trade.chmod(0))))
+        # A file that cannot be read cannot be shown to be a Desk launcher.
+        cases.append(("unreadable", lambda: (trade.write_text(EARLIER_LAUNCHER), trade.chmod(0))))
+        root = hasattr(os, "geteuid") and os.geteuid() == 0
         for name, make in cases:
             with self.subTest(name):
+                if name == "unreadable" and root:
+                    self.skipTest("root reads any file")
                 shutil.rmtree(self.home / ".local", ignore_errors=True)
                 folder.mkdir(parents=True)
                 elsewhere.write_text("#!/bin/sh\necho mine\n")

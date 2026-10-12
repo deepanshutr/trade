@@ -31,8 +31,9 @@ install: build install-launcher
 # before anything is written and recorded next to the other two.
 # The launcher is trade on every system, because Windows opens Display settings for a bare desk.
 # In ~/.local/bin the install replaces trade or removes desk only when its text names the Desk
-# jar. A trade that does not stops the install before anything is written. A desk that does, from an earlier install, is
-# removed after the new launcher is in place, so the old name cannot start a stale launcher.
+# jar. A trade that does not stops the install before anything is written. A desk that does,
+# from an earlier install, is removed after the new launcher is in place, so the old name
+# cannot start a stale launcher.
 # The launcher is written to trade.new and moved onto trade, so a link named trade is replaced.
 install-launcher:
 	set -e; \
