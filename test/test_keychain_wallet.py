@@ -780,6 +780,10 @@ EARLIER_LAUNCHER = (
     '#!/bin/sh\nexport DESK_PYTHON="${DESK_PYTHON:-/usr/bin/python3}"\n'
     'exec "${DESK_JAVA:-/opt/homebrew/opt/openjdk/bin/java}" -XX:+DisableAttachMechanism '
     '-jar "$HOME/.local/lib/desk.jar" "$@"\n')
+# Texts that do not name the Desk jar. The last one matches only if dots read as any character.
+NOT_THE_JAR = (("another program", "#!/bin/sh\necho another program\n"),
+               ("names desk only", '#!/bin/sh\nexec /opt/desk/bin/desk "$@"\n'),
+               ("dots read as any character", "#!/bin/sh\n# /opt/xlocal/lib/desk-jar\n"))
 
 
 @unittest.skipUnless(MAKE, "make is required")
@@ -910,15 +914,12 @@ class InstallLauncherTests(unittest.TestCase):
         folder = self.home / ".local/bin"
         other = folder / "desk"
         folder.mkdir(parents=True)
-        for name, text in (("another program", "#!/bin/sh\necho another program\n"),
-                           ("names desk only", '#!/bin/sh\nexec /opt/desk/bin/desk "$@"\n'),
-                           ("dots read as any character", "#!/bin/sh\n# /opt/xlocal/lib/desk-jar\n")):
+        for name, text in NOT_THE_JAR:
             with self.subTest(name):
                 other.write_text(text)
                 done = self.install()
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertEqual(other.read_text(), text)
-                self.assertTrue((folder / "trade").exists())
         other.unlink()
         other.mkdir()
         done = self.install()
@@ -939,26 +940,39 @@ class InstallLauncherTests(unittest.TestCase):
     def test_a_trade_that_does_not_name_the_jar_stops_the_install(self):
         self.fake_python(self.bin)
         folder = self.home / ".local/bin"
-        folder.mkdir(parents=True)
         trade = folder / "trade"
-        for name, make in (("another program", lambda: trade.write_text("#!/bin/sh\necho mine\n")),
-                           ("a folder", trade.mkdir),
-                           ("a link to another program",
-                            lambda: trade.symlink_to(self.root / "elsewhere"))):
+        elsewhere = self.root / "elsewhere"
+        cases = [(name, lambda text=text: trade.write_text(text)) for name, text in NOT_THE_JAR]
+        cases += [("a folder", trade.mkdir),
+                  ("a link to another program", lambda: trade.symlink_to(elsewhere)),
+                  ("a dangling link", lambda: trade.symlink_to(self.root / "missing"))]
+        # A file that cannot be read cannot be shown to be a Desk launcher. Root reads it anyway.
+        if not (hasattr(os, "geteuid") and os.geteuid() == 0):
+            cases.append(("unreadable", lambda: (trade.write_text(EARLIER_LAUNCHER), trade.chmod(0))))
+        for name, make in cases:
             with self.subTest(name):
-                (self.root / "elsewhere").write_text("#!/bin/sh\necho mine\n")
+                shutil.rmtree(self.home / ".local", ignore_errors=True)
+                folder.mkdir(parents=True)
+                elsewhere.write_text("#!/bin/sh\necho mine\n")
                 make()
                 (folder / "desk").write_text(EARLIER_LAUNCHER)
                 done = self.install()
                 self.assertNotEqual(done.returncode, 0)
-                self.assertIn("not a Desk launcher", done.stderr)
+                self.assertIn(str(trade) + " is not a Desk launcher", done.stderr)
+                self.assertNotIn("grep", done.stderr)
                 self.assertFalse((self.home / ".local/lib").exists())
                 self.assertEqual((folder / "desk").read_text(), EARLIER_LAUNCHER)
-                self.assertEqual((self.root / "elsewhere").read_text(), "#!/bin/sh\necho mine\n")
-                if trade.is_dir() and not trade.is_symlink():
-                    trade.rmdir()
-                else:
-                    trade.unlink()
+                self.assertEqual(elsewhere.read_text(), "#!/bin/sh\necho mine\n")
+                self.assertTrue(trade.is_symlink() or trade.exists())
+
+    def test_a_reinstall_prints_no_line_of_the_launcher_it_replaces(self):
+        self.fake_python(self.bin)
+        self.assertEqual(self.install().returncode, 0)
+        old = (self.home / ".local/bin/trade").read_text().splitlines()
+        done = self.install()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        for line in old:
+            self.assertNotIn(line, done.stdout.splitlines())
 
     def test_a_link_named_trade_is_replaced_and_not_written_through(self):
         self.fake_python(self.bin)
