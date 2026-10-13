@@ -98,14 +98,14 @@ class PropExecutionDepthSpec extends munit.FunSuite:
       val intent = OrderIntent(Side.Buy, OrderKind.Hard)
       val chosen = TradeTerms(TradeSizes(BigDecimal(20), BigDecimal(100)), BigDecimal("0.005"))
       val start = f.worker.preview(intent, f.terms).fold(reason => fail(reason), identity)
-      assertEquals((start.quantity, start.limit), (BigDecimal(5), BigDecimal("100.1")))
+      assertEquals((start.quantity, start.limit), (BigDecimal(25), BigDecimal("100.1")))
       val plan = f.worker.preview(intent, chosen).fold(reason => fail(reason), identity)
-      assertEquals((plan.quantity, plan.limit), (BigDecimal("0.2"), BigDecimal("100.5")))
+      assertEquals((plan.quantity, plan.limit), (BigDecimal(1), BigDecimal("100.5")))
       val review = OrderReview(intent, plan, chosen, f.clock.get(), f.clock.get() + 30000)
       assert(!f.worker.submitReviewed(review.copy(terms = f.terms)))
       assert(f.worker.submitReviewed(review))
       f.settled()
-      assertEquals(f.ledger.account.positions("XMR").quantity, BigDecimal("0.2"))
+      assertEquals(f.ledger.account.positions("XMR").quantity, BigDecimal(1))
     finally f.close()
   }
 
@@ -227,7 +227,11 @@ class PropExecutionDepthSpec extends munit.FunSuite:
         f.clock.addAndGet(20L)
         f.publish()
         f.quote("0.01", f.clock.get() - 1L)
-        assertEquals(f.review(side).plan.estimatedQuantity, BigDecimal(5))
+        // A $500 sell at 5x closes the holding of 10.
+        assertEquals(
+          f.review(side).plan.estimatedQuantity,
+          BigDecimal(if side == Side.Buy then 25 else 10)
+        )
         assertEquals(f.ledger.account.count, 0L)
       finally f.close()
     }
@@ -277,7 +281,7 @@ class PropExecutionDepthSpec extends munit.FunSuite:
       f.quote("0.01")
       f.clock.incrementAndGet()
       f.publish()
-      assertEquals(f.review().plan.estimatedQuantity, BigDecimal(5))
+      assertEquals(f.review().plan.estimatedQuantity, BigDecimal(25))
     finally f.close()
   }
 
@@ -335,7 +339,7 @@ class PropExecutionDepthSpec extends munit.FunSuite:
           assert(f.worker.view.portfolio.stables.isEmpty)
         else
           assertEquals(f.ledger.account.positions.keySet, Set("XMR"))
-          assertEquals(f.ledger.account.cash, BigDecimal("9499.5"))
+          assertEquals(f.ledger.account.cash, BigDecimal("9997.5"))
           assert(f.worker.view.outcome.exists(_.contains("XMR buy")))
           assert(f.worker.preview(Trading.action(0), f.terms).isLeft)
       finally
@@ -370,6 +374,10 @@ class PropExecutionDepthSpec extends munit.FunSuite:
     try
       f.open()
       for i <- 0 until 12 do
+        // Each sell closes the long, and opening waits out the pause that follows, as in live.
+        if i > 0 then
+          f.clock.addAndGet(TradingWorker.openingPauseMs)
+          f.publish()
         draw()
         val side = if i % 2 == 0 then Side.Buy else Side.Sell
         assert(

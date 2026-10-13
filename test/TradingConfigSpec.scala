@@ -151,7 +151,7 @@ class TradingConfigSpec extends munit.FunSuite:
           TradingConfig.load(Some(p)).fold(reason => fail(s"$field $value: $reason"), identity)
         assertEquals(if field == "slippage" then c.slippage else c.propFee, BigDecimal(value))
       finally Files.deleteIfExists(p)
-    assertEquals(TradingConfig().propFee, BigDecimal("0.0005"))
+    assertEquals(TradingConfig().propFee, BigDecimal("0.00045"))
   }
 
   test("parse errors retain the generic settings error") {

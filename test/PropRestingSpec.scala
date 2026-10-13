@@ -105,7 +105,7 @@ class PropRestingSpec extends TempDirectorySuite:
     val plan = f.preview(Side.Buy, Some("546.00"), "109.20").toOption.get
     assert(plan.post)
     assertEquals(plan.estimatedQuantity, d("0"))
-    assertEquals(plan.quantity, d("0.2"))
+    assertEquals(plan.quantity, d("1"))
     val order =
       try
         val order = f.place(Side.Buy, "546.00", "109.20")
@@ -113,19 +113,19 @@ class PropRestingSpec extends TempDirectorySuite:
         assert(order.id.matches("0x[0-9a-f]{32}"))
         assertEquals(
           order,
-          PropOrder(order.id, "XMR", Side.Buy, d("546"), d("0.2"), false, start)
+          PropOrder(order.id, "XMR", Side.Buy, d("546"), d("1"), false, start)
         )
         assertEquals(f.ledger.account.cash, d("10000"))
         assertEquals(f.ledger.account.positions, Map.empty[String, PropPosition])
         assertEquals(f.ledger.account.count, 1L)
-        assertEquals(f.ledger.usable, d("9890.78362"))
+        // 1 * 546 * (1/5 + 0.00015) is reserved.
         val view = f.worker.view
-        assertEquals(view.leverage, Some(1))
-        assertEquals(view.usableMargin, Some(d("9890.78362")))
+        assertEquals(view.leverage, Some(5))
+        assertEquals(view.usableMargin, Some(d("9890.7181")))
         assertEquals(
           view.resting,
           Vector(
-            RestingOrder(order.id, "XMR", 0, Side.Buy, d("546"), d("0.2"), d("0.2"), false, start)
+            RestingOrder(order.id, "XMR", 0, Side.Buy, d("546"), d("1"), d("1"), false, start)
           )
         )
         assert(view.ready && !view.pending)
@@ -153,30 +153,37 @@ class PropRestingSpec extends TempDirectorySuite:
     }
   }
 
-  test("preview and rest refuse a buy beyond the cash left after other resting buys and fees") {
+  test("preview and rest refuse an order beyond the margin left after other resting orders") {
     withFixture("300") { f =>
       f.place(Side.Buy, "546.00", "109.20")
       f.place(Side.Buy, "546.00", "163.80")
-      assertEquals(f.ledger.usable, d("26.95905"))
+      // 300 less 2.5 * 546 * (1/5 + 0.00015).
+      assertEquals(f.worker.view.usableMargin, Some(d("26.79525")))
       assertEquals(f.preview(Side.Buy, Some("546.00"), "109.20"), Left(noStables))
-      val order = PropOrder(id(1), "XMR", Side.Buy, d("546.00"), d("0.2"), false, start)
+      val order = PropOrder(id(1), "XMR", Side.Buy, d("546.00"), d("1"), false, start)
       assertEquals(f.ledger.checkResting(order, f.ledger.account), Left(noStables))
       assertEquals(f.ledger.rest(order, f.ledger.account.count), Left(noStables))
       assertEquals(f.ledger.account.resting.size, 2)
-      val small = order.copy(quantity = d("0.049"))
+      val small = order.copy(quantity = d("0.245"))
       assertEquals(f.ledger.checkResting(small, f.ledger.account), Right(()))
-      val sell = order.copy(side = Side.Sell, quantity = d("1000"))
-      assertEquals(f.ledger.checkResting(sell, f.ledger.account), Right(()))
+      val over = order.copy(quantity = d("0.246"))
+      assertEquals(f.ledger.checkResting(over, f.ledger.account), Left(noStables))
+      // An opening sell holds margin as a buy does. A reduce-only sell holds nothing.
+      val sell = order.copy(side = Side.Sell)
+      assertEquals(f.ledger.checkResting(sell, f.ledger.account), Left(noStables))
+      val reduce = sell.copy(quantity = d("1000"), reduceOnly = true)
+      assertEquals(f.ledger.checkResting(reduce, f.ledger.account), Right(()))
     }
   }
 
-  test("nineteen resting buys reserve their fees, so a twentieth that fits by value is refused") {
+  test("nineteen resting buys reserve their fees, so a twentieth that fits by margin is refused") {
     withFixture("1998.36") { f =>
       for _ <- 1 to 19 do f.place(Side.Buy, "546.00", "100")
-      assertEquals(f.ledger.account.resting.map(_.quantity).distinct, Vector(d("0.183")))
-      assertEquals(f.ledger.usable, d("99.6332337"))
+      assertEquals(f.ledger.account.resting.map(_.quantity).distinct, Vector(d("0.915")))
+      // Twenty margins of 99.918 are the cash, and each order also reserves its maker fee.
+      assertEquals(f.worker.view.usableMargin, Some(d("98.4941685")))
       assertEquals(f.preview(Side.Buy, Some("546.00"), "100"), Left(noStables))
-      val twentieth = PropOrder(id(20), "XMR", Side.Buy, d("546.00"), d("0.183"), false, start)
+      val twentieth = PropOrder(id(20), "XMR", Side.Buy, d("546.00"), d("0.915"), false, start)
       assertEquals(f.ledger.rest(twentieth, f.ledger.account.count), Left(noStables))
       assertEquals(f.ledger.account.resting.size, 19)
       assertEquals(f.ledger.account.cash, d("1998.36"))
@@ -198,18 +205,20 @@ class PropRestingSpec extends TempDirectorySuite:
       assert(f.preview(Side.Buy, None, "20").isRight)
       assertEquals(
         f.preview(Side.Sell, None, "20", OrderKind.Close).map(_.quantity),
-        Right(d("0.2"))
+        Right(d("1"))
       )
     }
   }
 
-  test("a resting buy whose cash an immediate buy spent is cancelled when its trade comes") {
+  test("a resting buy whose margin an immediate buy's open loss spent is cancelled at its trade") {
     withFixture("1000") { f =>
       val order = f.place(Side.Buy, "546.00", "109.20")
-      f.fill(Side.Buy, "950")
-      assertEquals(f.held, d("1.739"))
+      // The buy fits beside the reserve, and its open loss at 546 leaves 109.1711035 free,
+      // under the 109.2819 the resting buy needs at its fill.
+      f.fill(Side.Buy, "888")
+      assertEquals(f.held, d("8.13"))
       val cash = f.ledger.account.cash
-      assertEquals(cash, d("49.85726605"))
+      assertEquals(cash, d("997.7801035"))
       f.trades(f.trade("545.90", 1))
       assertEquals(
         f.worker.view.outcome,
@@ -217,10 +226,10 @@ class PropRestingSpec extends TempDirectorySuite:
       )
       assertEquals(f.ledger.account.resting, Vector.empty)
       assertEquals(f.ledger.account.cash, cash)
-      assertEquals(f.held, d("1.739"))
+      assertEquals(f.held, d("8.13"))
       assertEquals(
         f.worker.view.fills,
-        Vector(Fill("XMR", Side.Buy, start, d("546.1"), d("1.739")))
+        Vector(Fill("XMR", Side.Buy, start, d("546.1"), d("8.13")))
       )
       assertEquals(f.ledger.resolve(order.id, start), Left("Prop order not found"))
     }
@@ -233,11 +242,11 @@ class PropRestingSpec extends TempDirectorySuite:
       f.trades(Trade(at, Side.Sell, "545.90", "0.01", Some(7)))
       assertEquals(f.worker.view.outcome, Some("XMR filled $109.20 at 546.00"))
       assertEquals(f.ledger.account.resting, Vector.empty)
-      assertEquals(f.ledger.account.positions, Map("XMR" -> PropPosition(d("0.2"), d("546"))))
-      assertEquals(f.ledger.account.fees, d("0.01638"))
-      assertEquals(f.ledger.account.cash, d("9890.78362"))
-      assertEquals(f.worker.view.fills, Vector(Fill("XMR", Side.Buy, at, d("546"), d("0.2"))))
-      assertEquals(f.worker.view.position, Some(d("0.2")))
+      assertEquals(f.ledger.account.positions, Map("XMR" -> PropPosition(d("1"), d("546"))))
+      assertEquals(f.ledger.account.fees, d("0.0819"))
+      assertEquals(f.ledger.account.cash, d("9999.9181"))
+      assertEquals(f.worker.view.fills, Vector(Fill("XMR", Side.Buy, at, d("546"), d("1"))))
+      assertEquals(f.worker.view.position, Some(d("1")))
     }
   }
 
@@ -256,10 +265,13 @@ class PropRestingSpec extends TempDirectorySuite:
   ) {
     withFixture() { f =>
       f.fill(Side.Buy, "109.22")
+      val usable = f.worker.view.usableMargin
+      assert(usable.nonEmpty)
       val order = f.place(Side.Sell, "552.00", "55.20")
-      assertEquals(order.quantity, d("0.1"))
+      assertEquals(order.quantity, d("0.5"))
       assert(order.reduceOnly)
-      assertEquals(f.ledger.usable, f.ledger.account.cash)
+      // A reduce-only order holds no margin.
+      assertEquals(f.worker.view.usableMargin, usable)
       val count = f.ledger.account.count
       f.trades(f.trade("551.90", 3))
       assertEquals(f.ledger.account.resting, Vector(order))
@@ -270,9 +282,9 @@ class PropRestingSpec extends TempDirectorySuite:
       f.trades(Trade(at, Side.Buy, "552.10", "0.01", Some(2)))
       assertEquals(f.worker.view.outcome, Some("XMR filled $55.20 at 552.00"))
       assertEquals(f.ledger.account.resting, Vector.empty)
-      assertEquals(f.held, d("0.1"))
-      assertEquals(f.ledger.account.fees, d("0.06289"))
-      assertEquals(f.worker.view.fills.last, Fill("XMR", Side.Sell, at, d("552"), d("0.1")))
+      assertEquals(f.held, d("0.5"))
+      assertEquals(f.ledger.account.fees, d("0.31445"))
+      assertEquals(f.worker.view.fills.last, Fill("XMR", Side.Sell, at, d("552"), d("0.5")))
       f.mono.addAndGet(TradingWorker.openingPauseMs - 1)
       f.book()
       assertEquals(f.preview(Side.Buy, None, "20"), Left(TradingWorker.openingPausedMessage))
@@ -299,7 +311,7 @@ class PropRestingSpec extends TempDirectorySuite:
       )
       assertEquals(f.worker.view.fills.map(_.price), Vector(d("545.95"), d("546")))
       assertEquals(f.ledger.account.resting, Vector.empty)
-      assertEquals(f.held, d("0.4"))
+      assertEquals(f.held, d("2"))
     }
   }
 
@@ -308,16 +320,16 @@ class PropRestingSpec extends TempDirectorySuite:
       f.place(Side.Buy, "546.00", "109.20")
       val batch = Trade(start + 1000, Side.Sell, "545.90", "0.01", Some(1))
       f.trades(batch)
-      assertEquals(f.held, d("0.2"))
+      assertEquals(f.held, d("1"))
       f.wall.incrementAndGet()
       val second = f.place(Side.Buy, "546.00", "109.20")
       assertEquals(second.createdAt, start + 1)
       f.trades(batch)
       assertEquals(f.ledger.account.resting, Vector(second))
-      assertEquals(f.held, d("0.2"))
+      assertEquals(f.held, d("1"))
       f.trades(Trade(start + 1001, Side.Sell, "545.90", "0.01", Some(2)))
       assertEquals(f.ledger.account.resting, Vector.empty)
-      assertEquals(f.held, d("0.4"))
+      assertEquals(f.held, d("2"))
     }
   }
 
@@ -329,7 +341,7 @@ class PropRestingSpec extends TempDirectorySuite:
       f.place(Side.Buy, "546.00", "109.20")
       f.trades(Trade(start + 5, Side.Sell, "545.90", "0.01", Some(8)))
       assertEquals(f.ledger.account.resting, Vector.empty)
-      assertEquals(f.held, d("0.4"))
+      assertEquals(f.held, d("2"))
     }
   }
 
@@ -387,25 +399,25 @@ class PropRestingSpec extends TempDirectorySuite:
     withFixture() { f =>
       f.fill(Side.Buy, "109.22")
       val order = f.place(Side.Sell, "552.00", "82.80")
-      assertEquals(order.quantity, d("0.15"))
+      assertEquals(order.quantity, d("0.75"))
       f.fill(Side.Sell, "20", OrderKind.Close)
       assertEquals(f.held, d("0"))
       f.mono.addAndGet(TradingWorker.openingPauseMs)
       f.book()
       f.fill(Side.Buy, "54.61")
-      assertEquals(f.held, d("0.1"))
+      assertEquals(f.held, d("0.5"))
       val at = start + 3
       f.trades(Trade(at, Side.Buy, "552.10", "0.01", Some(1)))
       assertEquals(
         f.worker.view.outcome,
         Some(
           "XMR part filled $55.20 of $82.80 at 552.00\n" +
-            "XMR canceled $27.60 at 552.00 (nothing left to sell)"
+            "XMR canceled $27.60 at 552.00 (nothing left to reduce)"
         )
       )
       assertEquals(f.ledger.account.resting, Vector.empty)
       assertEquals(f.ledger.account.positions, Map.empty[String, PropPosition])
-      assertEquals(f.worker.view.fills.last, Fill("XMR", Side.Sell, at, d("552"), d("0.1")))
+      assertEquals(f.worker.view.fills.last, Fill("XMR", Side.Sell, at, d("552"), d("0.5")))
       f.book()
       assertEquals(f.preview(Side.Buy, None, "20"), Left(TradingWorker.openingPausedMessage))
     }
@@ -423,7 +435,7 @@ class PropRestingSpec extends TempDirectorySuite:
       )
       assertEquals(f.ledger.account.cash, d("10000"))
       assertEquals(f.ledger.account.count, 4L)
-      assertEquals(f.ledger.usable, d("10000"))
+      assertEquals(f.worker.view.usableMargin, Some(d("10000")))
       assert(!f.worker.cancel(Vector(first.id)))
     }
   }
@@ -448,16 +460,16 @@ class PropRestingSpec extends TempDirectorySuite:
     withFixture() { f =>
       f.fill(Side.Buy, "109.22")
       f.place(Side.Sell, "552.00", "82.80")
-      assertEquals(f.preview(Side.Sell, None, "109.22").map(_.quantity), Right(d("0.05")))
+      assertEquals(f.preview(Side.Sell, None, "109.22").map(_.quantity), Right(d("0.25")))
       val last = f.place(Side.Sell, "553.00", "27.65")
-      assertEquals(last.quantity, d("0.05"))
+      assertEquals(last.quantity, d("0.25"))
       assertEquals(
         f.preview(Side.Sell, None, "109.22"),
         Left("Resting orders cover the position")
       )
       assertEquals(
         f.preview(Side.Sell, None, "20", OrderKind.Close).map(_.quantity),
-        Right(d("0.2"))
+        Right(d("1"))
       )
     }
   }
@@ -481,32 +493,55 @@ class PropRestingSpec extends TempDirectorySuite:
   test("Close sells the whole long at the touch and leaves a resting sell for its trade") {
     withFixture() { f =>
       f.fill(Side.Buy, "109.22")
-      assertEquals(f.held, d("0.2"))
+      assertEquals(f.held, d("1"))
       val order = f.place(Side.Sell, "552.00", "55.20")
       val plan = f.preview(Side.Sell, None, "20", OrderKind.Close).toOption.get
-      assertEquals(plan.quantity, d("0.2"))
+      assertEquals(plan.quantity, d("1"))
       assert(!plan.post)
       f.fill(Side.Sell, "20", OrderKind.Close)
       assertEquals(f.ledger.account.positions, Map.empty[String, PropPosition])
-      assertEquals(f.ledger.account.fees, d("0.109219"))
-      assertEquals(f.ledger.account.cash, d("9999.888781"))
+      assertEquals(f.ledger.account.fees, d("0.546095"))
+      // 10000 less the two fees and the 0.01 realized between 546.10 and 546.09.
+      assertEquals(f.ledger.account.cash, d("9999.443905"))
       assertEquals(f.ledger.account.resting, Vector(order))
-      assertEquals(f.worker.view.fills.last, Fill("XMR", Side.Sell, start, d("546.09"), d("0.2")))
+      assertEquals(f.worker.view.fills.last, Fill("XMR", Side.Sell, start, d("546.09"), d("1")))
       assertEquals(f.preview(Side.Buy, None, "20"), Left(TradingWorker.openingPausedMessage))
       f.trades(f.trade("552.10", 1))
       assertEquals(
         f.worker.view.outcome,
-        Some("XMR canceled $55.20 at 552.00 (nothing left to sell)")
+        Some("XMR canceled $55.20 at 552.00 (nothing left to reduce)")
       )
       assertEquals(f.ledger.account.resting, Vector.empty)
-      assertEquals(f.ledger.account.cash, d("9999.888781"))
+      assertEquals(f.ledger.account.cash, d("9999.443905"))
       assertEquals(f.worker.view.fills.size, 2)
     }
   }
 
   test("Close with no position is refused") {
     withFixture() { f =>
-      assertEquals(f.preview(Side.Sell, None, "20", OrderKind.Close), Left("No XMR to sell"))
+      assertEquals(f.preview(Side.Sell, None, "20", OrderKind.Close), Left("No position to close"))
+    }
+  }
+
+  test("a buy CLOSE through the worker closes a short and never grows a long") {
+    withFixture() { f =>
+      assertEquals(f.preview(Side.Buy, None, "20", OrderKind.Close), Left("No position to close"))
+      f.fill(Side.Sell, "20")
+      assertEquals(f.held, d("-0.183"))
+      val stale = f.review(Side.Buy, None, "20", OrderKind.Close)
+      assertEquals(stale.plan.quantity, d("0.183"))
+      assert(stale.plan.reduceOnly)
+      f.fill(Side.Buy, "20", OrderKind.Close)
+      assertEquals(f.held, d("0"))
+      assertEquals(f.preview(Side.Buy, None, "20", OrderKind.Close), Left("No position to close"))
+      // A review made on the short is refused by the worker, and its plan by the ledger.
+      assert(!f.worker.submitReviewed(stale))
+      assertEquals(
+        f.ledger.fill(stale.plan, start, Some(f.ledger.account.count)),
+        Left("Prop rejected: reduce exceeds the position")
+      )
+      assertEquals(f.held, d("0"))
+      assertEquals(f.ledger.account.count, 2L)
     }
   }
 
@@ -624,7 +659,7 @@ class PropRestingSpec extends TempDirectorySuite:
   test("while orders rest on another market a posted order is refused at preview and at rest") {
     withFixture() { f =>
       val btc = PropOrder(id(1), "BTC", Side.Buy, d("60000"), d("0.001"), false, start)
-      assertEquals(f.ledger.rest(btc, f.ledger.account.count), Right("BTC resting $60.00 at 60000"))
+      assertEquals(f.ledger.rest(btc, f.ledger.account.count), Right("BTC resting $12.00 at 60000"))
       val held = Left("Prop holds BTC. Return to that market")
       assertEquals(f.preview(Side.Buy, Some("546.00"), "109.20"), held)
       val xmr = PropOrder(id(2), "XMR", Side.Buy, d("546"), d("0.2"), false, start)
@@ -637,11 +672,11 @@ class PropRestingSpec extends TempDirectorySuite:
     }
   }
 
-  test("a buy whose value and fee equal the usable cash rests and leaves none") {
-    withFixture("109.21638") { f =>
+  test("a buy whose margin and fee equal the free collateral rests and leaves none") {
+    withFixture("109.2819") { f =>
       f.place(Side.Buy, "546.00", "109.20")
       assertEquals(f.ledger.account.resting.size, 1)
-      assertEquals(f.ledger.usable, d("0"))
+      assertEquals(f.worker.view.usableMargin, Some(d("0")))
     }
   }
 

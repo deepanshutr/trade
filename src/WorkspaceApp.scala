@@ -572,7 +572,9 @@ object WorkspaceApp:
           size = () => Term.size(),
           now = now,
           approve = approveConfig(args, home),
-          activeKey = () => keyReload.activeKey()
+          activeKey = () => keyReload.activeKey(),
+          resetProp = () => worker.resetProp(),
+          followPropBalance = worker.followPropBalance
         )
         SettingsWiring.show(paused, inputLock, terminal, () => controller.invalidate(), System.out)(
           SettingsScreen.run(context, Term.input, System.out)

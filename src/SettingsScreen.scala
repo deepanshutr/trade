@@ -31,7 +31,10 @@ object SettingsScreen:
       // The --config words the approval step takes, or why it cannot use that file.
       approveConfig: Either[String, Seq[String]] = Right(Nil),
       // The usable key's full address, to check the owner tooling's status against.
-      activeKey: () => Option[String] = () => None
+      activeKey: () => Option[String] = () => None,
+      // Whether the owner trades in prop mode now, and the prop wallet reset and its words.
+      prop: () => Boolean = () => false,
+      resetProp: () => Either[String, String] = () => Left("Switch to prop first")
   )
 
   private val help = "Up and Down move. Enter edits or acts. r reads the owner again. Esc leaves."
@@ -43,6 +46,7 @@ object SettingsScreen:
     "Address copied. Fund it by a transfer to this address at the venue from an account you " +
       "control. Desk never sends money."
   private val reloadFailed = "Reload failed"
+  private val resetFailed = "Reset failed"
   private val otherKeyText = "The status is for another key. Press r"
   private val statusEveryMs = 15000L
 
@@ -263,7 +267,7 @@ object SettingsScreen:
       if byte == -1 then held = -1
 
   private enum Row:
-    case Small, Big, Slippage, TradingKey, Owner, Approval, Funding
+    case Small, Big, Slippage, Reset, TradingKey, Owner, Approval, Funding
     case Action(action: Bind)
 
   private val rows: Vector[Row] =
@@ -271,6 +275,7 @@ object SettingsScreen:
       Row.Small,
       Row.Big,
       Row.Slippage,
+      Row.Reset,
       Row.TradingKey,
       Row.Owner,
       Row.Approval,
@@ -282,6 +287,7 @@ object SettingsScreen:
     case Row.Small          => "Small amount"
     case Row.Big            => "Big amount"
     case Row.Slippage       => "Slippage"
+    case Row.Reset          => "Reset prop"
     case Row.TradingKey     => "Trading key"
     case Row.Owner          => "Owner"
     case Row.Approval       => "Approval"
@@ -370,6 +376,7 @@ object SettingsScreen:
 
     private def act(row: Row): Unit = row match
       case Row.Small | Row.Big | Row.Slippage => edit(row)
+      case Row.Reset                          => reset()
       case Row.TradingKey                     => child(context.runKeyScreen())
       case Row.Owner                          => owner()
       case Row.Approval                       => approve()
@@ -465,6 +472,26 @@ object SettingsScreen:
         reply.owner match
           case None          => notice = "No owner yet"
           case Some(address) => notice = context.copyAddress(address).fold(identity, _ => copied)
+
+    // The prop balance a reset starts over at, from the settings file.
+    private def balance: Option[String] =
+      snapshot.toOption.map(s => Trading.format(s.config.propBalance))
+
+    // The owner resets the prop wallet only in prop mode and only by y at the confirm. Enter
+    // cancels, so the Enter that opened the confirm, pressed twice or queued, never resets. The
+    // router's answer is shown as given, and so is the message of a reset that throws.
+    private def reset(): Unit =
+      if !context.prop() then notice = "Switch to prop first"
+      else
+        val wallet = balance.fold("the prop wallet")(b => s"the prop wallet to $$$b")
+        group(s"Reset $wallet? y confirms. Any other key cancels.").map(_.bytes) match
+          case Some(Vector(121) | Vector(89)) =>
+            notice =
+              try safe(context.resetProp().merge)
+              catch
+                case NonFatal(e) =>
+                  Option(e.getMessage).map(safe).filter(_.nonEmpty).getOrElse(resetFailed)
+          case _ => notice = ""
 
     // Amounts and slippage. An accepted value is written and applied at once.
 
@@ -614,6 +641,9 @@ object SettingsScreen:
             case Row.Big => snapshot.fold(_ => "--", s => "$" + Trading.format(s.config.sizes.big))
             case Row.Slippage =>
               snapshot.fold(_ => "--", s => SettingsFile.percent(s.config.slippage) + "%")
+            case Row.Reset =>
+              if !context.prop() then "switch to prop first"
+              else balance.fold("--")("starts over at $" + _)
             case Row.TradingKey => context.keyRow().merge
             case Row.Owner      =>
               vault(reply =>
@@ -647,8 +677,8 @@ object SettingsScreen:
         .fold("Keys")((_, at) =>
           "Keys".padTo(23, ' ') + s"owner read ${((now - at) / 1000).max(0)} s ago"
         )
-      val body = Vector(trading) ++ (0 to 2).map(line) ++ Vector("", keys) ++ (3 to 6).map(line) ++
-        Vector("", "Key bindings") ++ (7 until rows.size).map(line)
+      val body = Vector(trading) ++ (0 to 3).map(line) ++ Vector("", keys) ++ (4 to 7).map(line) ++
+        Vector("", "Key bindings") ++ (8 until rows.size).map(line)
       // A long notice wraps rather than losing its end.
       val words = notice.split(" ").toVector
       val said = words.drop(1).foldLeft(Vector(words.head)) { (lines, word) =>
@@ -656,7 +686,7 @@ object SettingsScreen:
         else lines :+ word
       }
       // The cursor's line in the body, past the section titles and blank lines above it.
-      val at = cursor + (if cursor <= 2 then 1 else if cursor <= 6 then 3 else 5)
+      val at = cursor + (if cursor <= 3 then 1 else if cursor <= 7 then 3 else 5)
       val room = (height - 3 - said.size).max(1)
       val offset = (at - room + 1).max(0)
       (Vector(head, "") ++ body.slice(offset, offset + room) ++ Vector(help) ++ said)

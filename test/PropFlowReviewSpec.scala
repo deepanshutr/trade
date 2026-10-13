@@ -26,7 +26,7 @@ class PropFlowReviewSpec extends TempDirectorySuite:
     )
     if held > 0 then
       LocalFiles.write(
-        directory.resolve("prop/wallet-mainnet.json"),
+        directory.resolve("prop").resolve(PropLedger.file("mainnet")),
         ujson.write(
           ujson.Obj(
             "cash" -> config.propBalance.toString,
@@ -200,7 +200,7 @@ class PropFlowReviewSpec extends TempDirectorySuite:
       if initialMode == "PROP" then Wait.until("prop did not become ready")(route.view.ready)
     def saved: ujson.Value =
       ujson.read(
-        Files.readString(directory.resolve("prop/wallet-mainnet.json"))
+        Files.readString(directory.resolve("prop").resolve(PropLedger.file("mainnet")))
       )
     def close(): Unit = route.close()
 
@@ -250,7 +250,7 @@ class PropFlowReviewSpec extends TempDirectorySuite:
       assertEquals(second.terms, chosen)
       assertEquals(
         (second.plan.quantity, second.plan.limit),
-        (BigDecimal("0.2"), BigDecimal("100.5"))
+        (BigDecimal(1), BigDecimal("100.5"))
       )
       f.send()
       Wait.until("second prop order did not finish")(f.route.view.outcome.nonEmpty)
@@ -307,7 +307,7 @@ class PropFlowReviewSpec extends TempDirectorySuite:
       assertEquals(ledger.account.positions("XMR").quantity, plan.positionAfter)
       assertEquals(
         ledger.account.cash,
-        f.config.propBalance - plan.estimatedValue * (1 + f.config.propFee)
+        f.config.propBalance - plan.estimatedValue * f.config.propFee
       )
       assertEquals(ledger.account.orders.size, 1)
     finally ledger.close()
@@ -320,7 +320,7 @@ class PropFlowReviewSpec extends TempDirectorySuite:
     try
       f.open()
       f.prepare(Trading.action(0))
-      val saved = f.directory.resolve("prop/wallet-mainnet.json")
+      val saved = f.directory.resolve("prop").resolve(PropLedger.file("mainnet"))
       Files.createDirectory(saved)
       f.send()
       Wait.until("storage failure not surfaced")(f.route.view.outcome.nonEmpty)
@@ -365,7 +365,7 @@ class PropFlowReviewSpec extends TempDirectorySuite:
           f.route.view.position.get,
           intent,
           f.config.sizes,
-          1,
+          PropMargin.leverage,
           f.config.slippage
         )
         .toOption
@@ -446,7 +446,7 @@ class PropFlowReviewSpec extends TempDirectorySuite:
       )
       val prop = f.directory.resolve("prop")
       LocalFiles.directory(prop)
-      LocalFiles.write(prop.resolve("wallet-mainnet.json"), "broken")
+      LocalFiles.write(prop.resolve(PropLedger.file("mainnet")), "broken")
       assert(f.route.switchMode("PROP").isLeft)
       assertEquals(f.route.mode, "VIEW")
       assertEquals(f.closed.get(), 0)
@@ -455,7 +455,7 @@ class PropFlowReviewSpec extends TempDirectorySuite:
         f.infoTypes.size() > readsBefore
       )
       assertEquals(
-        Files.readString(prop.resolve("wallet-mainnet.json")),
+        Files.readString(prop.resolve(PropLedger.file("mainnet"))),
         "broken"
       )
     finally f.close()

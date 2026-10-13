@@ -12,30 +12,38 @@ final case class PortfolioView(
 )
 
 object PortfolioView:
-  def prop(account: PropAccount, coin: String, mark: Option[BigDecimal]): PortfolioView =
+  // Prop's one cross account at the mark. The value and the open result are signed, net is cash
+  // plus the open result less the deposit, and the liquidation price uses the maintenance of the
+  // selected market's rules.
+  def prop(
+      account: PropAccount,
+      coin: String,
+      mark: Option[BigDecimal],
+      maintenance: Option[BigDecimal] = None
+  ): PortfolioView =
     val held = account.positions.get(coin)
     val price = mark.filter(_ > 0)
     val exposure = held.fold(Option(BigDecimal(0)))(p =>
       price.map(px => BigDecimal(px.bigDecimal.multiply(p.quantity.bigDecimal)))
     )
-    val net = if account.positions.nonEmpty && account.positions.keySet != Set(coin) then None
-    else
-      exposure.map(value =>
-        BigDecimal(
-          account.cash.bigDecimal.add(value.bigDecimal).subtract(account.deposit.bigDecimal)
-        )
-      )
     val open = held.fold(Option(BigDecimal(0)))(p =>
       price.map(px =>
         BigDecimal(px.bigDecimal.subtract(p.entry.bigDecimal).multiply(p.quantity.bigDecimal))
       )
     )
+    val net = if account.positions.nonEmpty && account.positions.keySet != Set(coin) then None
+    else
+      open.map(result =>
+        BigDecimal(
+          account.cash.bigDecimal.add(result.bigDecimal).subtract(account.deposit.bigDecimal)
+        )
+      )
     PortfolioView(
       exposure,
       Some(account.cash),
       net,
       held.map(_.entry),
-      None,
+      maintenance.flatMap(PropMargin.liquidationPrice(account, coin, _)),
       open
     )
 

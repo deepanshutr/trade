@@ -157,6 +157,16 @@ final class ExecutionRouter(
     if selected == "LIVE" && liveEnabled then live.withdrawClose()
   }
   def livePending: Boolean = synchronized(live.view.pending)
+  // Settings show the prop balance of the file they read and hand it here, so the reset starts
+  // over at the figure the owner confirmed. Every other setting waits for a reload.
+  def followPropBalance(balance: BigDecimal): Unit = synchronized {
+    config = config.copy(propBalance = balance)
+  }
+  // Only prop resets its wallet, so live and view never start the prop worker for it.
+  def resetProp(): Either[String, String] = synchronized {
+    if selected != "PROP" then Left("Switch to prop first")
+    else propWorker().reset(config.propBalance)
+  }
   // Stops the live worker for a child and waits for it, as close does. A worker that has not
   // retired in time may still hold the journal lock, so no child may start.
   def suspendLive(waitMs: Long = 12000L): Either[String, Unit] =

@@ -222,7 +222,7 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
     val root = tempDirectory("review-prop-")
     if held > 0 then
       LocalFiles.write(
-        root.resolve("wallet-mainnet.json"),
+        root.resolve(PropLedger.file("mainnet")),
         ujson.write(
           ujson.Obj(
             "cash" -> config.propBalance.toString,
@@ -303,7 +303,8 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
         assert(f.worker.view.ready, f.worker.view.message)
         val intent = OrderIntent(side, OrderKind.Hard)
         val plan = f.worker.preview(intent, f.terms).toOption.get
-        assertEquals(plan.quantity, BigDecimal(5))
+        // $500 at 5x is 25, and a sell of it closes the holding of 10.
+        assertEquals(plan.quantity, BigDecimal(if side == Side.Buy then 25 else 10))
         assertEquals(plan.estimatedQuantity, BigDecimal(1))
         val value = BigDecimal(if side == Side.Buy then "100.02" else "99.97")
         assertEquals(plan.estimatedValue, value)
@@ -380,7 +381,8 @@ class IndependentFreshnessSpec extends TempDirectorySuite:
         assert(f.worker.view.ready)
         val intent = OrderIntent(side, OrderKind.Hard)
         val plan = f.worker.preview(intent, f.terms).toOption.get
-        assertEquals(plan.estimatedQuantity, BigDecimal(5))
+        // The buy of 25 meets eleven levels inside its limit. The sell closes the holding of 10.
+        assertEquals(plan.estimatedQuantity, BigDecimal(if side == Side.Buy then 11 else 10))
         val review = OrderReview(intent, plan, f.terms, at, at + 30000L)
         f.now.incrementAndGet()
         f.receive(f.event(f.book.copy(time = f.now.get())))

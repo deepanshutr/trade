@@ -296,13 +296,15 @@ class InteractionSpec extends munit.FunSuite:
   }
 
   test("key x closes the long in prop and answers the view text in view") {
-    val prop = new Fixture("PROP", long.copy(leverage = Some(1), marginMode = None))
+    val prop = new Fixture("PROP", long)
     prop.draw()
     prop.x()
     val close = OrderIntent(Side.Sell, OrderKind.Close)
     assertEquals(prop.planned, Vector(close))
     assertEquals(prop.sent.map(_.intent), Vector(close))
     assertEquals(prop.sent.map(_.plan.quantity), Vector(BigDecimal("0.2")))
+    // The review carries the 5x cross terms the prop worker accepts.
+    assertEquals(prop.sent.map(r => (r.leverage, r.marginMode)), Vector((Some(5), Some("cross"))))
     val view = new Fixture("VIEW", long.copy(ready = false, block = Some("View only")))
     view.draw()
     view.x()

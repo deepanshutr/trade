@@ -10,7 +10,7 @@ class PropWalletRecoverySpec extends TempDirectorySuite:
       OrderPlan("XMR", 0, Side.Buy, OrderKind.Hard, 1, 100, 100, 1, 100, Some(100), 1, false)
     try assert(ledger.fill(plan, 1800000000000L).isRight)
     finally ledger.close()
-    directory.resolve("wallet-mainnet.json")
+    directory.resolve(PropLedger.file("mainnet"))
 
   private def withDirectory(run: Path => Unit): Unit =
     val directory = tempDirectory("desk-wallet-recovery-")
@@ -48,7 +48,7 @@ class PropWalletRecoverySpec extends TempDirectorySuite:
             PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
           )
           assertEquals(Files.readString(path), bytes)
-        val released = LocalFiles.lock(directory.resolve("wallet-mainnet.lock"))
+        val released = LocalFiles.lock(directory.resolve("margin-mainnet.lock"))
         released.close()
       }
     }
@@ -68,15 +68,43 @@ class PropWalletRecoverySpec extends TempDirectorySuite:
       }
     }
 
+  // At the largest count the next save would overflow it. Past 10^18 the wallet is refused, so
+  // over 8 * 10^18 saves stay before any overflow.
+  for (count, loads) <- Vector(
+      "1000000000000000000" -> true,
+      "1000000000000000001" -> false,
+      "9223372036854775807" -> false
+    )
+  do
+    test(
+      s"a saved wallet at count $count ${if loads then "loads" else "is refused and preserved"}"
+    ) {
+      withDirectory { directory =>
+        val path = savedWallet(directory)
+        val damaged = ujson.read(Files.readString(path))
+        damaged("count") = count
+        val bytes = ujson.write(damaged)
+        LocalFiles.write(path, bytes)
+        if loads then
+          val wallet = PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+          try assertEquals(wallet.account.count, count.toLong)
+          finally wallet.close()
+        else
+          intercept[IllegalArgumentException](
+            PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+          )
+          assertEquals(Files.readString(path), bytes)
+      }
+    }
+
   for (label, cash, quantity) <- Vector(
       ("negative cash", "-1", "2"),
-      ("negative holding", "100", "-2"),
       ("zero holding", "100", "0")
     )
   do
     test(label + " in a saved wallet is refused and preserved") {
       withDirectory { directory =>
-        val path = directory.resolve("wallet-mainnet.json")
+        val path = directory.resolve(PropLedger.file("mainnet"))
         val saved = ujson.write(
           ujson.Obj(
             "cash" -> cash,
@@ -94,10 +122,35 @@ class PropWalletRecoverySpec extends TempDirectorySuite:
             PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
           )
           assertEquals(Files.readString(path), saved)
-        val released = LocalFiles.lock(directory.resolve("wallet-mainnet.lock"))
+        val released = LocalFiles.lock(directory.resolve("margin-mainnet.lock"))
         released.close()
       }
     }
+
+  test("a short in a saved wallet loads with its sign") {
+    withDirectory { directory =>
+      val path = directory.resolve(PropLedger.file("mainnet"))
+      val saved = ujson.write(
+        ujson.Obj(
+          "cash" -> "100",
+          "deposit" -> "100",
+          "realized" -> "0",
+          "fees" -> "0",
+          "orders" -> ujson.Arr(),
+          "count" -> "0",
+          "positions" -> ujson.Obj("XMR" -> ujson.Obj("quantity" -> "-2", "entry" -> "100"))
+        )
+      )
+      LocalFiles.write(path, saved)
+      val wallet = PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+      try
+        assertEquals(
+          wallet.account.positions,
+          Map("XMR" -> PropPosition(BigDecimal("-2"), BigDecimal("100")))
+        )
+      finally wallet.close()
+    }
+  }
 
   private def walletWith(resting: ujson.Value*): String =
     val body = ujson.Obj(
@@ -124,7 +177,7 @@ class PropWalletRecoverySpec extends TempDirectorySuite:
 
   test("a wallet saved before resting orders loads with none and saves the key") {
     withDirectory { directory =>
-      val path = directory.resolve("wallet-mainnet.json")
+      val path = directory.resolve(PropLedger.file("mainnet"))
       LocalFiles.write(path, walletWith())
       val wallet = PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
       try
@@ -137,9 +190,32 @@ class PropWalletRecoverySpec extends TempDirectorySuite:
     }
   }
 
+  test("a margin wallet saved without funding loads with funding 0") {
+    withDirectory { directory =>
+      LocalFiles.write(directory.resolve(PropLedger.file("mainnet")), walletWith())
+      val wallet = PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+      try assertEquals(wallet.account.funding, BigDecimal(0))
+      finally wallet.close()
+    }
+  }
+
+  test("a margin wallet with funding loads it as written") {
+    withDirectory { directory =>
+      val body = ujson.read(walletWith())
+      body("cash") = "1000.5"
+      body("funding") = "-0.5"
+      LocalFiles.write(directory.resolve(PropLedger.file("mainnet")), ujson.write(body))
+      val wallet = PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
+      try
+        assertEquals(wallet.account.funding, BigDecimal("-0.5"))
+        assertEquals(wallet.account.cash, BigDecimal("1000.5"))
+      finally wallet.close()
+    }
+  }
+
   test("a saved resting order loads with its price as written") {
     withDirectory { directory =>
-      LocalFiles.write(directory.resolve("wallet-mainnet.json"), walletWith(restingOrder()))
+      LocalFiles.write(directory.resolve(PropLedger.file("mainnet")), walletWith(restingOrder()))
       val wallet = PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
       try
         assertEquals(
@@ -157,7 +233,8 @@ class PropWalletRecoverySpec extends TempDirectorySuite:
           )
         )
         assertEquals(wallet.account.resting.head.price.bigDecimal.toPlainString, "546.00")
-        assertEquals(wallet.usable, BigDecimal("890.78362"))
+        // 0.2 * 546 * (1/5 + 0.00015) is reserved.
+        assertEquals(PropMargin.free(wallet.account, BigDecimal("546")), BigDecimal("978.14362"))
       finally wallet.close()
     }
   }
@@ -165,7 +242,7 @@ class PropWalletRecoverySpec extends TempDirectorySuite:
   test("a saved wallet with twenty resting orders, the cap, loads them all") {
     withDirectory { directory =>
       val orders = (1 to 20).map(n => restingOrder("0x%032x".format(n)))
-      LocalFiles.write(directory.resolve("wallet-mainnet.json"), walletWith(orders*))
+      LocalFiles.write(directory.resolve(PropLedger.file("mainnet")), walletWith(orders*))
       val wallet = PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
       try assertEquals(wallet.account.resting.size, 20)
       finally wallet.close()
@@ -184,14 +261,14 @@ class PropWalletRecoverySpec extends TempDirectorySuite:
   do
     test("a saved wallet with " + label + " resting is refused and preserved") {
       withDirectory { directory =>
-        val path = directory.resolve("wallet-mainnet.json")
+        val path = directory.resolve(PropLedger.file("mainnet"))
         val saved = walletWith(resting*)
         LocalFiles.write(path, saved)
         intercept[Exception](
           PropLedger.open(directory, "mainnet", BigDecimal(50000), BigDecimal(0))
         )
         assertEquals(Files.readString(path), saved)
-        val released = LocalFiles.lock(directory.resolve("wallet-mainnet.lock"))
+        val released = LocalFiles.lock(directory.resolve("margin-mainnet.lock"))
         released.close()
       }
     }

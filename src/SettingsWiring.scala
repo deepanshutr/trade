@@ -136,7 +136,9 @@ object SettingsWiring:
       size: () => (Int, Int),
       now: () => Long,
       approve: Either[String, Seq[String]],
-      activeKey: () => Option[String] = () => None
+      activeKey: () => Option[String] = () => None,
+      resetProp: () => Either[String, String],
+      followPropBalance: BigDecimal => Unit
   ): SettingsScreen.Context =
     val reads = new SettingsScreen.OwnerReads(
       ownerRead,
@@ -146,7 +148,13 @@ object SettingsWiring:
     )
     SettingsScreen.Context(
       network = network,
-      settings = () => SettingsFile.read(config, home),
+      // Each read hands the file's prop balance to the router, so the reset row and the reset
+      // name one figure.
+      settings = () => {
+        val read = SettingsFile.read(config, home)
+        read.foreach(snapshot => followPropBalance(snapshot.config.propBalance))
+        read
+      },
       writeSettings = (snapshot, terms) => SettingsFile.write(snapshot, terms),
       applyTerms = terms => controller.setTerms(terms),
       bindings = () => bound.get(),
@@ -166,7 +174,9 @@ object SettingsWiring:
       now = now,
       size = size,
       approveConfig = approve,
-      activeKey = activeKey
+      activeKey = activeKey,
+      prop = () => controller.panel.mode == "PROP",
+      resetProp = resetProp
     )
 
   // The real terminal operations.

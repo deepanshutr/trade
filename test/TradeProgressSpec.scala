@@ -110,17 +110,17 @@ class TradeProgressSpec extends TempDirectorySuite:
 
   test("wallet refusals and a losing sale preserve the remaining spendable cash") {
     val f = new Prop(BigDecimal(200))
-    def one(side: Side, price: BigDecimal): OrderPlan =
+    def one(side: Side, price: BigDecimal, quantity: BigDecimal = BigDecimal(1)): OrderPlan =
       OrderPlan(
         "XMR",
         0,
         side,
         OrderKind.Hard,
-        BigDecimal(1),
+        quantity,
         price,
         price,
-        BigDecimal(1),
-        price,
+        quantity,
+        quantity * price,
         Some(price),
         BigDecimal(0),
         false
@@ -128,14 +128,17 @@ class TradeProgressSpec extends TempDirectorySuite:
     try
       f.open()
       val initial = f.ledger.account
-      assert(f.ledger.fill(one(Side.Sell, BigDecimal(100)), start).isLeft)
+      // Nothing is held, so a reduce-only sell has nothing to reduce.
+      assert(f.ledger.fill(one(Side.Sell, BigDecimal(100)).copy(reduceOnly = true), start).isLeft)
       assertEquals(f.ledger.account, initial)
-      assert(f.ledger.fill(one(Side.Buy, BigDecimal(200)), start + 1).isRight)
-      assertEquals(f.ledger.account.cash, BigDecimal(0))
+      // Five at 200 takes all 200 of free collateral as margin.
+      assert(f.ledger.fill(one(Side.Buy, BigDecimal(200), BigDecimal(5)), start + 1).isRight)
+      assertEquals(f.ledger.account.cash, BigDecimal(200))
       val spent = f.ledger.account
-      assert(f.ledger.fill(one(Side.Buy, BigDecimal(1)), start + 2).isLeft)
+      // One more at 200 needs 40 of margin, and none is free.
+      assert(f.ledger.fill(one(Side.Buy, BigDecimal(200)), start + 2).isLeft)
       assertEquals(f.ledger.account, spent)
-      assert(f.ledger.fill(one(Side.Sell, BigDecimal(50)), start + 3).isRight)
+      assert(f.ledger.fill(one(Side.Sell, BigDecimal(170), BigDecimal(5)), start + 3).isRight)
       val remaining = f.ledger.account
       assertEquals(remaining.cash, BigDecimal(50))
       assertEquals(remaining.realized, BigDecimal(-150))
@@ -377,7 +380,7 @@ class TradeProgressSpec extends TempDirectorySuite:
           case "partial"  => "Part filled"
           case _          => "Bought"
         assert(completed.lines.exists(_.contains(expected)), completed.lines.mkString("\n"))
-        val expectedPosition = if scenario == "filled" then BigDecimal(5)
+        val expectedPosition = if scenario == "filled" then BigDecimal(25)
         else if scenario == "partial" then BigDecimal(1)
         else BigDecimal(0)
         assertEquals(f.worker.view.position, Some(expectedPosition))

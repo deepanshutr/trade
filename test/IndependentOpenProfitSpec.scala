@@ -107,7 +107,7 @@ class IndependentOpenProfitSpec extends TempDirectorySuite:
       val p = PortfolioView.prop(saved, "XMR", Some(BigDecimal(mark)))
       val expected = exact(q).multiply(exact(mark).subtract(exact(entry)))
       same(p.openProfit, expected)
-      same(p.net, exact("913.456").add(exact(q).multiply(exact(mark))).subtract(exact("1000")))
+      same(p.net, exact("913.456").add(expected).subtract(exact("1000")))
       val unrelated = PortfolioView.prop(
         saved.copy(cash = 42, fees = 999, realized = -555),
         "XMR",

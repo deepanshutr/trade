@@ -82,8 +82,8 @@ class PropUxIndependentSpec extends munit.FunSuite:
       try
         if side == Side.Buy then f.open() else f.open("100", "100.01")
         val result = f.worker.preview(OrderIntent(side, OrderKind.Hard), f.terms)
-        assert(result.isLeft, result.toString)
-        assert(result.swap.toOption.get.contains(if side == Side.Buy then "limit" else "No XMR"))
+        // A sell with no holding is a short, and both need margin the wallet lacks.
+        assertEquals(result, Left(PropLedger.noStables))
         assertEquals(f.ledger.account, PropAccount(BigDecimal(500), deposit = BigDecimal(500)))
         assertEquals(f.writes.get(), 0)
       finally f.close()
@@ -106,12 +106,13 @@ class PropUxIndependentSpec extends munit.FunSuite:
           f.open("100", "100.01")
           f.depth("100", "100.01", bidSize = "0.99")
         val review = f.review(side)
-        assertEquals(review.plan.quantity, BigDecimal(5))
+        // $500 at 5x is 25, and a sell of it closes the holding of 5.
+        assertEquals(review.plan.quantity, BigDecimal(if side == Side.Buy then 25 else 5))
         assertEquals(review.plan.estimatedQuantity, BigDecimal("0.99"))
         assertEquals(f.writes.get(), 0)
         f.send(review)
         val account = f.ledger.account
-        assertEquals(account.cash, BigDecimal(if side == Side.Buy then "0.901" else "198.901"))
+        assertEquals(account.cash, BigDecimal("99.901"))
         assertEquals(account.fees, BigDecimal("0.099"))
         assertEquals(account.realized, BigDecimal(0))
         assertEquals(
@@ -169,16 +170,17 @@ class PropUxIndependentSpec extends munit.FunSuite:
         )
         assertEquals(
           f.ledger.account.cash,
-          BigDecimal(if side == Side.Buy then "99.84995" else "299.85005")
+          BigDecimal(if side == Side.Buy then "199.89995" else "199.85005")
         )
         assert(f.worker.view.outcome.exists(_.contains("partial")))
       finally f.close()
     }
 
-  test("a wallet with no stables can sell held tokens after a loss, but cannot spend absent cash") {
+  test("a wallet short of free collateral can reduce after a loss, but cannot open until it does") {
+    // At 80.01 free is 400 - 199.9 - 160.02 = 40.08, under the 80.2492299 a $80 buy needs.
     val initial = PropAccount(
-      BigDecimal(0),
-      deposit = BigDecimal(1000),
+      BigDecimal(400),
+      deposit = BigDecimal(400),
       positions = Map(
         "XMR" -> PropPosition(BigDecimal(10), BigDecimal(100))
       )
@@ -186,23 +188,26 @@ class PropUxIndependentSpec extends munit.FunSuite:
     val f = new Fixture(initial, size = BigDecimal(80))
     try
       f.open("80", "80.01")
-      assert(f.worker.view.ready, "absent cash must not block selling held tokens")
+      assert(f.worker.view.ready, "missing free collateral must not block a reduce")
       assert(f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms).isLeft)
       assertEquals(f.writes.get(), 0)
       val review = f.review(Side.Sell)
-      assertEquals(review.plan.quantity, BigDecimal(1))
+      assertEquals(review.plan.quantity, BigDecimal(5))
       f.send(review)
       val account = f.ledger.account
       assertEquals(
         account.positions("XMR"),
-        PropPosition(BigDecimal(9), BigDecimal(100))
+        PropPosition(BigDecimal(5), BigDecimal(100))
       )
-      assertEquals(account.cash, BigDecimal("79.92"))
-      assertEquals(account.realized, BigDecimal(-20))
-      assertEquals(account.fees, BigDecimal("0.08"))
+      assertEquals(account.cash, BigDecimal("299.6"))
+      assertEquals(account.realized, BigDecimal(-100))
+      assertEquals(account.fees, BigDecimal("0.4"))
+      // Free is now 299.6 - 99.95 - 80.01 = 119.64, once the pause after a reduce has passed.
+      f.clock.addAndGet(TradingWorker.openingPauseMs)
+      f.depth("80", "80.01")
       val increase =
         f.worker.preview(OrderIntent(Side.Buy, OrderKind.Hard), f.terms)
-      assert(increase.isRight, "sale proceeds can fund a later buy: " + increase.toString)
+      assert(increase.isRight, "the margin a reduce frees can fund a later buy: " + increase)
       assertEquals(f.ledger.account, account)
       assertEquals(f.writes.get(), 1)
     finally f.close()
@@ -210,7 +215,7 @@ class PropUxIndependentSpec extends munit.FunSuite:
 
   test("an oversized selected sell is capped at the held tokens") {
     val initial = PropAccount(
-      BigDecimal(100),
+      BigDecimal(1100),
       deposit = BigDecimal(1100),
       positions = Map(
         "XMR" -> PropPosition(BigDecimal(10), BigDecimal(100))
@@ -228,9 +233,9 @@ class PropUxIndependentSpec extends munit.FunSuite:
     finally f.close()
   }
 
-  test("closing a losing wallet holding returns its sale proceeds and removes its entry") {
+  test("closing a losing wallet holding realizes its loss and removes its entry") {
     val initial = PropAccount(
-      BigDecimal(100),
+      BigDecimal(1100),
       deposit = BigDecimal(1100),
       positions = Map(
         "XMR" -> PropPosition(BigDecimal(10), BigDecimal(100))
@@ -373,8 +378,8 @@ class PropUxIndependentSpec extends munit.FunSuite:
           assertEquals(f.ledger.account, PropAccount(BigDecimal(1000), deposit = BigDecimal(1000)))
           assert(f.worker.view.outcome.exists(_.contains("storage failed")))
         else
-          assertEquals(f.ledger.account.cash, BigDecimal("499.5"))
-          assertEquals(f.worker.view.position, Some(BigDecimal(5)))
+          assertEquals(f.ledger.account.cash, BigDecimal("997.5"))
+          assertEquals(f.worker.view.position, Some(BigDecimal(25)))
           assertEquals(f.ledger.account.count, 1L)
       finally
         release.countDown()

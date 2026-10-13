@@ -12,10 +12,11 @@ class PropFreshTouchReviewSpec extends TempDirectorySuite:
     val config = TradingConfig()
     val terms = TradeTerms(config.sizes, config.slippage)
     val directory = tempDirectory("touch-")
-    val held = if buy then BigDecimal(0) else BigDecimal(10)
+    // The sell reduces a holding twice its size, so it is not turned into a Close.
+    val held = if buy then BigDecimal(0) else BigDecimal(50)
     if held > 0 then
       LocalFiles.write(
-        directory.resolve("wallet-mainnet.json"),
+        directory.resolve(PropLedger.file("mainnet")),
         s"""{"cash":"${config.propBalance}","deposit":"${config.propBalance + held * 100}","realized":"0","fees":"0","orders":[],"count":"0","positions":{"XMR":{"quantity":"$held","entry":"100"}}}"""
       )
     val ledger = PropLedger.open(
@@ -53,7 +54,7 @@ class PropFreshTouchReviewSpec extends TempDirectorySuite:
     def review(): OrderReview =
       val intent = OrderIntent(side, OrderKind.Hard)
       val plan = worker.preview(intent, terms).toOption.get
-      assertEquals(plan.quantity, BigDecimal(5))
+      assertEquals(plan.quantity, BigDecimal(25))
       assertEquals(plan.estimatedQuantity, BigDecimal(4))
       OrderReview(intent, plan, terms, clock.get(), clock.get() + 30000)
     def touch(price: String): Unit =
@@ -170,7 +171,7 @@ class PropFreshTouchReviewSpec extends TempDirectorySuite:
         f.worker.observe(Event.BookUpdate("XMR", deeper, true))
         assert(f.worker.submitReviewed(review))
         f.settle()
-        f.filled(BigDecimal(5), BigDecimal(500))
+        f.filled(BigDecimal(25), BigDecimal(2500))
         assert(f.worker.view.outcome.exists(_.contains("filled")))
       finally f.close()
     }

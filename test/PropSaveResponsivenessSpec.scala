@@ -169,7 +169,7 @@ class PropSaveResponsivenessSpec extends TempDirectorySuite:
       val completed = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
       while worker.view.pending && System.nanoTime() < completed do Thread.sleep(2)
       assert(!worker.view.pending)
-      assertEquals(worker.view.position, Some(BigDecimal(5)))
+      assertEquals(worker.view.position, Some(BigDecimal(25)))
     finally
       release.countDown()
       sender.foreach(_.join(1000L))

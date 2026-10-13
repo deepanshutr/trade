@@ -2,7 +2,7 @@
 """Offline playback through Main.run and a real pseudo terminal, using the standard library."""
 
 import argparse
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 import errno
 import fcntl
 import hashlib
@@ -209,7 +209,24 @@ def validate_speed(speed):
     assert 0 <= speed["maximum_sampled_result_backlog"] <= 30, "input results stalled"
 
 
-def validate_wallet(saved, results, fixture_book):
+# The prop margin wallet inside the state folder.
+WALLET = Path("prop") / "margin-mainnet.json"
+
+
+def same_wallet(after, before):
+    """Two saves agree apart from an hourly funding charge, which lowers cash and raises funding
+    by the same sum and changes nothing else."""
+    def parts(wallet):
+        rest = {key: value for key, value in wallet.items() if key not in ("cash", "funding")}
+        return rest, Decimal(wallet["cash"]) + Decimal(wallet.get("funding", "0"))
+
+    with localcontext() as context:
+        context.prec = 50
+        (rest_after, total_after), (rest_before, total_before) = parts(after), parts(before)
+        return rest_after == rest_before and abs(total_after - total_before) < Decimal("1e-20")
+
+
+def validate_wallet(saved, results, fixture_book, fixture_context):
     assert len(results) == 600 and all(r["kind"] == "order" for r in results)
     # WorkspaceApp serializes view capture and outcome collection with key handling.
     # A pending refusal therefore precedes the outstanding fill in this result log.
@@ -225,60 +242,89 @@ def validate_wallet(saved, results, fixture_book):
             ordered.extend(pending)
             pending.clear()
     assert not pending, "pending refusals lack their outstanding fill"
-    cash, held, fees = Decimal(10000), Decimal(0), Decimal(0)
-    filled, refused = [], []
-    for index, result in enumerate(ordered):
-        expected_side = "buy" if index % 2 == 0 else "sell"
-        receipt = result["text"]
-        if " filled " not in receipt:
-            assert receipt in ("Order pending", "Not sent: controls changed", "No XMR to sell"), receipt
-            if receipt == "No XMR to sell":
-                assert expected_side == "sell" and held == 0, "impossible empty-wallet refusal"
-            refused.append(receipt)
-            continue
-        # A fill names the money it put up at one times leverage, its filled value in cents.
-        match = re.fullmatch(r"PROP XMR (buy|sell) filled (\$[0-9.]+) at ([^\n]+)\nFee \$([0-9.]+) \| #(\d+) .+", receipt)
-        assert match, "invalid fill receipt"
-        side, dollars, shown, fee, count = match.groups()
-        assert side == expected_side, "fill side differs from clicked button"
-        fee = Decimal(fee)
-        levels = fixture_book["levels"][1 if side == "buy" else 0]
-        requested = (Decimal(500) / Decimal(levels[0]["px"]) // Decimal("0.001")) * Decimal("0.001")
-        quantity = requested if side == "buy" else min(requested, held)
-        assert quantity > 0, "wrong filled quantity"
-        remaining, value = quantity, Decimal(0)
-        for level in levels:
-            take = min(remaining, Decimal(level["sz"]))
-            value += take * Decimal(level["px"])
-            remaining -= take
-        assert remaining == 0, "fill exceeded known depth"
-        # The fixture's fills stay under a thousand dollars, so the text keeps both decimals.
-        assert dollars == "$" + str(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)), "dollars differ from the filled value"
-        assert fee == value * Decimal("0.0005"), "fee differs from fixed-book filled value"
-        approximate = shown.startswith("~")
-        price = Decimal(shown.lstrip("~"))
-        assert price > 0, "nonpositive displayed fill price"
-        if approximate:
-            unit = Decimal(10) ** price.as_tuple().exponent
-            assert price * quantity <= value < (price + unit) * quantity, "wrong rounded fill price"
-        else:
-            assert price * quantity == value, "wrong exact fill price"
-        direction = 1 if side == "buy" else -1
-        cash -= direction * value + fee
-        held += direction * quantity
-        fees += fee
-        assert cash >= 0 and held >= 0, "a fill spent absent wallet funds"
-        filled.append(receipt)
-        assert int(count) == len(filled), "fill sequence differs from saved count"
-    assert len(filled) >= 570, "fewer than 95 percent of healthy-fixture clicks filled"
-    assert int(saved["count"]) == len(filled) and saved["orders"] == filled
-    assert Decimal(saved["deposit"]) == 10000, "starting deposit changed"
-    assert Decimal(saved["cash"]) == cash, "cash differs from independent filled value and fees"
-    assert Decimal(saved["fees"]) == fees, "fees differ from independent filled value"
-    positions = saved["positions"]
-    assert {coin: Decimal(p["quantity"]) for coin, p in positions.items()} == ({"XMR": held} if held else {})
-    basis = sum(Decimal(p["quantity"]) * Decimal(p["entry"]) for p in positions.values())
-    assert abs(cash + basis - Decimal(saved["realized"]) + fees - Decimal(saved["deposit"])) < Decimal("1e-20"), "cost basis differs from wallet value"
+    paused = "Opening paused for 2 s after closing"
+    with localcontext() as context:
+        context.prec = 50
+        cash, held, basis, realized, fees = Decimal(10000), Decimal(0), Decimal(0), Decimal(0), Decimal(0)
+        filled, refused, holdings = [], [], set()
+        for index, result in enumerate(ordered):
+            expected_side = "buy" if index % 2 == 0 else "sell"
+            direction = 1 if expected_side == "buy" else -1
+            # The click opens or grows when nothing is held or the holding is on the click's side.
+            opening = held * direction >= 0
+            receipt = result["text"]
+            if " filled " not in receipt:
+                assert receipt in ("Order pending", "Not sent: controls changed", paused), receipt
+                # The pause after a close holds back opening presses only. A reducing press passes it.
+                assert receipt != paused or opening, "the opening pause refused a reducing click"
+                refused.append(receipt)
+                continue
+            # A fill names the money it put up at five times leverage, a fifth of its value in cents.
+            match = re.fullmatch(r"PROP XMR (buy|sell) filled (\$[0-9.]+) at ([^\n]+)\nFee \$([0-9.]+) \| #(\d+) .+", receipt)
+            assert match, "invalid fill receipt"
+            side, dollars, shown, fee, count = match.groups()
+            assert side == expected_side, "fill side differs from clicked button"
+            fee = Decimal(fee)
+            levels = fixture_book["levels"][1 if side == "buy" else 0]
+            touch = Decimal(levels[0]["px"])
+            requested = (Decimal(2500) / touch // Decimal("0.001")) * Decimal("0.001")
+            if opening:
+                quantity = requested
+            else:
+                # A reduce that would leave under ten dollars at the touch closes the whole position.
+                quantity = abs(held) if (abs(held) - requested) * touch < 10 else requested
+            assert quantity > 0, "wrong filled quantity"
+            remaining, value = quantity, Decimal(0)
+            for level in levels:
+                take = min(remaining, Decimal(level["sz"]))
+                value += take * Decimal(level["px"])
+                remaining -= take
+            assert remaining == 0, "fill exceeded known depth"
+            # The fixture's fills name under a thousand dollars, so the text keeps both decimals.
+            assert dollars == "$" + str((value / 5).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)), "dollars differ from the filled value at five times leverage"
+            assert fee == value * Decimal("0.00045"), "fee differs from fixed-book filled value"
+            approximate = shown.startswith("~")
+            price = Decimal(shown.lstrip("~"))
+            assert price > 0, "nonpositive displayed fill price"
+            if approximate:
+                unit = Decimal(10) ** price.as_tuple().exponent
+                assert price * quantity <= value < (price + unit) * quantity, "wrong rounded fill price"
+            else:
+                assert price * quantity == value, "wrong exact fill price"
+            if opening:
+                basis += value
+                cash -= fee
+            else:
+                # The reduced part takes its share of the sum paid for the open quantity.
+                share = quantity * basis / abs(held)
+                gain = (1 if held > 0 else -1) * (value - share)
+                basis -= share
+                realized += gain
+                cash += gain - fee
+            held += direction * quantity
+            holdings.add(held)
+            fees += fee
+            filled.append(receipt)
+            assert int(count) == len(filled), "fill sequence differs from saved count"
+        assert len(filled) >= 40, "fewer than 40 clicks filled"
+        assert int(saved["count"]) == len(filled) and saved["orders"] == filled, "saved count or history differs from the fills"
+        deposit = Decimal(saved["deposit"])
+        assert deposit == 10000, "starting deposit changed"
+        # An hour boundary during the run may charge one hour on a position held after some fill:
+        # the signed quantity times the served oracle times the served hourly rate, so a long pays
+        # at a positive rate.
+        funding = Decimal(saved.get("funding", "0"))
+        oracle, rate = Decimal(fixture_context["ctx"]["oraclePx"]), Decimal(fixture_context["ctx"]["funding"])
+        assert funding == 0 or funding in {position * oracle * rate for position in holdings}, "funding is neither zero nor one hourly payment on a position the run held"
+        assert abs(Decimal(saved["cash"]) - (cash - funding)) < Decimal("1e-20"), "cash differs from independent fills, fees and funding"
+        assert abs(Decimal(saved["realized"]) - realized) < Decimal("1e-20"), "realized differs from independent fills"
+        assert Decimal(saved["fees"]) == fees, "fees differ from independent filled value"
+        positions = saved["positions"]
+        assert {coin: Decimal(p["quantity"]) for coin, p in positions.items()} == ({"XMR": held} if held else {}), "positions differ from independent fills"
+        if held:
+            assert abs(Decimal(positions["XMR"]["entry"]) - basis / abs(held)) < Decimal("1e-20"), "entry differs from independent fills"
+        assert abs(Decimal(saved["cash"]) - (deposit + Decimal(saved["realized"]) - Decimal(saved["fees"]) - funding)) < Decimal("1e-20"), "cash differs from deposit, realized, fees and funding"
+        assert Decimal(saved["cash"]) >= 0, "saved cash is below zero"
     return filled, refused
 
 
@@ -540,22 +586,22 @@ class Playback:
                 clicks.append(time.monotonic_ns())
                 self.write(ESC + f"[<0;{x};{y}M".encode() + ESC + f"[<0;{x};{y}m".encode())
                 self.pump(0)
-            self.frame(contains("#600"))
             def recorded():
                 self.read_receipts()
                 return len(self.receipts) >= 600
             self.wait(recorded, "all six hundred results saved")
             assert len(self.receipts) == 600, "missing or duplicate result"
             results = list(self.receipts.values())
-            saved = json.loads((self.state_directory / "prop" / "wallet-mainnet.json").read_text())
+            saved = json.loads((self.state_directory / WALLET).read_text())
             fixture_book = json.loads((Path(self.args.fixtures) / "l2Book.json").read_text())["data"]
-            filled, refused = validate_wallet(saved, results, fixture_book)
+            fixture_context = json.loads((Path(self.args.fixtures) / "activeAssetCtx.json").read_text())["data"]
+            filled, refused = validate_wallet(saved, results, fixture_book, fixture_context)
             results_saved_ms = (time.monotonic_ns() - clicks[-1]) / 1e6
             self.settle()
             self.read_receipts()
             assert len(self.receipts) == 600, "unexpected later result"
-            settled = json.loads((self.state_directory / "prop" / "wallet-mainnet.json").read_text())
-            assert settled == saved, "a refused click executed later"
+            settled = json.loads((self.state_directory / WALLET).read_text())
+            assert same_wallet(settled, saved), "a refused click executed later"
             gaps = frame_gaps([f["captured_ns"] for f in self.frames.complete], clicks[0], clicks[-1])
             backlog = max(p["backlog"] for p in self.progress)
             self.speed = {"clicks": 600, "recorded_results": len(results),
@@ -638,8 +684,8 @@ class Playback:
         if self.mode == "speed":
             self.read_receipts()
             assert len(self.receipts) == 600, "unexpected result during shutdown"
-            closed = json.loads((self.state_directory / "prop" / "wallet-mainnet.json").read_text())
-            assert closed == saved, "ledger changed during shutdown"
+            closed = json.loads((self.state_directory / WALLET).read_text())
+            assert same_wallet(closed, saved), "ledger changed during shutdown"
         samples = validate_result(result, self.mode)
         assert any(any(0x2800 <= ord(c) <= 0x28FF for c in line)
                    for f in self.frames.complete for line in f["lines"]), "no recorded braille output"
@@ -673,7 +719,7 @@ class Playback:
                 (self.directory / "receipts.json").write_text(json.dumps(self.receipts, indent=2) + "\n")
                 (self.directory / "progress.json").write_text(json.dumps(self.progress, indent=2) + "\n")
                 (self.directory / "clicks.json").write_text(json.dumps(self.clicks) + "\n")
-                saved = self.state_directory / "prop" / "wallet-mainnet.json"
+                saved = self.state_directory / WALLET
                 if saved.exists():
                     (self.directory / "simulated-ledger.json").write_bytes(saved.read_bytes())
                 records = self.state_directory / "diagnostics" / "events-0.jsonl"

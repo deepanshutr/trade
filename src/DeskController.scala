@@ -220,10 +220,9 @@ final class DeskController(
           false
 
   // A Close carries no amount. It sells a long and buys a short. On a flat or unknown position it
-  // asks for a buy, which the plan or the worker refuses. Prop is long only, so its close always
-  // sells.
+  // asks for a buy, which the plan or the worker refuses.
   private def closing(view: TradingView): OrderIntent =
-    val sells = current.mode == "PROP" || view.position.exists(_ > 0)
+    val sells = view.position.exists(_ > 0)
     OrderIntent(if sells then Side.Sell else Side.Buy, OrderKind.Close)
 
   private val small = BigDecimal("0.01")
