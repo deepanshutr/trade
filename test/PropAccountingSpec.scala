@@ -316,10 +316,7 @@ class PropAccountingSpec extends TempDirectorySuite:
       val old =
         """{"cash":"900","realized":"0","fees":"0","positions":{"XMR":{"quantity":"-1","entry":"100"}},"orders":[],"count":1}"""
       Files.writeString(legacy, old)
-      Files.setPosixFilePermissions(
-        legacy,
-        java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
-      )
+      Platform.setMode(legacy, "rw-------")
       val ledger = PropLedger.open(directory, "mainnet", BigDecimal(1000), fee)
       try
         assertEquals(ledger.account, PropAccount(BigDecimal(1000), deposit = BigDecimal(1000)))

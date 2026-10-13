@@ -571,10 +571,7 @@ class SettingsScreenSpec extends munit.FunSuite:
     val dir = java.nio.file.Files.createTempDirectory("desk-unbound")
     val saved = dir.resolve("bindings.json")
     java.nio.file.Files.writeString(saved, """{"version":1,"bindings":{"close":["t"]}}""")
-    java.nio.file.Files.setPosixFilePermissions(
-      saved,
-      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
-    )
+    Platform.setMode(saved, "rw-------")
     val f = new Fixture
     f.bindings = Bindings.load(saved).toOption.get
     assert(!f.run(esc))
@@ -1288,10 +1285,13 @@ class SettingsScreenSpec extends munit.FunSuite:
         alive = false
       override def isAlive: Boolean = alive
     var running = true
-    val children = new SettingsWiring.Children(command => {
-      events += s"start ${command.mkString(" ")}"
-      new Started(running)
-    })
+    val children = new SettingsWiring.Children(
+      command => {
+        events += s"start ${command.mkString(" ")}"
+        new Started(running)
+      },
+      windows = false
+    )
     val restore = SettingsWiring.restoring(children, () => events += "restore")
     val _ = children.start(Seq("vault", "owner"))
     restore()

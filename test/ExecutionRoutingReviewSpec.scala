@@ -569,10 +569,7 @@ class ExecutionRoutingReviewSpec extends TempDirectorySuite:
     val directory = tempDirectory("desk-record-routing")
     val config = directory.resolve("settings.json")
     Files.writeString(config, "{}")
-    Files.setPosixFilePermissions(
-      config,
-      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
-    )
+    Platform.setMode(config, "rw-------")
     Files.writeString(directory.resolve("public"), "owned storage fixture failure")
     val factories = new AtomicInteger()
     val publicSources: TradingConfig => (Connector, Rest) = _ =>

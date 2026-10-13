@@ -4,7 +4,7 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Files
 
 class OwnerStatusSpec extends TempDirectorySuite:
-  private val python = "/opt/tools/bin/python3"
+  private val python = Platform.absolute("/opt/tools/bin/python3")
   // A vault folder with an empty desk_vault.py. Nothing runs it.
   private lazy val folder =
     val directory = suiteDirectory("owner-vault")
@@ -73,7 +73,7 @@ class OwnerStatusSpec extends TempDirectorySuite:
       Seq(
         python,
         "-B",
-        folder + "/desk_vault.py",
+        java.nio.file.Path.of(folder).resolve("desk_vault.py").toString,
         "--json",
         "owner",
         "status",

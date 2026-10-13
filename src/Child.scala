@@ -10,6 +10,7 @@ import sun.misc.{Signal, SignalHandler}
 // reads what the child prints. The files the child leaves are its result.
 object Child:
   val notInstalled = "Owner tooling is not installed"
+  val notOnWindows = "Keys and owner steps are not available on Windows"
   private val notStarted = "The step did not start"
   private val networks = Set("mainnet", "testnet")
 

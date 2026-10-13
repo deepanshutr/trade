@@ -52,10 +52,7 @@ class OfflinePlaybackSpec extends TempDirectorySuite:
     val directory = tempDirectory("desk-playback-config")
     val settings = directory.resolve("settings.json")
     Files.writeString(settings, "{}")
-    Files.setPosixFilePermissions(
-      settings,
-      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
-    )
+    Platform.setMode(settings, "rw-------")
     var constructed = 0
     intercept[Stop] {
       Main.run(
@@ -109,6 +106,7 @@ class OfflinePlaybackSpec extends TempDirectorySuite:
   test(
     "the capture reader rejects incomplete frames and the held-work controls reject false passes"
   ) {
+    assume(!Term.windows, "the playback harness drives a Unix pseudo terminal through python3")
     run(
       Vector(
         "python3",
@@ -127,6 +125,7 @@ class OfflinePlaybackSpec extends TempDirectorySuite:
   test(
     "actual terminal input, fold and UTF-8 frames keep working while public work waits"
   ) {
+    assume(!Term.windows, "the playback harness drives a Unix pseudo terminal through python3")
     val directory = tempDirectory("desk-playback-evidence", keepOnFailure = true)
     run(
       Vector(
@@ -144,6 +143,7 @@ class OfflinePlaybackSpec extends TempDirectorySuite:
   }
 
   test("the outer watchdog stops a child in a separate session") {
+    assume(!Term.windows, "the watchdog check starts python3 with a Unix session")
     val directory = tempDirectory("desk-outer-watchdog", keepOnFailure = true)
     val identity = directory.resolve("child.pid")
     val child =
@@ -179,6 +179,7 @@ class OfflinePlaybackSpec extends TempDirectorySuite:
     "six hundred terminal clicks at ten per second record fills or explicit refusals"
       .tag(new munit.Tag("slow"))
   ) {
+    assume(!Term.windows, "the playback harness drives a Unix pseudo terminal through python3")
     val directory = tempDirectory("desk-click-speed-", keepOnFailure = true)
     val output = directory.resolve("capture")
     run(

@@ -1,7 +1,6 @@
 package desk
 
 import java.nio.file.{Files, Path}
-import java.nio.file.attribute.PosixFilePermissions
 import scala.collection.mutable.ArrayBuffer
 import scala.jdk.CollectionConverters.*
 
@@ -73,7 +72,7 @@ class MainRuntimeSpec extends TempDirectorySuite:
     val directory = tempDirectory("desk-prop-settings")
     val path = directory.resolve("settings.json")
     Files.writeString(path, """{"propBalance":"20000","propFee":"0.001"}""")
-    Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"))
+    Platform.setMode(path, "rw-------")
     assert(TradingConfig.load(Some(path)).isRight)
     Files.writeString(path, """{"propFee":"-1"}""")
     assert(TradingConfig.load(Some(path)).isLeft)
@@ -94,7 +93,7 @@ class MainRuntimeSpec extends TempDirectorySuite:
     val state: Path = home.resolve("state")
     val config: Path = home.resolve("settings.json")
     Files.writeString(config, settings)
-    Files.setPosixFilePermissions(config, PosixFilePermissions.fromString("rw-------"))
+    Platform.setMode(config, "rw-------")
     val said = ArrayBuffer.empty[String]
     val screens = ArrayBuffer.empty[KeyScreen.Context]
     val reads = ArrayBuffer.empty[(TradingConfig, Int)]
@@ -505,10 +504,10 @@ class MainRuntimeSpec extends TempDirectorySuite:
     s.makeUsable()
     val folder = s.home.resolve(".config/desk")
     Files.createDirectories(folder)
-    Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwx------"))
+    Platform.setMode(folder, "rwx------")
     val file = Bindings.path(s.home)
     Files.writeString(file, """{"version":1,"bindings":{"close":["\u0003"]}}""")
-    Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-------"))
+    Platform.setMode(file, "rw-------")
     val stop = intercept[Stopped](s.run(s.args(trade = true)))
     assertEquals(
       (stop.code, stop.message),
@@ -754,13 +753,13 @@ class MainRuntimeSpec extends TempDirectorySuite:
     val home = tempDirectory("desk-bindings")
     val folder = home.resolve(".config/desk")
     Files.createDirectories(folder)
-    Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwxr-xr-x"))
+    Platform.setMode(folder, "rwxr-xr-x")
     assertEquals(
       WorkspaceApp.saveBindings(home, Bindings.defaults),
       Left(s"local storage must be private ($folder)")
     )
     assert(!Files.exists(Bindings.path(home)))
-    Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwx------"))
+    Platform.setMode(folder, "rwx------")
     assertEquals(WorkspaceApp.saveBindings(home, Bindings.defaults), Right(()))
     assertEquals(Bindings.load(Bindings.path(home)), Right(Bindings.defaults))
   }

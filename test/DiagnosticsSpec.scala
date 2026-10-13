@@ -94,6 +94,7 @@ class RefineDiagnosticsSpec extends TempDirectorySuite:
   test(
     "linked files are rejected before opening and before rotation without changing their targets"
   ) {
+    assume(Platform.links, "symbolic links need developer mode on Windows")
     val directory = tempDirectory("desk-diagnostic-links-")
     val target = directory.resolve("target")
     LocalFiles.write(target, "preserved")

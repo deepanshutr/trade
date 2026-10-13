@@ -1,8 +1,6 @@
 package desk
 
 import java.nio.file.{Files, Path}
-import java.nio.file.attribute.PosixFilePermission
-import scala.jdk.CollectionConverters.*
 import scala.util.Try
 
 final case class TradingConfig(
@@ -76,18 +74,8 @@ object TradingConfig:
       "an on-chain market cannot be a reference"
     )
     markets
-  private val forbidden = Set(
-    PosixFilePermission.GROUP_READ,
-    PosixFilePermission.GROUP_WRITE,
-    PosixFilePermission.GROUP_EXECUTE,
-    PosixFilePermission.OTHERS_READ,
-    PosixFilePermission.OTHERS_WRITE,
-    PosixFilePermission.OTHERS_EXECUTE
-  )
-
   def privateFile(path: Path): Boolean =
-    !Files.isSymbolicLink(path) && Files.isRegularFile(path) &&
-      Files.getPosixFilePermissions(path).asScala.intersect(forbidden).isEmpty
+    !LocalFiles.linked(path) && Files.isRegularFile(path) && LocalFiles.isPrivate(path)
 
   private def shallowJson(text: String): Boolean =
     var depth = 0

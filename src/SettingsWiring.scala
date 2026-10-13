@@ -185,10 +185,12 @@ object SettingsWiring:
       "Settings children need the installed desk.jar"
     )
 
-  // Starts children and keeps the latest, so Desk can end it when Desk stops.
-  final class Children(launch: Seq[String] => Process):
+  // Starts children and keeps the latest, so Desk can end it when Desk stops. Windows has no
+  // Keychain, and its console reader would take a child's keys, so no child starts there.
+  final class Children(launch: Seq[String] => Process, windows: Boolean = Term.windows):
     private val current = new AtomicReference(Option.empty[Process])
     def start(command: Seq[String]): Process =
+      if windows then throw new IllegalStateException(Child.notOnWindows)
       val process = launch(command)
       current.set(Some(process))
       process

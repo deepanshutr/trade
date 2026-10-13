@@ -1,7 +1,6 @@
 package desk
 
 import java.nio.file.{Files, Path}
-import java.nio.file.attribute.PosixFilePermissions
 
 class BindingsSpec extends TempDirectorySuite:
   private def key(text: String): KeyGroup =
@@ -13,7 +12,7 @@ class BindingsSpec extends TempDirectorySuite:
   private def put(path: Path, text: String, mode: String = "rw-------"): Path =
     Files.createDirectories(path.getParent)
     Files.writeString(path, text)
-    Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(mode))
+    Platform.setMode(path, mode)
     path
   private def file(bindings: String): String = s"""{"version":1,"bindings":{$bindings}}"""
   private def refusal(reason: String) = Left(s"invalid key bindings: $reason (bindings.json)")
@@ -423,7 +422,7 @@ class BindingsSpec extends TempDirectorySuite:
 
   test("an unbound new action saves and loads back unbound") {
     val saved = put(path(), file("\"quit\":[\"t\"]"))
-    Files.setPosixFilePermissions(saved.getParent, PosixFilePermissions.fromString("rwx------"))
+    Platform.setMode(saved.getParent, "rwx------")
     val bindings = Bindings.load(saved).toOption.get
     Bindings.save(saved, bindings)
     assertEquals(Bindings.load(saved).map(_.map), Right(bindings.map))
@@ -459,7 +458,7 @@ class BindingsSpec extends TempDirectorySuite:
       .toOption
       .get
     Bindings.save(p, changed)
-    assertEquals(PosixFilePermissions.toString(Files.getPosixFilePermissions(p)), "rw-------")
+    assert(Platform.hasMode(p, "rw-------"))
     assertEquals(Bindings.load(p), Right(changed))
     val json = ujson.read(Files.readString(p))
     assertEquals(json("version").num, 1.0)
@@ -477,7 +476,7 @@ class BindingsSpec extends TempDirectorySuite:
     val p = Bindings.path(home)
     val before = file("\"quit\":[\"Q\"]")
     put(p, before)
-    Files.setPosixFilePermissions(p.getParent, PosixFilePermissions.fromString("rwxr-xr-x"))
+    Platform.setMode(p.getParent, "rwxr-xr-x")
     val error = intercept[IllegalArgumentException](Bindings.save(p, Bindings.defaults))
     assert(error.getMessage.contains("local storage must be private"))
     assertEquals(Files.readString(p), before)
@@ -521,13 +520,14 @@ class BindingsSpec extends TempDirectorySuite:
     assertEquals(Bindings.load(put(path(), file("") + " " * 16384)), refusal(reason))
     val target = put(path(), file(""))
     val link = path()
-    Files.createDirectories(link.getParent)
-    Files.createSymbolicLink(link, target)
-    assertEquals(Bindings.load(link), refusal(reason))
+    if Platform.links then
+      Files.createDirectories(link.getParent)
+      Files.createSymbolicLink(link, target)
+      assertEquals(Bindings.load(link), refusal(reason))
     val binary = path()
     Files.createDirectories(binary.getParent)
     Files.write(binary, Array[Byte](123, -1, 125))
-    Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rw-------"))
+    Platform.setMode(binary, "rw-------")
     assertEquals(Bindings.load(binary), refusal(reason))
     assertEquals(
       Bindings.load(put(path(), file("") + " " * (16384 - file("").length))).map(_.map),

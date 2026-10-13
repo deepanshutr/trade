@@ -71,10 +71,7 @@ class OrderResultLogSpec extends TempDirectorySuite:
       paths.iterator().asScala.find(_.getFileName.toString.startsWith(".desk-")).get
     finally paths.close()
     assertEquals(Files.readAllLines(temporary).size(), 1000)
-    assertEquals(
-      Files.getPosixFilePermissions(temporary),
-      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
-    )
+    assert(Platform.hasMode(temporary, "rw-------"))
     assertEquals(Files.readString(path), original)
     import scala.jdk.CollectionConverters.*
     assert(Files.readAllLines(path).asScala.forall(line => ujson.read(line)("text").str == "first"))
@@ -153,10 +150,7 @@ class OrderResultLogSpec extends TempDirectorySuite:
     val records = Files.readAllLines(path).asScala.map(ujson.read(_)).toVector
     assertEquals(records.map(_("at").str.toInt), (101 to 1100).toVector)
     assertEquals(records.map(_("text").str), (101 to 1100).map(i => s"result $i").toVector)
-    assertEquals(
-      Files.getPosixFilePermissions(path),
-      java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
-    )
+    assert(Platform.hasMode(path, "rw-------"))
   }
 
   test("two controllers append all 600 order results without keeping general messages") {
@@ -208,7 +202,7 @@ class OrderResultLogSpec extends TempDirectorySuite:
     val lines = Files.readAllLines(directory.resolve("order-results.jsonl"))
     import scala.jdk.CollectionConverters.*
     val records = lines.asScala.map(ujson.read(_)).toVector
-    assertEquals(records.size, 600)
+    assertEquals(records.size, 600, failures.toString)
     assertEquals(records.map(_("id").str).distinct.size, 600)
     assert(records.forall(_("kind").str == "order"))
     assertEquals(first.panel.actionNumber, 300L)
@@ -263,6 +257,63 @@ class OrderResultLogSpec extends TempDirectorySuite:
     assertEquals(failures.size(), 1)
   }
 
+  test("closing keeps draining past 500 ms while records still save") {
+    val gate = new java.util.concurrent.CountDownLatch(1)
+    val saved = new java.util.concurrent.CopyOnWriteArrayList[String]()
+    val failures = new java.util.concurrent.CopyOnWriteArrayList[Throwable]()
+    val tried = java.util.concurrent.ConcurrentHashMap.newKeySet[String]()
+    // Each record times out once, then saves 150 ms later, so the whole queue outlasts 500 ms.
+    val writer = new OrderResultLog.Writer(
+      text => {
+        if tried.add(text) || gate.getCount > 0 then throw new OrderResultLog.LockTimeout
+        Thread.sleep(150L)
+        saved.add(text)
+        ()
+      },
+      error => { failures.add(error); () }
+    )
+    (1 to 8).foreach(i => writer.append(s"result $i"))
+    val opener = new Thread(() => {
+      Thread.sleep(50L)
+      gate.countDown()
+    })
+    opener.start()
+    writer.close()
+    opener.join()
+    assertEquals(failures.size(), 0, failures.toString)
+    assertEquals(saved.size(), 8)
+  }
+
+  test("closing still saves queued records when the lock frees within the drain limit") {
+    val directory = tempDirectory("desk-order-close-drain")
+    val firstAttempt = new java.util.concurrent.CountDownLatch(1)
+    val failures = new java.util.concurrent.CopyOnWriteArrayList[Throwable]()
+    val writer = new OrderResultLog.Writer(
+      text => {
+        firstAttempt.countDown()
+        OrderResultLog.append(directory, 123L, text)
+      },
+      error => { failures.add(error); () }
+    )
+    val (holder, release) = holdWritingLock()
+    try
+      (1 to 4).foreach(i => writer.append(s"result $i"))
+      assert(firstAttempt.await(2, java.util.concurrent.TimeUnit.SECONDS))
+      val freed = new Thread(() => {
+        Thread.sleep(150L)
+        release.countDown()
+      })
+      freed.start()
+      writer.close()
+      freed.join()
+      assertEquals(failures.size(), 0, failures.toString)
+      val saved = java.nio.file.Files.readAllLines(directory.resolve("order-results.jsonl"))
+      assertEquals(saved.size, 4)
+    finally
+      release.countDown()
+      holder.join()
+  }
+
   test("closing stops retries for queued records") {
     val directory = tempDirectory("desk-order-close-retries")
     val firstAttempt = new java.util.concurrent.CountDownLatch(1)
@@ -282,7 +333,8 @@ class OrderResultLogSpec extends TempDirectorySuite:
       val began = System.nanoTime()
       writer.close()
       val elapsed = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began)
-      assert(elapsed < 800L, s"close waited $elapsed ms for four queued records")
+      // The 500 ms drain plus a lock wait per record, well short of four retry windows.
+      assert(elapsed < 1200L, s"close waited $elapsed ms for four queued records")
       assertEquals(failures.size(), 4)
     finally
       release.countDown()
@@ -305,12 +357,18 @@ class OrderResultLogSpec extends TempDirectorySuite:
   test("a lock held by another process times out promptly") {
     val directory = tempDirectory("desk-order-locked")
     OrderResultLog.append(directory, 1L, "first")
-    val child = new ProcessBuilder(
-      "python3",
-      "-c",
-      "import fcntl, sys, time; f = open(sys.argv[1], 'r+'); fcntl.lockf(f, fcntl.LOCK_EX); print('locked', flush=True); time.sleep(1)",
-      directory.resolve("order-results.lock").toString
-    ).start()
+    val child = Platform
+      .lockChild(
+        new ProcessBuilder(
+          "python3",
+          "-c",
+          "import fcntl, sys, time; f = open(sys.argv[1], 'r+'); fcntl.lockf(f, fcntl.LOCK_EX); print('locked', flush=True); time.sleep(1)",
+          directory.resolve("order-results.lock").toString
+        ),
+        "hold",
+        directory.resolve("order-results.lock").toString
+      )
+      .start()
     val diagnostics = Diagnostics.open(directory, () => 123L, 2000L)
     diagnostics.start()
     try
@@ -341,6 +399,7 @@ class OrderResultLogSpec extends TempDirectorySuite:
       assertEquals(Files.readAllLines(directory.resolve("order-results.jsonl")).size(), 1)
     finally
       diagnostics.close()
+      child.getOutputStream.close()
       if !child.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) then
         child.destroyForcibly()
         child.waitFor()

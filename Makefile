@@ -1,5 +1,5 @@
 SCALA_CLI ?= scala-cli
-.PHONY: test test-python live slow check build install install-launcher fmt
+.PHONY: test test-python live slow check build windows-image install install-launcher fmt
 
 test: test-python
 	$(SCALA_CLI) --power test . --server=false -- --exclude-tags=live,slow
@@ -19,6 +19,18 @@ check:
 build:
 	mkdir -p bin
 	$(SCALA_CLI) --power package . -o bin/desk.jar --assembly --preamble=false -f
+
+# A Windows package. Its Desk.exe runs Java inside its own process, so one firewall rule can
+# name Desk alone. The console calls use a Java 21 feature still in preview, so it is turned on.
+# Attach stays off, as in the macOS launcher.
+windows-image: build
+	rm -rf bin/app bin/image
+	mkdir -p bin/app
+	cp bin/desk.jar bin/app/
+	jpackage --type app-image --name Desk --input bin/app --main-jar desk.jar --dest bin/image \
+	  --win-console --java-options --enable-preview \
+	  --java-options --enable-native-access=ALL-UNNAMED \
+	  --java-options -XX:+DisableAttachMechanism --java-options -Dstdout.encoding=UTF-8
 
 install: build install-launcher
 	cp bin/desk.jar "$$HOME/.local/lib/desk.jar"

@@ -525,7 +525,7 @@ object WorkspaceApp:
           () => keyReload.reload(),
           restoration,
           saved,
-          System.in,
+          Term.input,
           System.out,
           SettingsWiring.terminal,
           children.start
@@ -558,7 +558,7 @@ object WorkspaceApp:
           activeKey = () => keyReload.activeKey()
         )
         SettingsWiring.show(paused, inputLock, terminal, () => controller.invalidate(), System.out)(
-          SettingsScreen.run(context, System.in, System.out)
+          SettingsScreen.run(context, Term.input, System.out)
         )
       val keys = background("keys") {
         var marketPrompt = false
@@ -585,7 +585,7 @@ object WorkspaceApp:
           diagnostics.slow(DiagnosticPart.Input, System.nanoTime() - began)
           handled
         SettingsWiring.keys(
-          System.in,
+          Term.input,
           () => !quitting && !state.get().quit,
           () => marketPrompt,
           bound,

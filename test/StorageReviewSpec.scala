@@ -1,7 +1,6 @@
 package desk
 
 import java.nio.file.{Files, Path}
-import java.nio.file.attribute.PosixFilePermissions
 import scala.jdk.CollectionConverters.*
 
 class StorageReviewSpec extends TempDirectorySuite:
@@ -25,13 +24,13 @@ class StorageReviewSpec extends TempDirectorySuite:
       assert(ledger.fill(plan(Side.Buy, "1", "100"), now).isRight)
       val before = ledger.account
       val bytes = Files.readString(path)
-      Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-r--r--"))
+      Platform.setMode(path, "rw-r--r--")
       assert(ledger.fill(plan(Side.Buy, "1", "110"), now + 1).isLeft)
       assertEquals(ledger.account, before)
       assertEquals(Files.readString(path), bytes)
       assert(!ledger.available)
       assert(ledger.fill(plan(Side.Sell, "1", "120"), now + 2).isLeft)
-      Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"))
+      Platform.setMode(path, "rw-------")
     finally ledger.close()
     val reopened = PropLedger.open(directory, "mainnet", BigDecimal(1000), BigDecimal("0.001"))
     try assertEquals(reopened.account.positions("XMR").quantity, BigDecimal(1))
@@ -100,7 +99,7 @@ class StorageReviewSpec extends TempDirectorySuite:
     val directory = tempDirectory("desk-archive-unsafe")
     val stale = directory.resolve("events-1800000000000-aaaaaaaa.jsonl")
     LocalFiles.write(stale, "x" * 3990)
-    Files.setPosixFilePermissions(stale, PosixFilePermissions.fromString("rw-r--r--"))
+    Platform.setMode(stale, "rw-r--r--")
     val archive = MarketArchive.open(directory, maximumBytes = 4000, chunkBytes = 1000)
     try
       scala.util.Try(archive.record(Event.SocketUp, now))
