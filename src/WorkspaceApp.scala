@@ -142,7 +142,8 @@ object WorkspaceApp:
       style: Style,
       outlook: OutlookWorker,
       logsUnavailable: Boolean = false,
-      orderResultsUnavailable: Boolean = false
+      orderResultsUnavailable: Boolean = false,
+      odds: Odds = Odds.none
   ): WorkspaceFrame =
     val visible = outlook.forDisplay(panel.outlook, market, now)
     Workspace.draw(
@@ -155,7 +156,8 @@ object WorkspaceApp:
       zone,
       style,
       logsUnavailable,
-      orderResultsUnavailable
+      orderResultsUnavailable,
+      odds
     )
 
   private[desk] def announce(
@@ -300,12 +302,22 @@ object WorkspaceApp:
       if recorder.status.contains("failed") then
         throw new IllegalStateException("Public capture stopped. Saved files were preserved")
 
+  // The coins the workspace reads Polymarket odds for.
+  private[desk] val followed: Set[String] = Set("BTC", "PAXG")
+
+  private[desk] def polymarketReader(
+      client: (String => Either[Int, String], (String, String) => Either[Int, String]),
+      now: () => Long
+  ): PolymarketReader =
+    new PolymarketReader(client._1, client._2, () => followed, now, ms => Thread.sleep(ms))
+
   def run(
       args: Main.Args,
       sources: TradingConfig => (Connector, Rest),
       createWorker: (TradingConfig, Boolean, String, Path) => TradingWorker,
       queue: LinkedBlockingQueue[Event],
-      keyHooks: KeyStartup.Hooks
+      keyHooks: KeyStartup.Hooks,
+      polymarket: () => (String => Either[Int, String], (String, String) => Either[Int, String])
   ): Unit =
     val home = keyHooks.home
     val loaded = TradingConfig.load(Main.configPath(args, home)) match
@@ -343,6 +355,9 @@ object WorkspaceApp:
       val initialLive = live(config, args.trade, args.coin, directory)
       val now = () => System.currentTimeMillis()
       val diagnostics = Diagnostics.open(directory, now, config.quoteAgeMs)
+      // The Polymarket odds are read in live, prop and view alike. Recording and the key screen
+      // never reach this branch, so they build no client.
+      val reader = polymarketReader(polymarket(), now)
       val monotonic = () => TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
       val mode = args.mode
       val worker = new ExecutionRouter(
@@ -426,6 +441,7 @@ object WorkspaceApp:
       val alerts = new AlertPolicy
       def closeAll(): Unit =
         results.close()
+        reader.close()
         WorkspaceApp.closeAll(
           outlook,
           announcements,
@@ -476,6 +492,7 @@ object WorkspaceApp:
       )
       worker.start()
       diagnostics.start()
+      reader.start()
       recorder.foreach(_.start())
       outlook.start()
       announcements.start()
@@ -637,7 +654,8 @@ object WorkspaceApp:
                   style,
                   outlook,
                   diagnostics.status.nonEmpty,
-                  orderResults.unavailable()
+                  orderResults.unavailable(),
+                  odds = Odds.of(reader)
                 )
               diagnostics.slow(DiagnosticPart.Build, System.nanoTime() - building)
               frame

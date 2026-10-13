@@ -103,7 +103,7 @@ class WorkspaceSpec extends munit.FunSuite:
     assertEquals(shown, s"$notice #1")
   }
 
-  test("book is above tape, references beside them, the trading panel at left") {
+  test("the rails sit beside the panel") {
     for (cols, rows) <- Vector((100, 30), (120, 40), (160, 45)) do
       val frame = Workspace.draw(
         s,
@@ -117,13 +117,13 @@ class WorkspaceSpec extends munit.FunSuite:
       )
       assertEquals(frame.lines.size, rows)
       assert(frame.lines.forall(_.length == cols))
-      // The gauges fill the band's right region, after the panel and its bar.
-      val book = frame.lines.indexWhere(_.drop(39).startsWith("BOOK"))
-      val tape = frame.lines.indexWhere(_.drop(39).startsWith("TAPE"))
-      assertEquals(book, rows - 12)
-      assert(book >= 0 && tape == book + 6)
-      assert(frame.lines(book).contains("BTC"))
-      assert(frame.lines(tape).contains("GOLD"))
+      // The rails fill the band's right region, after the panel and its bar, the key last.
+      val title = frame.lines(rows - 12).drop(39)
+      assert(title.startsWith("◆ book  ● tape  share of buying"), title)
+      val key = frame.lines(rows - 1).drop(39)
+      assert(key.startsWith("■ XMR  ■ buy"), key)
+      // At 160 by 45 the region has 121 columns, two groups with rails of 33.
+      if cols == 160 then assert(frame.lines(rows - 12).contains("XMR  ▲ change"), title)
       assert(!frame.lines.exists(_.contains("Ask")))
       assert(frame.buttons.nonEmpty)
   }

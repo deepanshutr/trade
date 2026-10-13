@@ -6,7 +6,6 @@ object DisplayCost:
   @volatile private var sink: Any = null
   private val bean =
     ManagementFactory.getThreadMXBean.asInstanceOf[com.sun.management.ThreadMXBean]
-  val lenses: Vector[Long] = Gauges.tapeLenses.map(_._2)
 
   def allocated(): Long =
     require(bean.isThreadAllocatedMemorySupported, "Allocation measurement is unavailable")

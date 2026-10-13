@@ -285,6 +285,10 @@ def validate_wallet(saved, results, fixture_book):
 def validate_result(result, mode):
     assert result["forbidden"] == [], result["forbidden"]
     assert result["metadata_calls"] > 0, "the offline worker was not exercised"
+    assert result["polymarket_calls"] > 0, "the Polymarket reader did not run"
+    assert result["polymarket_calls"] >= 2, "the Polymarket reader read no midpoints"
+    assert result["polymarket_failures"] == 0, "a Polymarket reply was refused"
+    assert not result["polymarket_reader_alive"], "the Polymarket reader outlived the quit"
     samples = result["queue"]["samples"]
     assert any(s["event"] == "key Quit" and s["method"] == "put" for s in samples), "quit did not pass through the fold queue"
     assert not any(s["event"] == "Bad" for s in samples), "recorded input was rejected"
@@ -500,6 +504,8 @@ class Playback:
         self.frame(market("XMR"))
         assert not any(" bad " in f["lines"][0] for f in self.frames.complete), "recorded input was rejected"
         if self.mode == "normal":
+            # The synthetic Polymarket replies make the reader reachable, so the band names its coin.
+            self.frame(contains("Polymarket BTC up%  100"))
             self.key("zoom out", ESC + b"[B", contains("4s/col"))
             self.key("zoom in", ESC + b"[A", contains("2s/col"))
             self.key("candles", b"c", contains("1m/candle"))
@@ -637,6 +643,7 @@ class Playback:
         samples = validate_result(result, self.mode)
         assert any(any(0x2800 <= ord(c) <= 0x28FF for c in line)
                    for f in self.frames.complete for line in f["lines"]), "no recorded braille output"
+        assert not any("PAXG (token tied to gold)" in text(f) for f in self.frames.complete), "a reference row was drawn"
         cpu_after = resource.getrusage(resource.RUSAGE_CHILDREN)
         ages = [int(s["age_ns"]) for s in samples]
         key_ages = [int(s["age_ns"]) for s in samples if s["event"].startswith("key ")]

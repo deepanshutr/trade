@@ -274,6 +274,11 @@ class PolymarketSpec extends munit.FunSuite:
     assert(Polymarket.parseMidpoints("""{"a":0.5}""").isLeft)
   }
 
+  test("parseMidpoints gives no price for a price outside 0 to 1") {
+    val body = """{"a":"5","b":"-0.2","c":"1e400","d":"1.0001","e":"0.5","f":"1","g":"0"}"""
+    assertEquals(Polymarket.parseMidpoints(body), Right(Map("e" -> 50.0, "f" -> 100.0, "g" -> 0.0)))
+  }
+
   // ---- test 6: the reader ----
 
   private def syntheticMarkets(coinSet: Set[String], at: Long, tag: String): String =
@@ -390,6 +395,41 @@ class PolymarketSpec extends munit.FunSuite:
     assertEquals(rig.reader.state("BTC", M5), Polymarket.State.NoMarket)
   }
 
+  test("points keep the ring after the market ends") {
+    val rig = fixtureRig(runMs = 20000L).run()
+    rig.stop()
+    val ring = Vector(Polymarket.Point(T0, 99.5))
+    assertEquals(rig.reader.state("BTC", M5), Polymarket.State.Ready(ring, T0))
+    assertEquals(rig.reader.points("BTC", M5), ring)
+    rig.clock = ms("2026-10-04T03:40:00Z")
+    assertEquals(rig.reader.state("BTC", M5), Polymarket.State.NoMarket)
+    assertEquals(rig.reader.points("BTC", M5), ring)
+    assertEquals(rig.reader.points("XMR", M5), Vector.empty)
+  }
+
+  test("after a 5m rollover the new market reads no chance until its own first point") {
+    val next = ujson.write(
+      ujson.Arr(
+        market(
+          "btc-updown-5m-1791085200",
+          "tok-next",
+          "2026-10-04T03:40:00Z",
+          "2026-10-04T03:45:00Z"
+        )
+      )
+    )
+    val rig = new Rig(
+      75000L,
+      Set("BTC"),
+      (n, _, _) => Right(if n == 1 then markets else next),
+      (_, _, _) => Right(prices)
+    ).run()
+    rig.stop()
+    assertEquals(rig.gets.toVector, Vector(T0, T0 + 70000L))
+    rig.clock = T0 + 75000L
+    assertEquals(Odds.of(rig.reader).chance("BTC", M5), None)
+  }
+
   test("an empty reply is NoMarket for every window and sends no midpoints read") {
     val rig = new Rig(600000L, both, (_, _, _) => Right("[]"), (_, _, _) => Right(prices)).run()
     rig.stop()
@@ -468,6 +508,19 @@ class PolymarketSpec extends munit.FunSuite:
       case other => fail("expected Ready, got " + other)
     assert(rig.reader.isStale("BTC", H1))
     assert(rig.reader.unreachable)
+  }
+
+  test("a price of 5 is no chance, not 500 percent") {
+    val fives = (body: String) =>
+      Right(
+        ujson.write(ujson.Obj.from(ujson.read(body).arr.map(_("token_id").str -> ujson.Str("5"))))
+      )
+    val rig =
+      new Rig(10000L, Set("BTC"), (_, _, _) => Right(markets), (_, _, body) => fives(body)).run()
+    rig.stop()
+    assertEquals(rig.posts.size, 1)
+    assertEquals(rig.reader.points("BTC", H1), Vector.empty)
+    assertEquals(Odds.of(rig.reader).chance("BTC", H1), None)
   }
 
   test("data under two minutes old is not stale and over two minutes is") {
@@ -644,4 +697,24 @@ class PolymarketSpec extends munit.FunSuite:
       Polymarket.readCapped(new java.io.ByteArrayInputStream("{}".getBytes)),
       Right("{}")
     )
+  }
+
+  test("K9 odds of a reader carry its points and its stale flag") {
+    val rig = fixtureRig(runMs = 20000L).run()
+    rig.stop()
+    val odds = Odds.of(rig.reader)
+    assert(!odds.unreachable)
+    assertEquals(odds.points("BTC", H1), Vector(Polymarket.Point(T0, 83.5)))
+    assertEquals(odds.chance("BTC", H1), Some((83.5, false)))
+    assert(!odds.stale("BTC", H1))
+    rig.clock = T0 + 120001L
+    assert(odds.stale("BTC", H1))
+    assertEquals(odds.chance("BTC", H1), Some((83.5, true)))
+  }
+
+  test("K10 points read the ring of their own window") {
+    val rig = fixtureRig(runMs = 20000L).run()
+    rig.stop()
+    assertEquals(rig.reader.points("BTC", H1), Vector(Polymarket.Point(T0, 83.5)))
+    assertEquals(rig.reader.points("BTC", M5), Vector(Polymarket.Point(T0, 99.5)))
   }

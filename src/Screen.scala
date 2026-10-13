@@ -85,11 +85,10 @@ object Screen:
     val gap = " " * (cols - line.length - status.length - 1).max(1)
     Chart.fit(bold + coin + reset + line.drop(coin.length) + gap + dim + status + reset + " ", cols)
 
-  // The chart block: the stats row, the price rows, the volume row, the reference rows and the
-  // time axis, in the left pane and the plot of the regions. Each price row is the decor's label
-  // of 17 columns, with the marker on the current price row in its last column, then the depth
-  // bar of 21 and the plot. Each reference row is its label of 30, its prices in the rest of the
-  // left pane and its plot on the main plot's cells and time scale.
+  // The chart block: the stats row, the price rows, the volume row, the band rows as given and
+  // the time axis, in the left pane and the plot of the regions. Each price row is the decor's
+  // label of 17 columns, with the marker on the current price row in its last column, then the
+  // depth bar of 21 and the plot.
   def renderMarket(
       s: Snapshot,
       now: Long,
@@ -97,11 +96,12 @@ object Screen:
       style: Style,
       regions: Regions,
       decor: AxisDecor,
+      band: Vector[String],
       headerWidth: Option[Int] = None
   ): MarketFrame =
-    val references = State.refCoins.distinct.filterNot(_ == s.coin)
     val priceRows = regions.priceRows
     require(priceRows >= 3)
+    require(band.size == regions.band)
     val width = regions.left + regions.plot
     val cells = regions.plot
     val label = regions.left - Layout.barW
@@ -123,28 +123,6 @@ object Screen:
     }
     val (volume, _) = Chart.volumeRows(columns, Style.mono, s.chartMode, cells)
     val volumeLine = Chart.rjust("volume", regions.left - 1) + " " + volume.head
-    val priceWidth = regions.left - Layout.leftW
-    val referenceLines = references.flatMap { coin =>
-      val data = s.refs.getOrElse(coin, Ref.empty)
-      val values = Chart.referenceColumns(data, count, s, now)
-      val current = values.flatten.lastOption.map(_.last)
-      val ax = Chart.axis(values, None, Layout.referenceRows).map { a =>
-        current.fold(a) { price =>
-          val radius = (price - a.lo).max(a.hi - price)
-          Axis(price - radius, price + radius, a.rows)
-        }
-      }
-      val ink = ax.fold(Vector.fill(Layout.referenceRows)(" " * cells))(a =>
-        Chart.plot(values, a, cells, s.chartMode)
-      )
-      val label = if coin == "PAXG" then "PAXG (token tied to gold)" else coin
-      val labels =
-        Vector(Chart.fit(label, Layout.leftW)).padTo(Layout.referenceRows, " " * Layout.leftW)
-      val currentText = current.map(p => Trading.display(BigDecimal(p), priceWidth - 1))
-      val prices =
-        Chart.scaleRows(ax, Layout.referenceRows, current.map(_ => 1), currentText, priceWidth)
-      (0 until Layout.referenceRows).map(i => labels(i) + prices(i) + ink(i))
-    }
     val (first, z) = Chart.window(s, count, now)
     val candles = s.chartMode == ChartMode.Candles
     val perCell = if candles then z.toLong / Layout.candleW else 2L * z
@@ -153,10 +131,6 @@ object Screen:
         (if s.offsetSec > 0 then " history" else "")
     val axisLine = Chart.rjust(caption, regions.left - 1) + " " +
       Chart.timeRow(first * z, perCell, cells, zone)
-    val market =
-      (stats(s, now, headerWidth.getOrElse(width)) +: priceLines) ++ Vector(
-        volumeLine
-      ) ++ referenceLines ++ Vector(
-        axisLine
-      )
+    val header = stats(s, now, headerWidth.getOrElse(width))
+    val market = (header +: priceLines) ++ (volumeLine +: band) :+ axisLine
     MarketFrame(market, axis, priceRows)

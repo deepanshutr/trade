@@ -25,6 +25,15 @@ or every 30 seconds. They distinguish missing market details, prices, account
 data, leverage, storage, a pending order and readiness. Unrecognized blocking
 reasons remain a fixed `blocked` category. No worker message or account value is saved.
 
+Polymarket reads have a `polymarket` record once a minute when a count rose: the
+requests started since the last record and the failures by status, `0` for no
+reply and `-1` for a reply Desk could not use. Desk starts at most six requests in
+any sliding minute. A record covers a little over a minute, so it can hold six
+requests at its start and six more a minute later. One record holds at most
+twelve, and above twelve is a defect. The record holds counts only, never a slug,
+a token id or a price. A slug is a market's short name in its web address. A token
+id is the number Polymarket gives each outcome of a market.
+
 The writer has a bounded 1,024-record queue. Input and rendering do not write to
 disk. Lost records are counted, and a stopped writer is reported as unavailable.
 Shutdown drains for at most 500 ms. An incomplete drain marks logging unavailable.

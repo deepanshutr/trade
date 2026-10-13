@@ -110,6 +110,7 @@ object OfflinePlayback:
     val holdFinishedAt = new AtomicLong(0L)
     val forbidden = new ConcurrentLinkedQueue[String]()
     val metadataCalls = new AtomicInteger(0)
+    val polymarketCalls = new AtomicInteger(0)
     def metadata: ujson.Value = ujson.Obj(
       "universe" -> ujson.Arr.from(
         Vector("XMR", "ETH", "BTC", "PAXG").map(c =>
@@ -198,6 +199,47 @@ object OfflinePlayback:
             else "null")
           case other => deny("public request " + other)
 
+    // Polymarket replies from local fakes. Every slug asked for has a market that ends in two
+    // days, and every token is at 54 percent. Each read is counted for the result.
+    def markets(url: String): String =
+      val now = System.currentTimeMillis()
+      val slugs = url
+        .drop(url.indexOf('?') + 1)
+        .split('&')
+        .toVector
+        .filter(_.startsWith("slug="))
+        .map(_.stripPrefix("slug="))
+      // The reader asks for the markets of the wall clock. Ten seconds of slack cover a window
+      // that turns between the reader's clock reading and this one.
+      val current = Vector(now, now - 10000L)
+        .flatMap(at => Polymarket.slugs(at, WorkspaceApp.followed).map(_._3))
+        .toSet
+      slugs.filterNot(current).foreach(slug => deny("polymarket slug " + slug))
+      ujson.write(ujson.Arr.from(slugs.map { s =>
+        ujson.Obj(
+          "slug" -> s,
+          "clobTokenIds" -> ujson.write(ujson.Arr(s"up-$s", s"down-$s")),
+          "outcomes" -> ujson.write(ujson.Arr("Up", "Down")),
+          "eventStartTime" -> java.time.Instant.ofEpochMilli(now - 60000L).toString,
+          "endDate" -> java.time.Instant.ofEpochMilli(now + 2 * 86400000L).toString
+        )
+      }))
+    def midpoints(body: String): String =
+      ujson.write(ujson.Obj.from(ujson.read(body).arr.map(_("token_id").str -> ujson.Str("0.54"))))
+    val polymarketClient
+        : () => (String => Either[Int, String], (String, String) => Either[Int, String]) =
+      () =>
+        (
+          url => { polymarketCalls.incrementAndGet(); Right(markets(url)) },
+          (_, body) => { polymarketCalls.incrementAndGet(); Right(midpoints(body)) }
+        )
+
+    // The quit closes the reader before the result is sent. It gets two seconds to stop.
+    def readerAlive(): Boolean =
+      val reader = Thread.getAllStackTraces.keySet.asScala.find(_.getName == "polymarket-reader")
+      reader.foreach(_.join(2000L))
+      reader.exists(_.isAlive)
+
     val exchange = new Exchange:
       def info(body: ujson.Value): Option[ujson.Value] =
         if body("type").str != "meta" then deny("account request")
@@ -254,6 +296,9 @@ object OfflinePlayback:
             "queue" -> queue.results,
             "forbidden" -> ujson.Arr.from(forbidden.asScala),
             "metadata_calls" -> metadataCalls.get(),
+            "polymarket_calls" -> polymarketCalls.get(),
+            "polymarket_failures" -> Polymarket.failures.values.sum.toDouble,
+            "polymarket_reader_alive" -> readerAlive(),
             "held_work" -> holding,
             "hold_finished" -> holdFinished.get(),
             "hold_finished_ns" -> holdFinishedAt.get().toString
@@ -286,5 +331,6 @@ object OfflinePlayback:
         )
       ,
       queue,
-      keys = KeyStartup.Hooks(home = Path.of(args(2)).toAbsolutePath.getParent)
+      keys = KeyStartup.Hooks(home = Path.of(args(2)).toAbsolutePath.getParent),
+      polymarket = polymarketClient
     )

@@ -197,24 +197,20 @@ class StateSpec extends munit.FunSuite:
       t0 + 900
     )
     assertEquals(b.samples, Vector((t0 / 1000, 102.0)))
-    assertEquals(b.books.map(_._1), Vector(t0 / 1000))
-    assertEquals(b.books.head._2.asks.head.px, "104")
     val c = State.reduce(
       b,
       Event.BookUpdate("XMR", bookAt("100", "106", t0 + 3), fromSocket = true),
       t0 + 1500
     )
     assertEquals(c.samples.map(_._1), Vector(t0 / 1000, t0 / 1000 + 1))
-    assertEquals(c.books.map(_._1), Vector(t0 / 1000, t0 / 1000 + 1))
   }
 
   test("a best bid and ask update samples too") {
     val a = State.reduce(s0, Event.BboUpdate("XMR", lv("10", "1"), lv("12", "1"), t0 + 1), t0 + 1)
     assertEquals(a.samples, Vector((t0 / 1000, 11.0)))
-    assertEquals(a.books.size, 1)
   }
 
-  test("samples older than six hours and books older than fifteen minutes are dropped") {
+  test("samples older than six hours are dropped") {
     val a =
       State.reduce(s0, Event.BookUpdate("XMR", bookAt("100", "102", t0 + 1), fromSocket = true), t0)
     val later = t0 + State.samplesMs + 1000
@@ -225,13 +221,12 @@ class StateSpec extends munit.FunSuite:
         later
       )
     assertEquals(b.samples.map(_._1), Vector(later / 1000))
-    val later2 = t0 + State.booksMs + 1000
+    val later2 = t0 + 901_000L
     val c = State.reduce(
       a,
       Event.BookUpdate("XMR", bookAt("100", "102", later2), fromSocket = true),
       later2
     )
-    assertEquals(c.books.map(_._1), Vector(later2 / 1000))
     assertEquals(c.samples.map(_._1), Vector(t0 / 1000, later2 / 1000))
   }
 
@@ -302,14 +297,14 @@ class StateSpec extends munit.FunSuite:
       Event.BookUpdate("XMR", bookAt("1", "2", t0 + 1), fromSocket = true),
       t0
     )
-    assert(busy.samples.nonEmpty && busy.books.nonEmpty)
+    assert(busy.samples.nonEmpty)
     val typed =
       "BTC".foldLeft(press(busy, Command.StartMarketPrompt))((s, c) =>
         press(s, Command.PromptChar(c))
       )
     val switched = press(typed, Command.PromptSubmit, t0 + 5000)
     assertEquals(switched.coin, "BTC")
-    assert(switched.samples.isEmpty && switched.books.isEmpty)
+    assert(switched.samples.isEmpty)
     assertEquals(switched.offsetSec, 0L)
     assertEquals(switched.since, t0 + 5000)
     assertEquals(switched.zoom, 1)

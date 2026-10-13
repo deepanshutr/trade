@@ -93,7 +93,8 @@ final class Diagnostics private[desk] (
     now: () => Long,
     quoteAgeMs: Long,
     capacity: Int = 1024,
-    monotonic: () => Long = () => TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
+    monotonic: () => Long = () => TimeUnit.NANOSECONDS.toMillis(System.nanoTime()),
+    polymarket: () => (Long, Map[Int, Long]) = () => (Polymarket.requests, Polymarket.failures)
 ) extends AutoCloseable:
   private val queue = new ArrayBlockingQueue[ujson.Obj](capacity)
   private val started = new AtomicBoolean(false)
@@ -118,6 +119,9 @@ final class Diagnostics private[desk] (
   // The live worker's ignored order updates and orders not found, as the last live frame saw
   // them. A new worker starts from zero, so each rise is written once.
   private var ordersSeen = (0L, 0L)
+  // The Polymarket reader's counts at the last minute mark. Each record holds the rise since.
+  private var polymarketSeen = (0L, Map.empty[Int, Long])
+  private var polymarketAt = 0L
   private val writer = Threads.daemon("desk-diagnostics")(run())
 
   private def emit(kind: String, fields: (String, ujson.Value)*): Unit =
@@ -135,6 +139,10 @@ final class Diagnostics private[desk] (
     if !closed.get() && started.compareAndSet(false, true) then
       writerAt.set(monotonic())
       frameAt.set(monotonic())
+      synchronized {
+        polymarketSeen = polymarket()
+        polymarketAt = monotonic()
+      }
       writer.start()
 
   def slow(part: DiagnosticPart, nanos: Long): Unit =
@@ -302,6 +310,21 @@ final class Diagnostics private[desk] (
     if pending != switchStalled then
       emit("switch_health", "state" -> (if pending then "stalled" else "recovered"))
       switchStalled = pending
+    if time - polymarketAt >= 60000L then
+      val (requests, failures) = polymarket()
+      val (seenRequests, seenFailures) = polymarketSeen
+      val rose = failures.toVector
+        .map((status, count) => status -> (count - seenFailures.getOrElse(status, 0L)))
+        .filter(_._2 > 0L)
+        .sortBy(_._1)
+      if requests > seenRequests || rose.nonEmpty then
+        emit(
+          "polymarket",
+          "requests" -> ujson.Num((requests - seenRequests).toDouble),
+          "failures" -> ujson.Obj.from(rose.map((s, n) => s.toString -> ujson.Num(n.toDouble)))
+        )
+      polymarketSeen = (requests, failures)
+      polymarketAt = time
   }
 
   private def run(): Unit =

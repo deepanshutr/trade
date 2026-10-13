@@ -69,7 +69,9 @@ class OfflinePlaybackSpec extends TempDirectorySuite:
           assertEquals(journal, directory.resolve(".local/state/desk"))
           throw new Stop
         },
-        keys = KeyStartup.Hooks(home = directory, stop = (code, _) => fail(s"Desk stopped ($code)"))
+        keys =
+          KeyStartup.Hooks(home = directory, stop = (code, _) => fail(s"Desk stopped ($code)")),
+        polymarket = OfflinePolymarket.client
       )
     }
     assertEquals(constructed, 1)

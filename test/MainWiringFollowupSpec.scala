@@ -83,7 +83,8 @@ class MainWiringFollowupSpec extends munit.FunSuite:
             assertEquals(settings.baseUrl + "/info", "https://api.hyperliquid-testnet.xyz/info")
             throw new Stop
           },
-          keys = KeyStartup.Hooks(home = home, stop = (code, _) => fail(s"Desk stopped ($code)"))
+          keys = KeyStartup.Hooks(home = home, stop = (code, _) => fail(s"Desk stopped ($code)")),
+          polymarket = OfflinePolymarket.client
         )
       }
       assertEquals(calls, 1)

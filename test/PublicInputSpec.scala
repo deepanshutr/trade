@@ -16,18 +16,9 @@ class PublicInputSpec extends munit.FunSuite:
       style: Style
   ): Vector[String] =
     // cols is the chart area here, so the terminal is that plus the outlook and its bar.
-    Screen
-      .renderMarket(
-        s,
-        now,
-        zone,
-        style,
-        Layout
-          .regions(cols + Layout.outlookWidth + 1, rows)
-          .copy(priceRows = rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin)),
-        AxisDecor.plain
-      )
-      .lines
+    val r = Layout.regions(cols + Layout.outlookWidth + 1, rows)
+    val band = Vector.fill(r.band)(" " * (r.left + r.plot))
+    Screen.renderMarket(s, now, zone, style, r, AxisDecor.plain, band).lines
   private val now = 1788345727341L
   private def fixture(name: String): ujson.Value =
     ujson.read(Files.readString(Path.of("fixtures", name)))
@@ -42,7 +33,7 @@ class PublicInputSpec extends munit.FunSuite:
     assertEquals(after.candles, before.candles)
     assertEquals(after.ctx, before.ctx)
     val frames = market(after, 100, 30, Golden.now, ZoneOffset.UTC, Style.mono)
-    assertEquals(frames.size, 20)
+    assertEquals(frames.size, 18)
     assert(frames.forall(line => Chart.plain(line).length == 100))
     after
 
@@ -96,7 +87,7 @@ class PublicInputSpec extends munit.FunSuite:
   private def freshDrawing(text: String): Snapshot =
     val state = State.reduce(Snapshot.initial("XMR", now), Events.parse(text).get, now)
     val frame = market(state, 100, 30, now, ZoneOffset.UTC, Style.mono)
-    assertEquals(frame.size, 20)
+    assertEquals(frame.size, 18)
     assert(frame.forall(line => Chart.plain(line).length == 100))
     state
 
@@ -204,7 +195,8 @@ class PublicInputSpec extends munit.FunSuite:
     assert(axis.lo.isFinite && axis.hi.isFinite)
     assert(State.mid(state.book.get).get.isFinite)
     assert(Gauges.imbalance(state.book.get).productIterator.forall(_.asInstanceOf[Double].isFinite))
-    assert(Gauges.tapeStats(state.tape, now, Vector(14400L)).head._1.get.isFinite)
+    assert(state.tapeMinutes.nonEmpty)
+    assert(state.tapeMinutes.forall(m => m.buy.isFinite && m.sell.isFinite))
     assert(Chart.depthRows(Chart.spans(state.book.get, Map.empty), axis)._1.forall(_.isFinite))
     assert(columns.flatten.forall(_.volume.isFinite))
     assert(

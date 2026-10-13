@@ -10,18 +10,9 @@ class DisplayCleanupSpec extends munit.FunSuite:
       style: Style
   ): Vector[String] =
     // cols is the chart area here, so the terminal is that plus the outlook and its bar.
-    Screen
-      .renderMarket(
-        s,
-        now,
-        zone,
-        style,
-        Layout
-          .regions(cols + Layout.outlookWidth + 1, rows)
-          .copy(priceRows = rows - 13 - 3 * State.refCoins.distinct.count(_ != s.coin)),
-        AxisDecor.plain
-      )
-      .lines
+    val r = Layout.regions(cols + Layout.outlookWidth + 1, rows)
+    val band = Vector.fill(r.band)(" " * (r.left + r.plot))
+    Screen.renderMarket(s, now, zone, style, r, AxisDecor.plain, band).lines
   private val now = Golden.now
   private val zone = java.time.ZoneId.of("UTC")
   test("header keeps the market first and the ping last beside the market prompt") {
@@ -90,7 +81,7 @@ class DisplayCleanupSpec extends munit.FunSuite:
         assertEquals(past.head, live.head)
         assert(
           past(caption)
-            .take(Layout.leftW)
+            .take(38)
             .contains(if mode == ChartMode.Line then "line" else "candles")
         )
   }

@@ -128,7 +128,11 @@ object Polymarket:
       Try {
         val fields = ujson.read(body).obj
         require(fields.nonEmpty)
-        fields.map((token, price) => token -> (BigDecimal(price.str) * 100).toDouble).toMap
+        // A price outside 0 to 1 is no price.
+        fields
+          .map((token, price) => token -> BigDecimal(price.str))
+          .collect { case (token, p) if p >= 0 && p <= 1 => token -> (p * 100).toDouble }
+          .toMap
       }.toEither.left.map(_ => "bad midpoints reply")
 
   /** Reads at most maxBody bytes. A reply over the cap is a failure with status -1. */
@@ -197,11 +201,12 @@ final class PolymarketReader(
   private final case class Snapshot(
       markets: Map[Key, Option[Market]],
       rings: Map[Key, Vector[Point]],
+      newest: Map[Key, String], // the token whose price is the newest point of each ring
       discovered: Boolean,
       discoveryOk: Boolean,
       midpointsOk: Boolean
   )
-  @volatile private var snapshot = Snapshot(Map.empty, Map.empty, false, false, true)
+  @volatile private var snapshot = Snapshot(Map.empty, Map.empty, Map.empty, false, false, true)
   @volatile private var thread = Option.empty[Thread]
 
   // Everything below runs on the reader thread only.
@@ -278,7 +283,10 @@ final class PolymarketReader(
                 )
               case None => rings
           }
-          snapshot = old.copy(rings = rings, midpointsOk = true)
+          val newest = live.collect {
+            case (key, market) if prices.contains(market.upToken) => key -> market.upToken
+          }
+          snapshot = old.copy(rings = rings, newest = old.newest ++ newest, midpointsOk = true)
 
   private def loop(): Unit =
     nextDiscovery = now()
@@ -302,10 +310,16 @@ final class PolymarketReader(
       s.markets.get((coin, window)).flatten match
         case None                                   => State.NoMarket
         case Some(market) if market.endsAt <= now() => State.NoMarket
-        case Some(_)                                =>
-          s.rings.get((coin, window)).filter(_.nonEmpty) match
+        // Ready only once the newest point is the open market's own price.
+        case Some(market) =>
+          val own = s.newest.get((coin, window)).contains(market.upToken)
+          s.rings.get((coin, window)).filter(_.nonEmpty && own) match
             case Some(points) => State.Ready(points, points.last.at)
             case None         => State.Unreachable
+
+  // The ring of a coin and window whatever its market's state, oldest first.
+  def points(coin: String, window: Window): Vector[Point] =
+    snapshot.rings.getOrElse((coin, window), Vector.empty)
 
   def isStale(coin: String, window: Window): Boolean =
     state(coin, window) match

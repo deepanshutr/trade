@@ -132,24 +132,5 @@ object CompactDisplayFixtures:
       now + 30000L
     )
 
-  def inactive(kind: String): Snapshot =
-    val original = snapshot()
-    def changed(series: Map[String, Vector[Candle]]): Map[String, Vector[Candle]] =
-      series.map { (interval, cs) =>
-        val result = kind match
-          case "empty"   => Vector.empty
-          case "partial" => cs.dropRight(2) ++ cs.takeRight(1)
-          case "stale"   => cs.dropRight(1)
-          case "flat"    => cs.map(c => c.copy(o = 100, h = 100, l = 100, c = 100))
-          case _         => cs
-        interval -> result
-      }
-    original.copy(
-      candles = changed(original.candles),
-      refs = original.refs.map { (coin, ref) =>
-        coin -> ref.copy(candles = changed(ref.candles))
-      }
-    )
-
   def draw(s: Snapshot, p: PanelView, style: Style = Style.mono): WorkspaceFrame =
     Workspace.draw(s, trading(s.coin), p, s.cols, s.rows, now, ZoneOffset.UTC, style)

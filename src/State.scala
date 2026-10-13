@@ -93,7 +93,6 @@ final case class Snapshot(
     prompt: Option[String] = None,
     quit: Boolean = false,
     samples: Vector[(Long, Double)] = Vector.empty,
-    books: Vector[(Long, Book)] = Vector.empty,
     since: Long,
     zoom: Int = 0,
     offsetSec: Long = 0L,
@@ -106,7 +105,9 @@ final case class Snapshot(
     candleReceipts: Map[(String, String), Map[Long, Long]] = Map.empty,
     marketPending: Option[(Long, String)] = None,
     marketNotice: Option[String] = None,
-    marketHistory: Vector[(String, Ref)] = Vector.empty
+    marketHistory: Vector[(String, Ref)] = Vector.empty,
+    bookMinutes: Vector[MinuteBook] = Vector.empty,
+    tapeMinutes: Vector[MinuteTape] = Vector.empty
 )
 
 object Snapshot:
@@ -170,7 +171,6 @@ object State:
     else "1w"
 
   val samplesMs: Long = 6L * 3600_000L
-  val booksMs: Long = 900_000L
   val tapeMs: Long = 4L * 3600_000L
 
   def lastMsgAt(h: Health): Long = h match
@@ -190,7 +190,10 @@ object State:
       val samples = mid(b) match
         case Some(m) => keep(s.samples, sec, samplesMs) :+ (sec, m)
         case None    => s.samples.filter(_._1 >= sec - samplesMs / 1000)
-      s.copy(samples = samples, books = keep(s.books, sec, booksMs) :+ (sec, b))
+      s.copy(
+        samples = samples,
+        bookMinutes = Shares.addBook(s.bookMinutes, now, Gauges.imbalance(b)._2)
+      )
     }
 
   private def addCandle(
@@ -248,17 +251,20 @@ object State:
       if coin != s.coin then fresh
       else
         val seen = scala.collection.mutable.HashSet.empty[(Long, Long)]
-        def sorted(batch: Vector[Trade]): Vector[Trade] = batch
+        def unseen(batch: Vector[Trade]): Vector[Trade] = batch
           .filter(_.time >= now - tapeMs)
           .filter(t => t.id.forall(id => seen.add((t.time, id))))
-          .sortBy(-_.time)
-          .take(tapeCap)
-        val tape =
+        def sorted(batch: Vector[Trade]): Vector[Trade] = batch.sortBy(-_.time).take(tapeCap)
+        val (tape, added) =
           if s.tape.headOption.forall(head => ts.forall(_.time > head.time)) then
             val expired = s.tape.reverseIterator.takeWhile(_.time < now - tapeMs).size
-            (sorted(ts) ++ s.tape.dropRight(expired)).take(tapeCap)
-          else sorted(s.tape ++ ts)
-        fresh.copy(tape = tape)
+            val added = sorted(unseen(ts))
+            ((added ++ s.tape.dropRight(expired)).take(tapeCap), added)
+          else
+            val old = unseen(s.tape)
+            val added = unseen(ts)
+            (sorted(old ++ added), added)
+        fresh.copy(tape = tape, tapeMinutes = Shares.addTrades(s.tapeMinutes, added))
     case Event.CandleUpdate(coin, interval, c) =>
       val key = (coin, interval)
       val updated = s.candleReceipts.getOrElse(key, Map.empty) + (c.t -> now)
@@ -336,10 +342,11 @@ object State:
             ctx = None,
             prompt = None,
             samples = next.samples,
-            books = Vector.empty,
             since = now,
             offsetSec = 0L,
-            marketHistory = history
+            marketHistory = history,
+            bookMinutes = Vector.empty,
+            tapeMinutes = Vector.empty
           )
         case _ => s.copy(prompt = None)
     case Command.ZoomOut => s.copy(zoom = (s.zoom + 1).min(zooms.size - 1))

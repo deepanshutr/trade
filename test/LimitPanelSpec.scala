@@ -352,7 +352,7 @@ class LimitPanelSpec extends munit.FunSuite:
       // The trace alone, with no fill and no ticket line over it.
       val bare = frame(live.copy(fills = Vector.empty), panel, cols, rows, Style.colour)
       val tradeTop = rows - 12
-      val priceRows = (1 to rows - 21).toSet
+      val priceRows = (1 to Layout.regions(cols, rows).priceRows).toSet
       // Live and prop draw every row the same but the panel's rows 1 to 7.
       for i <- 0 until rows if i < tradeTop || i >= tradeTop + 7 do
         assertEquals(p.lines(i), l.lines(i), s"prop row $i")
@@ -589,8 +589,8 @@ class LimitPanelSpec extends munit.FunSuite:
 
   test("the status row shows the outcome word and the marks the axis left off") {
     assertEquals(row(frame(), 4), "Filled $21.84 #7")
-    // Ten sells above a current price on row 6 of 9: six keep a row and four are left off.
-    val sells = (1 to 10).toVector.map(i =>
+    // Thirteen sells above a current price on row 9 of 13: nine keep a row and four are left off.
+    val sells = (1 to 13).toVector.map(i =>
       order(s"s$i", Side.Sell, (BigDecimal("551.00") + BigDecimal(i) / 10).toString, "0.01")
     )
     val crowded = frame(live.copy(resting = sells), limit.copy(ticket = None))
@@ -602,12 +602,12 @@ class LimitPanelSpec extends munit.FunSuite:
 
   test("the axis rows take their colours: entry and ticket bold in their side, the price bold") {
     val lines = frame(style = Style.colour).lines
-    assert(lines(8).startsWith(Style.colour.bid + Screen.bold + " $21.84   546.00,"), lines(8))
-    assert(lines(6).startsWith(Style.colour.ask + Screen.bold + " $10.92   546.10'"), lines(6))
+    assert(lines(11).startsWith(Style.colour.bid + Screen.bold + " $21.84   546.00,"), lines(11))
+    assert(lines(9).startsWith(Style.colour.ask + Screen.bold + " $10.92   546.10'"), lines(9))
     assert(lines(1).startsWith(Style.colour.ask + " $11.04   552.00 "), lines(1))
-    assert(lines(9).startsWith(Style.colour.bid + "  $5.44   544.00 "), lines(9))
-    assert(lines(7).startsWith(Screen.bold + "          546.10"), lines(7))
-    assertEquals(Chart.plain(lines(4)).slice(17, 38), Chart.FULL * 21)
+    assert(lines(13).startsWith(Style.colour.bid + "  $5.44   544.00 "), lines(13))
+    assert(lines(10).startsWith(Screen.bold + "          546.10"), lines(10))
+    assertEquals(Chart.plain(lines(6)).slice(17, 38), Chart.FULL * 21)
     assert(!lines.exists(_.contains(Style.colour.gold + " $")))
     assert(!lines.exists(_.contains(Screen.inverse)))
   }
@@ -631,19 +631,19 @@ class LimitPanelSpec extends munit.FunSuite:
     val one = frame(cancelling, limit.copy(ticket = None), style = Style.colour).lines(1)
     assert(one.startsWith(Style.colour.ask + Screen.dim + " $11.04" + Screen.reset), one)
     val stale = frame(live.copy(stale = true), limit.copy(ticket = None), style = Style.colour)
-    for (i, ink) <- Vector(1 -> Style.colour.ask, 8 -> Style.colour.bid) do
+    for (i, ink) <- Vector(1 -> Style.colour.ask, 11 -> Style.colour.bid) do
       assert(stale.lines(i).startsWith(ink + Screen.dim), stale.lines(i))
   }
 
-  test("the gauges fill the band's right region with no key row") {
+  test("the rails fill the band's right region with the key") {
+    val key = "■ XMR  ■ buy  ■ sell  ▲ buy fill  ▼ sell fill  ■ 5m  ■ 15m  ■ 1h  ■ 4h  ■ 1d  " +
+      "◆ book  ● tape  ■ BTC  ■ gold  ▲ change  ◇ vs average  ◆ correlation  ● Polymarket  ◉ overlap"
     for (cols, rows, width) <- Vector((100, 30, 61), (120, 40, 81)) do
       val f = frame(cols = cols, rows = rows)
       val right = f.lines.drop(rows - 12).map(_.drop(39))
-      val expected = Workspace.indicatorRows(pinned, now, (width - 1) / 2, Style.mono)
-      assertEquals(right, expected.map(Chart.fit(_, width)))
-      assert(right.take(6).forall(_.startsWith("BOOK")), right)
-      assert(right.drop(6).forall(_.startsWith("TAPE")), right)
-      assert(right.forall(_.length == width))
+      assertEquals(right.head, "◆ book  ● tape  share of buying".padTo(width, ' '))
+      assertEquals(right.last, key.take(width))
+      assert(right.forall(_.length == width), right)
   }
 
   test("the frame records the axis it drew, its cursor, order type and ticket") {
@@ -653,10 +653,10 @@ class LimitPanelSpec extends munit.FunSuite:
       drawn.marks.map(m => (m.price, m.row, m.kind)),
       Vector(
         (BigDecimal("552.00"), 0, AxisKind.Sell),
-        (BigDecimal("546.10"), 5, AxisKind.Ticket),
-        (BigDecimal("546.095"), 6, AxisKind.Current),
-        (BigDecimal("546.00"), 7, AxisKind.Entry),
-        (BigDecimal("544.00"), 8, AxisKind.Buy)
+        (BigDecimal("546.10"), 8, AxisKind.Ticket),
+        (BigDecimal("546.095"), 9, AxisKind.Current),
+        (BigDecimal("546.00"), 10, AxisKind.Entry),
+        (BigDecimal("544.00"), 12, AxisKind.Buy)
       )
     )
     assertEquals(f.focus, Some(1))
@@ -666,9 +666,9 @@ class LimitPanelSpec extends munit.FunSuite:
     val elsewhere = frame(panel = limit.copy(ticket = Some(ticketAt("95000", coin = "BTC"))))
     assertEquals(elsewhere.ticket, None)
     assert(!band(elsewhere).exists(_.contains("LIMIT")))
-    // At nineteen rows the same marks sit on rows 0, 12, 13, 14 and 18.
+    // At twenty one rows the same marks sit on rows 0, 14, 15, 16 and 20.
     val tall = frame(cols = 120, rows = 40).axis.get
-    assertEquals(tall.marks.map(_.row), Vector(0, 12, 13, 14, 18))
+    assertEquals(tall.marks.map(_.row), Vector(0, 14, 15, 16, 20))
   }
 
   test("a sell at the current price keeps its row above it, at the top of the axis") {
@@ -695,22 +695,22 @@ class LimitPanelSpec extends munit.FunSuite:
   test("own fills and the ticket line are drawn in the plot, never in view") {
     val lines = frame(style = Style.colour).lines
     // Two seconds a cell: the buy 11 s back is in cell 17, the sell 4 s back in cell 20.
-    assertEquals(Chart.plain(lines(7)).charAt(38 + 17), '▲')
-    assertEquals(Chart.plain(lines(6)).charAt(38 + 20), '▼')
-    assert(lines(7).contains(Style.colour.bid + Screen.bold + "▲"), lines(7))
-    // The ticket at 546.10 has true row 6, and its dots fill that row's empty cells.
-    assert(Chart.plain(lines(7)).drop(38).contains('⠒'), lines(7))
-    assert(lines(7).contains(Style.colour.ask + "⠒"), lines(7))
+    assertEquals(Chart.plain(lines(10)).charAt(38 + 17), '▲')
+    assertEquals(Chart.plain(lines(8)).charAt(38 + 20), '▼')
+    assert(lines(10).contains(Style.colour.bid + Screen.bold + "▲"), lines(10))
+    // The ticket at 546.10 has true row 9, and its dots fill that row's empty cells.
+    assert(Chart.plain(lines(10)).drop(38).contains('⠒'), lines(10))
+    assert(lines(10).contains(Style.colour.ask + "⠒"), lines(10))
     // View draws the trace alone, as live does with no fill and no ticket.
     def plot(lines: Vector[String]): Vector[String] =
-      lines.slice(1, 10).map(line => Chart.plain(line).slice(38, 61))
+      lines.slice(1, 14).map(line => Chart.plain(line).slice(38, 61))
     val view = frame(panel = limit.copy(mode = "VIEW"), style = Style.colour).lines
     val bare = frame(live.copy(fills = Vector.empty), limit.copy(ticket = None)).lines
     assertEquals(plot(view), plot(bare))
     assert(plot(frame().lines) != plot(bare))
     // While scrubbing ten seconds back, the right edge is ten seconds back.
     val scrubbed = frame(s = pinned.copy(offsetSec = 10)).lines
-    assertEquals(Chart.plain(scrubbed(7)).charAt(38 + 22), '▲')
+    assertEquals(Chart.plain(scrubbed(10)).charAt(38 + 22), '▲')
     // Candles take 250 ms a cell for each second of the zoom, 15 s at one minute candles, so a
     // buy 31 s back is two cells back.
     val candles = pinned.copy(chartMode = ChartMode.Candles, zoom = State.candleMinZoom)
@@ -718,7 +718,7 @@ class LimitPanelSpec extends munit.FunSuite:
     val older = live.copy(fills =
       Vector(Fill("XMR", Side.Buy, now - 31_000, BigDecimal("546.00"), BigDecimal("0.2")))
     )
-    assertEquals(Chart.plain(frame(older, s = candles).lines(7)).charAt(38 + 20), '▲')
+    assertEquals(Chart.plain(frame(older, s = candles).lines(10)).charAt(38 + 20), '▲')
   }
 
   test("the drawn frame lets the controller cancel the row it drew and place the ticket") {
@@ -772,9 +772,11 @@ class LimitPanelSpec extends munit.FunSuite:
   }
 
   test("the chart block reaches the band at every market, with no blank row above it") {
-    // XMR shows two reference markets and BTC and PAXG one each, so their price rows differ.
-    for (coin, priceRows) <- Vector("XMR" -> 21, "BTC" -> 18, "PAXG" -> 18); rows <- Vector(30, 40)
+    // Every market draws the same rows: the price rows, the volume row, the band rows and the
+    // time axis, two band rows below 40 rows and four from 40.
+    for coin <- Vector("XMR", "BTC", "PAXG"); rows <- Vector(30, 40)
     do
+      val band = if rows >= 40 then 4 else 2
       val f = Workspace.draw(
         Snapshot.initial(coin, now),
         TradingView(coin, message = "Ready"),
@@ -785,7 +787,14 @@ class LimitPanelSpec extends munit.FunSuite:
         zone,
         Style.mono
       )
-      assertEquals(f.lines(rows - priceRows + 1).take(38), " " * 31 + "volume ", coin)
+      assertEquals(f.lines(rows - 14 - band).take(38), " " * 31 + "volume ", coin)
+      // With no odds the band reads unreachable on its first row and 0 on its last.
+      val label = " " * 10 + "Polymarket unreachable  100 "
+      assertEquals(f.lines(rows - 13 - band).take(38), label, coin)
+      assertEquals(f.lines(rows - 14).take(38), " " * 36 + "0 ", coin)
+      if rows >= 40 then
+        assertEquals(f.lines(rows - 15).take(38), " " * 35 + "50 ", coin)
+        assertEquals(f.lines(rows - 16).take(38), " " * 38, coin)
       assertEquals(f.lines(rows - 13).take(38), " " * 24 + "c line 2s/col ", coin)
       assert(f.lines(rows - 12).startsWith("VIEW " + coin), coin)
   }
@@ -816,11 +825,11 @@ class LimitPanelSpec extends munit.FunSuite:
     val f = frame(panel = held)
     assertEquals(row(f, 10), "Size $7.65 of $21.84 held  fee $0.01")
     // The ticket's axis row names the same money.
-    assert(Chart.plain(f.lines(6)).startsWith("  $7.65   546.10'"), f.lines(6))
+    assert(Chart.plain(f.lines(9)).startsWith("  $7.65   546.10'"), f.lines(9))
     val refused = ticketAt("546.10").copy(notice = Some(TradingWorker.openingPausedMessage))
     val g = frame(panel = limit.copy(ticket = Some(refused)))
     assertEquals(row(g, 10), TradingWorker.openingPausedMessage)
-    assert(Chart.plain(g.lines(6)).startsWith("     --   546.10'"), g.lines(6))
+    assert(Chart.plain(g.lines(9)).startsWith("     --   546.10'"), g.lines(9))
     // A refusal is shown as text alone, its first line and no control bytes.
     val hostile = ticketAt("546.10").copy(notice = Some("Refused " + 27.toChar + "[2J\nsecond"))
     val h = frame(panel = limit.copy(ticket = Some(hostile)))
@@ -958,7 +967,7 @@ class LimitPanelSpec extends munit.FunSuite:
   test("a fill on another market leaves this market's plot as it is") {
     def plot(fills: Vector[Fill]): Vector[String] =
       frame(live.copy(fills = fills), limit.copy(ticket = None)).lines
-        .slice(1, 10)
+        .slice(1, 14)
         .map(line => Chart.plain(line).drop(38))
     val btc = Fill("BTC", Side.Buy, now - 11_000, BigDecimal("95000"), BigDecimal("0.001"))
     assertEquals(plot(Vector(btc)), plot(Vector.empty))
@@ -988,10 +997,10 @@ class LimitPanelSpec extends munit.FunSuite:
     val marked = frame(liquidated, panel)
     val bare = frame(plain, panel)
     // Far below the range, it sits on the bottom price row, shown above its true place.
-    assertEquals(Chart.plain(marked.lines(9)).take(17), "          500.00'")
+    assertEquals(Chart.plain(marked.lines(13)).take(17), "          500.00'")
     // The scale, the depth bars and the plot beside every price row are as they were.
     def beside(f: WorkspaceFrame): Vector[String] =
-      f.lines.slice(1, 10).map(Chart.plain(_).drop(17))
+      f.lines.slice(1, 14).map(Chart.plain(_).drop(17))
     assertEquals(beside(marked), beside(bare))
     assertEquals(
       marked.axis.map(OrdersAxis.selectable),
@@ -1001,8 +1010,8 @@ class LimitPanelSpec extends munit.FunSuite:
     // In colour it takes the sell colour of a long's close, marked no weight.
     val coloured = frame(liquidated, panel, style = Style.colour)
     assert(
-      coloured.lines(9).startsWith(Style.colour.ask + "          500.00'" + Screen.reset),
-      coloured.lines(9)
+      coloured.lines(13).startsWith(Style.colour.ask + "          500.00'" + Screen.reset),
+      coloured.lines(13)
     )
     // View draws no liquidation, as it draws no entry.
     val viewed = frame(liquidated, PanelView(mode = "VIEW"))
@@ -1012,7 +1021,7 @@ class LimitPanelSpec extends munit.FunSuite:
   test("the ticket's and the entry's prices widen the scale, and the ticket line takes its row") {
     // The plain numbers: a price in columns 8 to 15 with no amount before it and no tie after it.
     def plain(f: WorkspaceFrame): Vector[Double] =
-      f.lines.slice(1, 10).map(Chart.plain).collect {
+      f.lines.slice(1, 14).map(Chart.plain).collect {
         case line
             if line.take(8).isBlank && line.charAt(16) == ' ' && line.slice(8, 16).trim.nonEmpty =>
           line.slice(8, 16).trim.toDouble
@@ -1021,11 +1030,11 @@ class LimitPanelSpec extends munit.FunSuite:
     assert(plain(high).exists(_ > 553), plain(high))
     val low = frame(live.copy(portfolio = live.portfolio.copy(entry = Some(BigDecimal("530.00")))))
     assert(plain(low).exists(_ < 543), plain(low))
-    // 550.50 is on true row 1 of 543.60 to 552.40, where the rounding row is 2.
+    // 550.50 is on true row 2 of 543.60 to 552.40 at 13 rows, where the rounding row is 3.
     val near = limit.copy(ticket = Some(ticketAt("550.50", quantity = Some("0.1"), reduce = true)))
     val lines = frame(panel = near, style = Style.colour).lines
-    assert(lines(2).contains(Style.colour.ask + "⠒"), lines(2))
-    assert(!lines(3).contains(Style.colour.ask + "⠒"), lines(3))
+    assert(lines(3).contains(Style.colour.ask + "⠒"), lines(3))
+    assert(!lines(4).contains(Style.colour.ask + "⠒"), lines(4))
   }
 
   test("the Live label and a disabled CLOSE follow their bindings") {
