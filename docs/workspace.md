@@ -1,7 +1,7 @@
 # Trading workspace
 
-Run `desk XMR --prop` for prop trading on Monero, `desk XMR` for viewing, or
-`desk XMR --trade` for the configured real account. Prop trading simulates fills
+Run `trade XMR --prop` for prop trading on Monero, `trade XMR` for viewing, or
+`trade XMR --trade` for the configured real account. Prop trading simulates fills
 in a local wallet. Press `s` for settings: sizes, slippage, the trading key, the
 owner and its approval, funding and key bindings. No command-line flag is needed
 after install. See [Settings](#settings) and [live trading settings](trading.md).
@@ -370,7 +370,7 @@ The order result log keeps the most recent 1000 prop and live results.
 Order outcomes alone are appended to `order-results.jsonl` for replay, with a separate
 `order-results.lock` held during each append. Two view-only desks may run at once. Account files, public data, diagnostics and
 live recovery state use separate locks. Unreadable saved state is preserved.
-Public recording retains up to seven days or one GB. Gaps remain gaps. Run `desk XMR --record` for the
+Public recording retains up to seven days or one GB. Gaps remain gaps. Run `trade XMR --record` for the
 background public recorder. Inspect its Mac service with `python3 tools/recorder.py`.
 
 The interactive process writes private diagnostic records under `diagnostics/`

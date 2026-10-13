@@ -85,7 +85,7 @@ class MessageHistoryRemovalSpec extends TempDirectorySuite:
     try
       assert(child.waitFor(20, TimeUnit.SECONDS), "workspace startup timed out")
       val output = Files.readString(log)
-      assert(output.contains("desk needs a terminal"), output)
+      assert(output.contains("Desk needs a terminal"), output)
       assert(!output.contains("Desk message storage is unavailable"), output)
       assertEquals(Files.readString(saved), legacy)
     finally

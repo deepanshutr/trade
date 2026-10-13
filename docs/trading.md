@@ -185,7 +185,13 @@ mode is `600`, and every change replaces it in one atomic write. Neither file ho
 private value.
 
 The key helper keeps the only Keychain write. `make install` copies it to
-`~/.local/lib/desk-keychain.py` and writes the launcher with the Python it will use.
+`~/.local/lib/desk-keychain.py` and writes the launcher `~/.local/bin/trade` with the
+Python it will use. The command is `trade` on every system, because Windows opens
+Display settings for a bare `desk`. In `~/.local/bin` the install replaces `trade` or
+removes `desk` only when its text names `~/.local/lib/desk.jar`, as every earlier launcher
+did. So a `desk` from an earlier install is removed, with one line saying so, and anything
+else by that name stays. A `~/.local/bin/trade` that does not name the jar stops the
+install before anything is written. Rename or remove it, then install again.
 Run `make install DESK_VAULT=/absolute/path/to/the/vault` once to give settings the
 owner tooling. The launcher then exports `DESK_VAULT` next to the other two variables.
 The path must be absolute and is checked the same way.
@@ -236,7 +242,7 @@ transfers between balances within the same account. The local restriction does
 not constrain a key used outside Desk. See the venue's
 [agent-transfer documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint#agent-send-asset).
 
-Start `desk XMR --trade`, or select Live and confirm its account mode. XMR is the
+Start `trade XMR --trade`, or select Live and confirm its account mode. XMR is the
 venue's Monero symbol. The panel identifies the current trading mode and market.
 Check the owner in the local settings and the address on the key screen before enabling
 this mode.
