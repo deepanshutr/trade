@@ -609,6 +609,46 @@ that the group or others can read, such as one made by hand with mode 755, refus
 every write with "local storage must be private"
 and the folder's path, and nothing changes on disk. Run `chmod 700` on that folder once.
 
+## Install
+
+`make install` builds the jar, copies it to `~/.local/lib/desk.jar` and writes the
+launcher `~/.local/bin/trade`. The jar is copied beside the old one and renamed into
+place, so a running Desk keeps reading the old jar until it restarts. The key helper and
+`DESK_VAULT` are described in [live trading settings](trading.md).
+
+Every Scala target in the Makefile, `check` and `build` included, runs with the build
+server off. `DESK_JAVA_HOME` names the Java that builds and runs Desk, as the absolute
+folder that holds `bin/java`. Every Scala CLI call that compiles or runs then uses that
+Java, so Scala CLI fetches none, and the launcher records its `bin/java`. A value that is
+relative, holds a quote, backtick, backslash, dollar sign or closing brace, or has no
+executable `bin/java` stops make before anything is built or written. `DESK_JAVA` set when Desk
+starts still wins.
+
+### macOS
+
+The launcher uses Homebrew's Java, `/opt/homebrew/opt/openjdk/bin/java`, unless
+`DESK_JAVA_HOME` names another. The install changes no shell file.
+
+### Linux
+
+`DESK_JAVA_HOME` is required on every build, test and install target. Without it make
+stops before Scala CLI runs or anything is written. For the install command, put first
+on PATH the `bin` folder of the Python environment that holds the key helper's
+libraries, so the launcher records that Python:
+
+```sh
+PATH="/absolute/path/to/venv/bin:$PATH" make install DESK_JAVA_HOME=/absolute/path/to/jdk-21
+```
+
+The install adds two lines to `~/.bashrc` once: a comment that names Desk, and a line
+that puts `~/.local/bin` at the end of PATH. Each new interactive bash, as Konsole starts
+it, then finds `trade`, and a system command of the same name still wins. A
+`~/.bashrc` that cannot take the lines, such as a read-only file, a file that cannot be
+read or a link to a missing file, stops the install before anything is written. A terminal that was open before the
+install needs `. ~/.bashrc`. Other shells, such as zsh or fish,
+and programs started outside a terminal need the folder on PATH by hand. After a Java
+upgrade moves its folder, run `make install` again.
+
 ## Windows
 
 Desk runs on Windows in prop and view. Live trading, key setup, owner steps, sound and
