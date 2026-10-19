@@ -276,10 +276,14 @@ function New-Case {
   $case
 }
 
+# Windows reports a stopped stand-in as exited a moment before it lets go of its program file,
+# so the removal is tried again every 50 ms for up to 5 seconds.
 function Remove-Case {
   param($Subject)
   Remove-TestKey $Subject.Key
-  if (Test-Path -LiteralPath $Subject.Root) { Remove-Item -LiteralPath $Subject.Root -Recurse -Force }
+  for ($try = 1; Test-Path -LiteralPath $Subject.Root; $try++) {
+    try { Remove-Item -LiteralPath $Subject.Root -Recurse -Force } catch { if ($try -ge 100) { throw }; Start-Sleep -Milliseconds 50 }
+  }
 }
 
 function Assert-Calls {
