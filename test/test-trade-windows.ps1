@@ -285,6 +285,7 @@ function Remove-Case {
   for ($try = 1; $try -le 100 -and (Test-Path -LiteralPath $Subject.Root); $try++) {
     try { Remove-Item -LiteralPath $Subject.Root -Recurse -Force -ErrorAction Stop } catch { if ($try -eq 100) { throw }; Start-Sleep -Milliseconds 50 }
   }
+  if (Test-Path -LiteralPath $Subject.Root) { throw "the case folder $($Subject.Root) stayed after 100 removals" }
 }
 
 function Assert-Calls {
