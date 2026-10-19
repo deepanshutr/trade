@@ -42,18 +42,20 @@ function Remove-TradePath {
   @($kept) -join ';'
 }
 
-# Reads Path from the open key with its %Name% parts kept. Only REG_EXPAND_SZ passes, since a
-# plain string would stop Windows filling in those parts.
+# Reads Path from the open key with its %Name% parts kept. Only REG_EXPAND_SZ and REG_SZ pass.
+# Windows ships REG_EXPAND_SZ, and some installers rewrite it as REG_SZ with every entry expanded.
 function Read-TradePath {
   param($Key)
-  if ($Key.GetValueKind('Path') -ne [Microsoft.Win32.RegistryValueKind]::ExpandString) {
-    throw "The Path value in $($Key.Name) is not REG_EXPAND_SZ, so nothing changed."
+  $kind = $Key.GetValueKind('Path')
+  if ($kind -ne [Microsoft.Win32.RegistryValueKind]::ExpandString -and $kind -ne [Microsoft.Win32.RegistryValueKind]::String) {
+    throw "The Path value in $($Key.Name) is neither REG_EXPAND_SZ nor REG_SZ, so nothing changed."
   }
   [string]$Key.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
 }
 
-# Adds the folder to Path in the open key, or removes it with -Remove. Writes REG_EXPAND_SZ only
-# when the value changes, and returns whether it wrote.
+# Adds the folder to Path in the open key, or removes it with -Remove. Writes only when the value
+# changes, in the kind it was read, so Windows reads every other entry as before. Returns whether
+# it wrote.
 # [Environment]::SetEnvironmentVariable is never used. In Windows PowerShell 5.1 it writes a plain
 # string, and its read side expands every entry.
 function Update-TradePath {
@@ -63,7 +65,7 @@ function Update-TradePath {
   if ($new -ceq $raw) { return $false }
   # A remove can leave no entry when the folder was the only one. That value is never written.
   Assert-TradeValue $new
-  $Key.SetValue('Path', $new, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+  $Key.SetValue('Path', $new, $Key.GetValueKind('Path'))
   $true
 }
 
