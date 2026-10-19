@@ -54,8 +54,8 @@ function Read-TradePath {
 }
 
 # Adds the folder to Path in the open key, or removes it with -Remove. Writes only when the value
-# changes, in the kind it was read, so Windows reads every other entry as before. Returns whether
-# it wrote.
+# changes, in the kind the value already has, so Windows reads every other entry as before.
+# Returns whether it wrote.
 # [Environment]::SetEnvironmentVariable is never used. In Windows PowerShell 5.1 it writes a plain
 # string, and its read side expands every entry.
 function Update-TradePath {

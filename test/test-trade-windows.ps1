@@ -270,19 +270,20 @@ function New-Case {
   Write-TestFile (Join-Path $case.Image 'app\desk.jar') 'new jar'
   Write-TestFile (Join-Path $case.Image 'runtime\release') 'new runtime'
   Write-TestFile (Join-Path $case.Folder 'Desk.exe') 'old launcher'
-  Write-TestFile (Join-Path $case.Folder 'app\desk.jar') 'old jar'
+  # A length unlike the new jar's, so a listing shows the old jar replaced.
+  Write-TestFile (Join-Path $case.Folder 'app\desk.jar') 'old desk jar'
   $case.Key = New-TestKey $base 'ExpandString'
   $script:calls = 0
   $case
 }
 
-# Windows reports a stopped stand-in as exited a moment before it lets go of its program file,
-# so the removal is tried again every 50 ms for up to 5 seconds.
+# On Windows a stopped stand-in's program file was seen to stay locked for up to about 120 ms
+# after the exit was reported, so the removal is tried again every 50 ms for up to 5 seconds.
 function Remove-Case {
   param($Subject)
   Remove-TestKey $Subject.Key
-  for ($try = 1; Test-Path -LiteralPath $Subject.Root; $try++) {
-    try { Remove-Item -LiteralPath $Subject.Root -Recurse -Force } catch { if ($try -ge 100) { throw }; Start-Sleep -Milliseconds 50 }
+  for ($try = 1; $try -le 100 -and (Test-Path -LiteralPath $Subject.Root); $try++) {
+    try { Remove-Item -LiteralPath $Subject.Root -Recurse -Force -ErrorAction Stop } catch { if ($try -eq 100) { throw }; Start-Sleep -Milliseconds 50 }
   }
 }
 
@@ -417,6 +418,14 @@ Invoke-Check 'pure the remove refuses to leave the PATH with no entry and writes
   Assert-True ($fake.Writes -eq 0) "the fake key got $($fake.Writes) writes"
 }
 
+# The library never calls SetEnvironmentVariable, which in Windows PowerShell 5.1 writes a plain
+# string. A call with the User or Machine target cannot run safely here, so this reads the code,
+# comment lines left out.
+Invoke-Check 'pure the library never calls SetEnvironmentVariable' {
+  $calls = @(Get-Content -LiteralPath (Join-Path $tools 'trade-windows.ps1') | Where-Object { $_ -notmatch '^\s*#' -and $_ -match 'SetEnvironmentVariable' })
+  Assert-True ($calls.Count -eq 0) ('found: ' + ($calls -join ' / '))
+}
+
 # A removal can stop after the jar, when a terminal still works in the folder. The folder left
 # holds no file, and both scripts must still accept it.
 Invoke-Check 'pure a folder that holds no file passes the Desk folder check and is removed' {
@@ -496,6 +505,13 @@ if (-not $onWindows) {
       Assert-Throws { Update-TradePath $key $F -Remove } @('REG_SZ', 'REG_EXPAND_SZ')
       Assert-Same (Get-RawPath $key) $base
       Assert-Same (Get-PathKind $key) 'MultiString'
+    }
+    Invoke-Check 'B3 a DWord value throws and stays as it was' {
+      $key.SetValue('Path', 5, [Microsoft.Win32.RegistryValueKind]::DWord)
+      Assert-Throws { Update-TradePath $key $F } @('REG_SZ', 'REG_EXPAND_SZ')
+      Assert-Throws { Update-TradePath $key $F -Remove } @('REG_SZ', 'REG_EXPAND_SZ')
+      Assert-Same (Get-RawPath $key) '5'
+      Assert-Same (Get-PathKind $key) 'DWord'
     }
   } finally {
     Remove-TestKey $key
