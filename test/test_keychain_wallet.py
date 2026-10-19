@@ -792,6 +792,8 @@ class InstallLauncherTests(unittest.TestCase):
 
     HOME is set both in the environment and on the make command line, and a dry run
     comes first so a recipe that names the build or the real home stops the test.
+    A stand-in uname that prints Darwin comes first on every PATH, so the class runs alike
+    on the Mac and on Linux, where make needs a named Java.
     """
 
     def setUp(self):
@@ -802,22 +804,30 @@ class InstallLauncherTests(unittest.TestCase):
         self.home.mkdir()
         self.bin = self.root / "bin"
         self.args = self.root / "python-args"
+        self.uname = self.root / "uname"
+        self.uname.mkdir()
+        (self.uname / "uname").write_text(
+            "#!/bin/sh\n[ \"$#\" = 1 ] && [ \"$1\" = -s ] || exit 1\nprintf '%s\\n' Darwin\n")
+        (self.uname / "uname").chmod(0o755)
 
     def fake_python(self, directory, status=0, executable=None):
         """A python3 that records its arguments. Asked for sys.executable it prints
-        the given path, or its own path, which is what a real python3 reports."""
+        the given path, or its own path, which is what a real python3 reports. The library
+        import alone exits with status, so only the import check can stop the install."""
         directory.mkdir(parents=True, exist_ok=True)
         python = directory / "python3"
         reported = str(python) if executable is None else str(executable)
         python.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" >> '" + str(self.args)
                           + "'\ncase \"$2\" in *sys.executable*) printf '%s\\n' '" + reported
-                          + "';; esac\nexit " + str(status) + "\n")
+                          + "';; esac\ncase \"$2\" in 'import cryptography'*) exit " + str(status)
+                          + ";; esac\n")
         python.chmod(0o755)
         return python
 
     def make(self, *arguments, path=None, home=None):
         home = home or self.home
-        env = {"HOME": str(home), "PATH": path or str(self.bin) + ":/usr/bin:/bin"}
+        env = {"HOME": str(home),
+               "PATH": str(self.uname) + ":" + (path or str(self.bin) + ":/usr/bin:/bin")}
         return subprocess.run([MAKE, *arguments, "HOME=" + str(home)], cwd=ROOT, env=env,
                               capture_output=True, text=True, timeout=60)
 
@@ -1003,10 +1013,14 @@ class InstallLauncherTests(unittest.TestCase):
         odd_python = self.fake_python(self.root / "a$b").parent
         odd_home = self.root / "home`x"
         odd_home.mkdir()
+        # A brace would end the ${NAME:-value} the launcher writes.
+        brace_home = self.root / "home}x"
+        brace_home.mkdir()
         self.fake_python(self.bin)
         for name, options, home in (
                 ("python path", {"path": str(odd_python) + ":/usr/bin:/bin"}, self.home),
-                ("home path", {"home": odd_home}, odd_home)):
+                ("home path", {"home": odd_home}, odd_home),
+                ("home path with a brace", {"home": brace_home}, brace_home)):
             with self.subTest(name):
                 done = self.install(**options)
                 self.assertNotEqual(done.returncode, 0)
@@ -1073,7 +1087,8 @@ class InstallLauncherTests(unittest.TestCase):
 
     def test_a_reported_interpreter_that_could_change_the_launcher_stops_the_install(self):
         for name, reported in (("dollar", "/opt/a$b/python3"), ("quote", '/opt/a"b/python3'),
-                               ("backtick", "/opt/a`b/python3"), ("backslash", "/opt/a\\b/python3")):
+                               ("backtick", "/opt/a`b/python3"), ("backslash", "/opt/a\\b/python3"),
+                               ("brace", "/opt/a}b/python3")):
             with self.subTest(name):
                 self.fake_python(self.bin, executable=reported)
                 done = self.install()
@@ -1126,7 +1141,8 @@ class InstallLauncherTests(unittest.TestCase):
                 ("relative", "vault", "absolute"), ("dot", "./vault", "absolute"),
                 ("dollar", "/opt/a$$b", "unsafe character"), ("quote", '/opt/a"b', "unsafe character"),
                 ("backtick", "/opt/a`b", "unsafe character"),
-                ("backslash", "/opt/a\\b", "unsafe character")):
+                ("backslash", "/opt/a\\b", "unsafe character"),
+                ("brace", "/opt/a}b", "unsafe character")):
             with self.subTest(name):
                 done = self.install("DESK_VAULT=" + value)
                 self.assertNotEqual(done.returncode, 0)
