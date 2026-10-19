@@ -461,6 +461,20 @@ class MakefileTests(unittest.TestCase):
                 done = self.make(target, java=self.java_home, system=None)
                 self.assert_stopped_before_anything(done, "uname")
 
+    # B1
+    def test_the_windows_image_is_named_trade(self):
+        # A dry run only prints the recipes, so this check, unlike the rest of the class, also
+        # runs under Windows.
+        done = subprocess.run([MAKE, "-n", "-f", str(ROOT / "Makefile"), "windows-image",
+                               "SCALA_CLI=" + str(self.scala)],
+                              cwd=self.work, capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("--name trade ", done.stdout)
+        self.assertNotIn("--name Desk", done.stdout)
+        # tools/install-trade.ps1 reads bin/image/trade, and Desk needs a console window.
+        self.assertIn("--dest bin/image ", done.stdout)
+        self.assertIn("--win-console", done.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
