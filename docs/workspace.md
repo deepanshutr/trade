@@ -651,9 +651,10 @@ upgrade moves its folder, run `make install` again.
 
 ### Windows
 
-`make windows-image` builds `bin/image/trade` with Java 21's `jpackage`. Its `trade.exe`
-runs Java inside its own process, so a firewall rule can name it alone. Quit Desk, then
-run the install in a PowerShell opened with Run as administrator:
+Windows uses this install, not `make install`. `make windows-image` builds
+`bin/image/trade` with Java 21's `jpackage`. Its `trade.exe` runs Java inside its own
+process, so a firewall rule can name it alone. Quit Desk, then run the install from the
+root of the checkout, in a PowerShell opened with Run as administrator:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\install-trade.ps1
@@ -662,7 +663,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\install-trade.ps1
 The install copies the image to `C:\Program Files\Desk`, a folder only administrators can
 change, and adds that folder once to the end of the machine PATH. The PATH value keeps its
 kind, `REG_EXPAND_SZ` or `REG_SZ`, and every other entry as it was. A terminal opened
-from Start afterwards finds `trade`. A rerun is the upgrade: it replaces the folder and
+from Start afterwards finds `trade`. If the install warns that Windows did not confirm
+the PATH change, sign out and in first. A rerun is the upgrade: it replaces the folder and
 adds no second entry. Point the firewall rule for Desk at
 `C:\Program Files\Desk\trade.exe`.
 
@@ -696,6 +698,10 @@ offline Scala suite excluding `slow` tests, and `make test-python`, which discov
 `test/test_*.py`. Scala test targets disable the build server. On Windows some Scala
 tests skip with a reason, because symbolic links need developer mode there and some
 tests need Unix tools or `python3`.
+The checks of the Windows install run in the 64-bit Windows PowerShell, not elevated,
+from the root of the checkout:
+`powershell -NoProfile -ExecutionPolicy Bypass -File test\test-trade-windows.ps1`.
+Elsewhere `pwsh` runs the checks that need no Windows and prints one `SKIP` line.
 The key-helper tests skip with a reason when `cryptography`, `pycryptodome`
 (`Crypto`) or `eth-account` is missing. They use fixture keys and fake stores,
 plus native access objects on macOS, without creating or reading keychain items.

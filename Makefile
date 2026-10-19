@@ -38,8 +38,8 @@ build: java-home
 	$(SCALA_CLI) --power package . -o bin/desk.jar --assembly --preamble=false -f --server=false $${DESK_JAVA_HOME:+--java-home "$$DESK_JAVA_HOME"}
 
 # A Windows package. Its trade.exe runs Java inside its own process, so one firewall rule can
-# name it alone, and tools/install-trade.ps1 puts its folder on the machine PATH. The name is
-# trade, because Windows opens Display settings for a bare desk. The console calls use a Java 21
+# name it alone. tools/install-trade.ps1 copies it to Program Files and puts that folder on the
+# machine PATH. The name is trade, because Windows opens Display settings for a bare desk. The console calls use a Java 21
 # feature still in preview, so it is turned on. Attach stays off, as in the macOS launcher.
 windows-image: build
 	rm -rf bin/app bin/image

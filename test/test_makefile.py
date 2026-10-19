@@ -463,7 +463,8 @@ class MakefileTests(unittest.TestCase):
 
     # B1
     def test_the_windows_image_is_named_trade(self):
-        # A dry run only prints the recipes, so it runs under Windows too.
+        # A dry run only prints the recipes, so this check, unlike the rest of the class, also
+        # runs under Windows.
         done = subprocess.run([MAKE, "-n", "-f", str(ROOT / "Makefile"), "windows-image",
                                "SCALA_CLI=" + str(self.scala)],
                               cwd=self.work, capture_output=True, text=True, timeout=60)
