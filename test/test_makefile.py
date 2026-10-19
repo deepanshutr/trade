@@ -470,6 +470,9 @@ class MakefileTests(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("--name trade ", done.stdout)
         self.assertNotIn("--name Desk", done.stdout)
+        # tools/install-trade.ps1 reads bin/image/trade, and Desk needs a console window.
+        self.assertIn("--dest bin/image ", done.stdout)
+        self.assertIn("--win-console", done.stdout)
 
 
 if __name__ == "__main__":
