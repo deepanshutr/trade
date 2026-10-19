@@ -649,16 +649,36 @@ install needs `. ~/.bashrc`. Other shells, such as zsh or fish,
 and programs started outside a terminal need the folder on PATH by hand. After a Java
 upgrade moves its folder, run `make install` again.
 
+### Windows
+
+`make windows-image` builds `bin/image/trade` with Java 21's `jpackage`. Its `trade.exe`
+runs Java inside its own process, so a firewall rule can name it alone. Quit Desk, then
+run the install in a PowerShell opened with Run as administrator:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\install-trade.ps1
+```
+
+The install copies the image to `C:\Program Files\Desk`, a folder only administrators can
+change, and adds that folder once to the end of the machine PATH. The PATH value keeps its
+kind, `REG_EXPAND_SZ` or `REG_SZ`, and every other entry as it was. A terminal opened
+from Start afterwards finds `trade`. A rerun is the upgrade: it replaces the folder and
+adds no second entry. Point the firewall rule for Desk at
+`C:\Program Files\Desk\trade.exe`.
+
+The install changes nothing and says why when the PowerShell is 32-bit or not elevated,
+when Desk still runs from the folder, when the folder holds files but no `app\desk.jar`,
+when the image is not built, or when the machine PATH is neither `REG_EXPAND_SZ` nor
+`REG_SZ` or has no entry. `tools\uninstall-trade.ps1`, run the same way, removes the
+PATH entry and then the folder. Settings and state in the user profile stay.
+
 ## Windows
 
 Desk runs on Windows in prop and view. Live trading, key setup, owner steps, sound and
 the clipboard need macOS. Settings answers a key or owner step there with "The step did
 not start: Keys and owner steps are not available on Windows".
 
-`make windows-image` builds `bin/image/Desk` with Java 21's `jpackage`. Its `Desk.exe`
-runs Java inside its own process, so a firewall rule can name Desk alone. Copy the
-folder to one that only administrators can change, such as `C:\Program Files\Desk`, and
-start `Desk.exe` in Windows Terminal.
+Install it as described under Install, then type `trade` in Windows Terminal.
 
 Windows has no mode `600` or `700`. A file or folder there is private when its access
 list allows the user, allows no one but the user, SYSTEM and Administrators, and is
