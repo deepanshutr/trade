@@ -480,12 +480,22 @@ if (-not $onWindows) {
       Assert-Same (Get-RawPath $key) $base
       Assert-Same (Get-PathKind $key) 'ExpandString'
     }
-    Invoke-Check 'B3 a String value throws and stays as it was' {
+    Invoke-Check 'B3 a String value gains the folder and stays String, and the remove gives it back' {
       Set-TestPath $key $base 'String'
-      Assert-Throws { Update-TradePath $key $F } @('REG_EXPAND_SZ')
-      Assert-Throws { Update-TradePath $key $F -Remove } @('REG_EXPAND_SZ')
+      Assert-Bool (Update-TradePath $key $F) $true
+      Assert-Same (Get-RawPath $key) "$base;$F"
+      Assert-Same (Get-PathKind $key) 'String'
+      Assert-Bool (Update-TradePath $key $F) $false
+      Assert-Bool (Update-TradePath $key $F -Remove) $true
       Assert-Same (Get-RawPath $key) $base
       Assert-Same (Get-PathKind $key) 'String'
+    }
+    Invoke-Check 'B3 a MultiString value throws and stays as it was' {
+      $key.SetValue('Path', [string[]]@($base), [Microsoft.Win32.RegistryValueKind]::MultiString)
+      Assert-Throws { Update-TradePath $key $F } @('REG_SZ', 'REG_EXPAND_SZ')
+      Assert-Throws { Update-TradePath $key $F -Remove } @('REG_SZ', 'REG_EXPAND_SZ')
+      Assert-Same (Get-RawPath $key) $base
+      Assert-Same (Get-PathKind $key) 'MultiString'
     }
   } finally {
     Remove-TestKey $key
@@ -616,14 +626,33 @@ if (-not $onWindows) {
     }
   }
 
-  Invoke-Check 'B4 a String value is refused by both sequences and the old Desk.exe stays' {
+  Invoke-Check 'B4 a String value gains the folder and stays String, and the uninstall gives it back' {
     $case = New-Case
     try {
       Set-TestPath $case.Key $base 'String'
-      Assert-Refused $case { Install-Trade -Image $case.Image -Key $case.Key -Folder $case.Folder -Broadcast $stub } @('REG_EXPAND_SZ')
+      $null = Install-Trade -Image $case.Image -Key $case.Key -Folder $case.Folder -Broadcast $stub
+      Assert-Same (Get-RawPath $case.Key) "$base;$($case.Folder)"
+      Assert-Same (Get-PathKind $case.Key) 'String'
+      Assert-True (Test-Path -LiteralPath (Join-Path $case.Folder 'trade.exe')) 'the folder has no trade.exe'
+      Assert-Calls 1
+      $null = Uninstall-Trade -Key $case.Key -Folder $case.Folder -Broadcast $stub
+      Assert-Same (Get-RawPath $case.Key) $base
+      Assert-Same (Get-PathKind $case.Key) 'String'
+      Assert-True (-not (Test-Path -LiteralPath $case.Folder)) 'the folder stayed'
+      Assert-Calls 2
+    } finally {
+      Remove-Case $case
+    }
+  }
+
+  Invoke-Check 'B4 a MultiString value is refused by both sequences and the old Desk.exe stays' {
+    $case = New-Case
+    try {
+      $case.Key.SetValue('Path', [string[]]@($base), [Microsoft.Win32.RegistryValueKind]::MultiString)
+      Assert-Refused $case { Install-Trade -Image $case.Image -Key $case.Key -Folder $case.Folder -Broadcast $stub } @('REG_SZ', 'REG_EXPAND_SZ')
       Assert-True (Test-Path -LiteralPath (Join-Path $case.Folder 'Desk.exe')) 'the old Desk.exe went'
-      Set-TestPath $case.Key "$base;$($case.Folder)" 'String'
-      Assert-Refused $case { Uninstall-Trade -Key $case.Key -Folder $case.Folder -Broadcast $stub } @('REG_EXPAND_SZ')
+      $case.Key.SetValue('Path', [string[]]@("$base;$($case.Folder)"), [Microsoft.Win32.RegistryValueKind]::MultiString)
+      Assert-Refused $case { Uninstall-Trade -Key $case.Key -Folder $case.Folder -Broadcast $stub } @('REG_SZ', 'REG_EXPAND_SZ')
     } finally {
       Remove-Case $case
     }
