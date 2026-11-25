@@ -490,28 +490,76 @@ class AgentKeySpec extends munit.FunSuite:
 
   // Approval name
 
-  test("approvalName is desk and the first ten hex characters of the address") {
-    vectors.foreach { vector =>
-      val address = vector("address").str
-      val name = AgentKey.approvalName(address)
-      assertEquals(name.length, 15)
-      assert(name.matches("desk-[0-9a-f]{10}"), name)
-      assertEquals(name, "desk-" + address.slice(2, 12))
+  private val alphabet36 = "abcdefghijklmnopqrstuvwxyz0123456789"
+  private val nameCharacters = alphabet36.toSet
+
+  // A SecureRandom seeded before its first use gives the same values each run.
+  private def seeded(seed: Long): SecureRandom =
+    val random = SecureRandom.getInstance("SHA1PRNG")
+    random.setSeed(seed)
+    random
+
+  private def approvalNames(seed: Long, count: Int): Vector[String] =
+    val random = seeded(seed)
+    Vector.fill(count)(AgentKey.newApprovalName(random))
+
+  // True when every one of the 36 characters is within 5 percent of an even share. Over 20000
+  // names one standard deviation is about 1.2 percent, so a fair draw passes by four of them and
+  // a bias of 12.5 percent fails by ten.
+  private def evenlySpread(names: Vector[String]): Boolean =
+    val counts = names.flatten.groupBy(identity).map((c, all) => c -> all.size)
+    val share = names.map(_.length).sum / 36.0
+    counts.keySet == nameCharacters &&
+    counts.values.forall(count => (count - share).abs < share * 0.05)
+
+  test("newApprovalName draws 8 to 16 lowercase letters and digits with no pattern") {
+    val names = approvalNames(20261125L, 20000)
+    names.foreach(name => assert(name.matches("[a-z0-9]{8,16}"), name))
+    // Every length from 8 to 16 occurs, each within 10 percent of an even share.
+    val lengths = names.groupBy(_.length).map((length, all) => length -> all.size)
+    assertEquals(lengths.keySet, (8 to 16).toSet)
+    val perLength = names.size / 9.0
+    lengths.foreach { (length, count) =>
+      assert((count - perLength).abs < perLength * 0.1, s"$length: $count")
     }
-    assertEquals(
-      AgentKey.approvalName("0xC0DF6975A6DBEE4A74449C6D70D830C224D196AE"),
-      "desk-c0df6975a6"
-    )
+    assert(evenlySpread(names), "the characters are not evenly spread")
+    // No prefix is shared, not even a first character.
+    assertEquals(names.map(_.head).toSet, nameCharacters)
+    assertEquals(names.distinct.size, names.size)
   }
 
-  test("approvalName refuses text that is not an address") {
-    Vector(
-      "",
-      "c0df6975a6dbee4a74449c6d70d830c224d196ae",
-      "0xc0df6975a6dbee4a74449c6d70d830c224d196a",
-      "0xc0df6975a6dbee4a74449c6d70d830c224d196aeff",
-      "0xg0df6975a6dbee4a74449c6d70d830c224d196ae"
-    ).foreach(text => intercept[IllegalArgumentException](AgentKey.approvalName(text)))
+  test("the spread check refuses a modulo bias that favours four characters") {
+    val random = seeded(20261125L)
+    val biased = Vector.fill(20000)(
+      String.valueOf(Array.fill(12)(alphabet36(random.nextInt(256) % 36)))
+    )
+    assert(!evenlySpread(biased))
+  }
+
+  // True when the name is a shorter block repeated, so character i equals character i + p for
+  // some period p up to half the length.
+  private def repeats(name: String): Boolean =
+    (1 to name.length / 2).exists(p =>
+      (0 until name.length - p).forall(i => name(i) == name(i + p))
+    )
+
+  test("no approval name of 12 or more characters is a shorter block repeated") {
+    assert(repeats("abc123abc123") && repeats("aaaaaaaaaaaa") && repeats("ab12xyab12xyab"))
+    assert(!repeats("abc123abc124"))
+    // A fair name of length L has period p by chance once in 36 to the power L - p, which is at
+    // least 6 here, so 20000 draws pass by a wide margin.
+    val long = approvalNames(20261125L, 20000).filter(_.length >= 12)
+    assert(long.size > 9000, long.size)
+    long.foreach(name => assert(!repeats(name), name))
+  }
+
+  test("newApprovalName reads only the generator it is given") {
+    assertEquals(approvalNames(7L, 50), approvalNames(7L, 50))
+    assertNotEquals(approvalNames(7L, 50), approvalNames(8L, 50))
+    val platform = new SecureRandom()
+    Vector.fill(200)(AgentKey.newApprovalName(platform)).foreach { name =>
+      assert(name.matches("[a-z0-9]{8,16}"), name)
+    }
   }
 
   // Timing

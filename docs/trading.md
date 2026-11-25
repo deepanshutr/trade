@@ -161,12 +161,13 @@ To make a key, press `n`. Desk makes a random seed and copies it to the clipboar
 screen never shows the seed. Paste it into Passwords, save it there and press Enter.
 Desk clears the clipboard. Then type a passphrase twice. It has 8 to 128 printable
 ASCII characters, and spaces are allowed. Desk derives the key, which takes a few
-seconds, and shows its address and its approval name. The drill follows. The screen
-clears, and you type or paste the seed again, then the passphrase. Paste works only in
-a seed field. Desk clears the clipboard after each paste there and discards a paste
-anywhere else. A matching address continues. A mismatch offers a retry or a new seed.
-Last, you name the key. Desk appends the name to `key-names.jsonl`, stores
-the derived key in the Keychain through the key helper, and makes it the active key.
+seconds, and shows its address. The drill follows. The screen clears, and you type or
+paste the seed again, then the passphrase. Paste works only in a seed field. Desk
+clears the clipboard after each paste there and discards a paste anywhere else. A
+matching address continues. A mismatch offers a retry or a new seed. Last, you name
+the key. Desk then picks the key's approval name at random and appends both names to
+`key-names.jsonl`. It stores the derived key in the Keychain through the key helper,
+makes it the active key and shows the approval name.
 The key comes from Argon2id, a deliberately slow password hashing method, over the seed
 and the passphrase. Rebuilding it needs both. Desk saves neither.
 
@@ -189,7 +190,10 @@ then stores the key and makes it the active key. It asks for a name only when th
 address is new and never writes a second record for a known address.
 
 Two public files hold the choices. `~/.config/desk/key-names.jsonl` holds the names. It
-has one JSON object per line, Desk only appends to it, and its mode is `600`. Desk
+has one JSON object per line, Desk only appends to it, and its mode is `600`. The line
+that creates a key holds its address, name, network, approval name and time. Its
+`approval` field holds 8 to 16 lowercase letters and digits. A line without that field
+still loads, and that key has no approval name. A rename keeps the approval name. Desk
 refuses a file with a torn last line or a hand edit, names the line, and never repairs
 or truncates it. `~/.config/desk/active-key.json` holds one address per network. Its
 mode is `600`, and every change replaces it in one atomic write. Neither file holds a
@@ -235,12 +239,16 @@ read leaves one more copy of the key in Desk's memory until Desk exits, so do no
 
 Making a key does not register a trading account. The wallet that owns the account must
 approve the key's address at the venue as a named API key. Approve it under the approval
-name that Desk shows. The name is `desk-` followed by the first ten hexadecimal
-characters of the address after `0x`. Each key has its own name, so up to three Desk
-keys can be approved at once. Until the approval is in place the key cannot trade, and
-the role check must pass. An approval can expire. A key whose approval has expired
-cannot trade until the owner approves it again. The Approval row in settings runs
-that step through the owner tooling.
+name that Desk shows. Desk picks that name on the key screen right after you name a
+key, at random from the system's secure random source. It has 8 to 16 lowercase letters
+and digits. Desk keeps it in `~/.config/desk/key-names.jsonl` and shows it on the key
+screen. A key whose line in `key-names.jsonl` has no approval name cannot be approved.
+The key screen says so, and Desk does not start the approval step for it from settings.
+Make a new key to trade. Each key has its own name, so up to three Desk keys can be
+approved at once. Until the approval is in place the key cannot trade, and the role
+check must pass. An approval can expire. A key whose approval has expired cannot trade
+until the owner approves it again. The Approval row in settings runs that step through
+the owner tooling.
 
 Desk's local signer accepts only two actions. One is a single order, either immediate
 (the venue's `Ioc`) or post only (`Alo`). The other is a cancel of one order by Desk's

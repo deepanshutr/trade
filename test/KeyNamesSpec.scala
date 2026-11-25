@@ -1,6 +1,7 @@
 package desk
 
 import java.nio.file.{Files, Path}
+import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 import scala.jdk.CollectionConverters.*
 
@@ -18,9 +19,11 @@ class KeyNamesSpec extends TempDirectorySuite:
       address: String,
       name: String = "Main",
       network: String = "testnet",
-      time: String = stamp.toString
+      time: String = stamp.toString,
+      approval: Option[String] = None
   ): String =
-    s"""{"kind":"create","address":"$address","name":"$name","network":"$network","time":$time}"""
+    val named = approval.fold("")(value => s""","approval":"$value"""")
+    s"""{"kind":"create","address":"$address","name":"$name","network":"$network"$named,"time":$time}"""
 
   private def renameLine(address: String, name: String, time: Long = stamp + 1): String =
     s"""{"kind":"rename","address":"$address","name":"$name","time":$time}"""
@@ -86,6 +89,108 @@ class KeyNamesSpec extends TempDirectorySuite:
           KeyEntry(second, "Spare", "mainnet", stamp + 5)
         )
       )
+    )
+  }
+
+  // Approval names
+
+  private val approval = "k3x9q2m7w0"
+
+  test("a create record writes its approval name after the network and loads it back") {
+    val path = namesPath()
+    val entry = KeyEntry(first, "Main", "testnet", stamp, Some(approval))
+    KeyNames.create(path, entry)
+    assertEquals(
+      Files.readString(path),
+      s"""{"kind":"create","address":"$first","name":"Main","network":"testnet",""" +
+        s""""approval":"$approval","time":$stamp}""" + "\n"
+    )
+    assertEquals(KeyNames.load(path), Right(Vector(entry)))
+  }
+
+  test("a create line without an approval name still loads, with none") {
+    val path = put(
+      namesPath(),
+      lines(createLine(first), createLine(second, "Spare", approval = Some(approval)))
+    )
+    assertEquals(
+      KeyNames.load(path),
+      Right(
+        Vector(
+          KeyEntry(first, "Main", "testnet", stamp),
+          KeyEntry(second, "Spare", "testnet", stamp, Some(approval))
+        )
+      )
+    )
+    assertEquals(KeyNames.load(path).map(_.map(_.approval)), Right(Vector(None, Some(approval))))
+  }
+
+  test("approval names of 8 to 16 lowercase letters and digits are accepted") {
+    for value <- Vector("abcdefgh", "12345678", "a" * 16, "0123456789abcdef", "zz09zz09z") do
+      val path = put(namesPath(), lines(createLine(first, approval = Some(value))))
+      assertEquals(KeyNames.load(path).map(_.map(_.approval)), Right(Vector(Some(value))), value)
+  }
+
+  test("an invalid approval name or a misplaced approval field refuses the line") {
+    val a = createLine(first)
+    val values = Vector(
+      "ABCDEFGH",
+      "abcdEfgh",
+      "abcdefg",
+      "a" * 17,
+      "abcd-efg",
+      "abcd efg",
+      "abcd_efg",
+      "abcdefg!",
+      "",
+      "k3x9-q2m7w0",
+      "abcdéfgh",
+      "abcdжfgh"
+    )
+    for value <- values do
+      val path = put(namesPath(), lines(a, createLine(second, approval = Some(value))))
+      assertEquals(KeyNames.load(path), invalidAt(2), value)
+    val good = """"approval":"abcdefgh""""
+    def before(key: String, field: String, line: String = createLine(second)): String =
+      line.replace(s""","$key"""", s""",$field,"$key"""")
+    val shapes = Vector(
+      "approval as a number" -> before("time", """"approval":12345678"""),
+      "approval as null" -> before("time", """"approval":null"""),
+      "approval after the time" -> (createLine(second).dropRight(1) + "," + good + "}"),
+      "approval before the network" -> before("network", good),
+      "approval twice" -> before("time", good + "," + good),
+      "approval on a rename" -> before("time", good, renameLine(first, "D"))
+    )
+    for (label, line) <- shapes do
+      val path = put(namesPath(), lines(a, line))
+      assertEquals(KeyNames.load(path), invalidAt(2), label)
+  }
+
+  test("every approval name the generator makes is written and loaded back") {
+    val random = SecureRandom.getInstance("SHA1PRNG")
+    random.setSeed(20261125L)
+    val drawn = Vector.fill(5000)(AgentKey.newApprovalName(random))
+    def address(index: Int): String = "0x" + f"$index%040x"
+    val file = drawn.zipWithIndex.map((value, i) => createLine(address(i), approval = Some(value)))
+    val path = put(namesPath(), lines(file*))
+    assertEquals(KeyNames.load(path).map(_.map(_.approval)), Right(drawn.map(Some(_))))
+    val made = namesPath()
+    for (value, i) <- drawn.take(50).zipWithIndex do
+      KeyNames.create(made, KeyEntry(address(i), "Main", "testnet", stamp, Some(value)))
+    assertEquals(Files.readString(made), lines(file.take(50)*))
+  }
+
+  test("a rename keeps the approval name") {
+    val path = namesPath()
+    KeyNames.create(path, KeyEntry(first, "Main", "testnet", stamp, Some(approval)))
+    KeyNames.rename(path, first, "Daily", stamp + 1)
+    assertEquals(
+      Files.readString(path),
+      lines(createLine(first, approval = Some(approval)), renameLine(first, "Daily"))
+    )
+    assertEquals(
+      KeyNames.load(path),
+      Right(Vector(KeyEntry(first, "Daily", "testnet", stamp, Some(approval))))
     )
   }
 
@@ -259,6 +364,10 @@ class KeyNamesSpec extends TempDirectorySuite:
       () => KeyNames.create(path, KeyEntry(second, " Spare", "testnet", stamp)),
       () => KeyNames.create(path, KeyEntry(second, "Spare", "testnet", -1L)),
       () => KeyNames.create(path, KeyEntry(second, "Spare", "testnet", 9007199254740992L)),
+      () => KeyNames.create(path, KeyEntry(second, "Spare", "testnet", stamp, Some("ABCDEFGH"))),
+      () => KeyNames.create(path, KeyEntry(second, "Spare", "testnet", stamp, Some("abcdefg"))),
+      () => KeyNames.create(path, KeyEntry(second, "Spare", "testnet", stamp, Some("a" * 17))),
+      () => KeyNames.create(path, KeyEntry(second, "Spare", "testnet", stamp, Some("abcd-efg"))),
       () => KeyNames.rename(path, first, "x" * 33, stamp + 1),
       () => KeyNames.rename(path, first, "Daily", -1L),
       () => KeyNames.rename(path, "0x" + "A" * 40, "Daily", stamp + 1)

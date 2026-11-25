@@ -82,6 +82,8 @@ class SettingsScreenSpec extends TempDirectorySuite:
     val bound = ArrayBuffer.empty[Bindings]
     var key: Either[String, String] = Right("Main   0xaaaa...aaaa   active, in Keychain")
     var active: Option[String] = Some("0x" + "a" * 40)
+    var names: Either[String, Vector[KeyEntry]] =
+      Right(Vector(KeyEntry("0x" + "a" * 40, "Main", "mainnet", start, Some("k3x9q2m7w0"))))
     var onRefresh: () => Unit = () => ()
     var readFails = false
     var owned: Option[(Either[String, OwnerStatus], Long)] = None
@@ -150,6 +152,7 @@ class SettingsScreenSpec extends TempDirectorySuite:
       size = () => size,
       approveConfig = approve,
       activeKey = () => active,
+      keyNames = () => names,
       prop = () => prop,
       resetProp = () => {
         resets += 1
@@ -584,6 +587,36 @@ class SettingsScreenSpec extends TempDirectorySuite:
     assertEquals(outside.owners.size, 0)
     assertEquals(value(outside.row("Approval")), "Approval needs the settings in ~/.config/desk")
     assertEquals(outside.notice, "Approval needs the settings in ~/.config/desk")
+  }
+
+  test("Enter on the approval row refuses a key with no approval name and fails closed") {
+    val key = "0x" + "a" * 40
+    val bare = KeyEntry(key, "Main", "mainnet", start)
+    val named = bare.copy(approval = Some("k3x9q2m7w0"))
+    def approving(
+        names: Either[String, Vector[KeyEntry]],
+        active: Option[String] = Some(key)
+    ): Fixture =
+      val f = new Fixture
+      f.owned = Some((Right(status()), start))
+      f.names = names
+      f.active = active
+      assert(!f.run(down * 6 + enter, esc))
+      f
+    val refused = Vector(
+      "an entry with no approval name" -> approving(Right(Vector(bare))),
+      "no entry for the key" -> approving(Right(Vector(named.copy(address = "0x" + "b" * 40)))),
+      "no key names" -> approving(Right(Vector.empty)),
+      "a key names file that cannot be read" -> approving(Left("key names file is invalid")),
+      "no active key" -> approving(Right(Vector(named)), active = None)
+    )
+    for (label, f) <- refused do
+      assertEquals(f.owners.size, 0, label)
+      assertEquals(f.notice, "This key has no approval name. Make a new key to trade.", label)
+    assertEquals(
+      approving(Right(Vector(named))).owners.toVector,
+      Vector(Seq("owner", "approve", "--network", "mainnet"))
+    )
   }
 
   test("a key that was not read keeps its own text on the trading key row") {
@@ -1500,6 +1533,56 @@ class SettingsScreenSpec extends TempDirectorySuite:
       assert(build(Right(Nil), Some(folder.resolve("missing.json"))).settings().isLeft)
       assertEquals(followed.toVector, Vector(BigDecimal("5000")))
     finally release.countDown()
+  }
+
+  test("the approval gate reads the key names file under the home again at each approval") {
+    val home = tempDirectory("wiring-key-names-")
+    // The context is built before the file exists, as when settings open before a key is made.
+    val wired = SettingsWiring.context(
+      network = "mainnet",
+      config = None,
+      home = home,
+      bound = new java.util.concurrent.atomic.AtomicReference(Bindings.defaults),
+      controller = new DeskController(
+        PanelView(mode = "VIEW"),
+        () => start,
+        (_, _) => Left("no preview"),
+        _ => false,
+        _ => Right(())
+      ),
+      keyRow = () => Right("Main"),
+      reload = () => Right(()),
+      ownerRead = () => Right(status()),
+      reading = new SettingsScreen.ReadGate,
+      handOff = _ => Right(0),
+      keyChild = Right(Nil),
+      env = Map.empty,
+      copy = _ => Right(()),
+      livePending = () => false,
+      size = () => (100, 30),
+      now = () => start,
+      approve = Right(Nil),
+      resetProp = () => Right("PROP reset to $10000"),
+      followPropBalance = _ => ()
+    )
+    // One press on the approval row, with the wiring's key names behind the gate.
+    def approving(): Fixture =
+      val f = new Fixture
+      f.owned = Some((Right(status()), start))
+      val context = f.context.copy(keyNames = wired.keyNames)
+      val input = new Script(Vector(down * 6 + enter, esc))
+      assert(!SettingsScreen.run(context, input, new PrintStream(f.out, true, UTF_8)))
+      f
+    val before = approving()
+    assertEquals(before.owners.size, 0)
+    assertEquals(before.notice, "This key has no approval name. Make a new key to trade.")
+    val entry = KeyEntry("0x" + "a" * 40, "Main", "mainnet", start, Some("k3x9q2m7w0"))
+    KeyNames.create(KeyNames.path(home), entry)
+    assertEquals(wired.keyNames(), Right(Vector(entry)))
+    assertEquals(
+      approving().owners.toVector,
+      Vector(Seq("owner", "approve", "--network", "mainnet"))
+    )
   }
 
   test("the key child runs only from a regular desk jar") {

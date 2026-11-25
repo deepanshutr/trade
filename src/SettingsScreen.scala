@@ -32,6 +32,9 @@ object SettingsScreen:
       approveConfig: Either[String, Seq[String]] = Right(Nil),
       // The usable key's full address, to check the owner tooling's status against.
       activeKey: () => Option[String] = () => None,
+      // The key names file, read again at each approval. No names by default, so the approval
+      // step stays shut.
+      keyNames: () => Either[String, Vector[KeyEntry]] = () => Right(Vector.empty),
       // Whether the owner trades in prop mode now, and the prop wallet reset and its words.
       prop: () => Boolean = () => false,
       resetProp: () => Either[String, String] = () => Left("Switch to prop first")
@@ -448,6 +451,16 @@ object SettingsScreen:
           case Some(phase) if phase.startsWith("await-") => child(context.runOwner(words("resume")))
           case Some(_)                                   => notice = safe(reply.message)
 
+    // The approval name in the active key's entry. A file that cannot be read, a key with no
+    // entry and an entry with no name all count as none, so the approval step stays shut.
+    private def approvalName: Option[String] =
+      for
+        address <- context.activeKey()
+        entries <- context.keyNames().toOption
+        entry <- entries.find(_.address.equalsIgnoreCase(address))
+        name <- entry.approval
+      yield name
+
     private def approve(): Unit = (context.approveConfig, status) match
       case (Left(note), _)                    => notice = note
       case (_, None)                          => notice = reading
@@ -460,9 +473,11 @@ object SettingsScreen:
         else if context.keyRow().isLeft then notice = "Add a trading key first"
         else
           reply.approved match
-            case Some(false) => child(context.runOwner(words("approve") ++ extra))
-            case Some(true)  => notice = "The trading key is already approved"
-            case None        => notice = "Approval was not checked. Press r to read it again"
+            case Some(false) =>
+              if approvalName.isEmpty then notice = KeyScreen.noApproval
+              else child(context.runOwner(words("approve") ++ extra))
+            case Some(true) => notice = "The trading key is already approved"
+            case None       => notice = "Approval was not checked. Press r to read it again"
 
     // The address is the owner's own public value. Desk never sends money.
     private def fund(): Unit = status match

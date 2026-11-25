@@ -32,7 +32,9 @@ object KeyScreen:
       env: Map[String, String],
       derive: (Array[Byte], Array[Byte], Int) => Array[Byte] = AgentKey.derive,
       // Writes the active key. A test swaps it to look at the journal lock during the write.
-      writeActive: (Path, String, String) => Unit = ActiveKey.select
+      writeActive: (Path, String, String) => Unit = ActiveKey.select,
+      // Draws the approval names. A test swaps in a seeded SecureRandom.
+      approvalRandom: SecureRandom = new SecureRandom()
   )
 
   private val helperVariables = Set("DESK_PYTHON", "DESK_KEY_HELPER")
@@ -304,6 +306,9 @@ object KeyScreen:
     "Stored. Approval at the exchange is your step. Approve this address from the owner wallet " +
       s"as a named API key called $approval. Until then this key cannot trade, and the role " +
       "check must pass."
+  // A key whose create line has no approval field has no approval name and cannot be approved.
+  private[desk] val noApproval = "This key has no approval name. Make a new key to trade."
+  private val noApprovalRow = "no approval name"
 
   private final class Session(
       context: Context,
@@ -408,7 +413,8 @@ object KeyScreen:
                       case Left(_)      => "  Keychain lookup failed")
                 Vector(
                   (if index == cursor then "> " else "  ") + entry.name + marks,
-                  s"    ${entry.address}  ${entry.network}  ${AgentKey.approvalName(entry.address)}"
+                  s"    ${entry.address}  ${entry.network}  " +
+                    entry.approval.getOrElse(noApprovalRow)
                 )
               }
           head ++ body ++ Vector(
@@ -663,13 +669,7 @@ object KeyScreen:
         address: String,
         extra: Vector[String]
     ): Vector[String] =
-      Vector(
-        title,
-        "",
-        "Address: " + address,
-        "Approval name: " + AgentKey.approvalName(address)
-      ) ++
-        extra
+      Vector(title, "", "Address: " + address) ++ extra
 
     // Makes seeds until one is done or the owner leaves. Start over makes a new seed.
     private def newKey(): String =
@@ -726,7 +726,7 @@ object KeyScreen:
         None
       else
         val name = askName("Name this key", "Name: ", None)
-        Some(store(key, address, Some(name)))
+        Some(store(key, address, Left(name)))
 
     // The owner proves the seed and the passphrase were kept by typing them again.
     private def drill(address: String): Drill =
@@ -757,36 +757,33 @@ object KeyScreen:
             case _   => ()
         choice.get
 
-    // Writes the name when there is one, stores the key and makes it the active key.
-    private def store(key: Array[Byte], address: String, name: Option[String]): String =
-      val recorded = name match
-        case Some(text) =>
-          saving(
-            KeyNames.create(
-              context.names,
-              KeyEntry(address, text, context.network, context.now())
-            )
-          )
-        case None => Right(())
+    // A new name is written with a new random approval name. A named key keeps its entry. Then
+    // the key is stored and made the active key.
+    private def store(key: Array[Byte], address: String, named: Either[String, KeyEntry]): String =
+      val recorded = named match
+        case Left(name) =>
+          val approval = AgentKey.newApprovalName(context.approvalRandom)
+          val entry = KeyEntry(address, name, context.network, context.now(), Some(approval))
+          saving(KeyNames.create(context.names, entry)).map(_ => entry)
+        case Right(entry) => Right(entry)
       recorded match
         case Left(message) =>
           wipe(key)
           message
-        case Right(_) =>
+        case Right(entry) =>
           val result = KeyStore.store(key, address, context.keyService, context.env, context.helper)
           wipe(key)
           result match
             case StoreResult.Failed(reason) =>
               s"The key was not stored. $reason. Its name is saved. Press s to restore it from its seed."
             case _ =>
-              val approval = AgentKey.approvalName(address)
               val refusal = switchTo(address).left.toOption
               show(
                 addressLines(
                   "Key stored",
                   address,
                   Vector("") ++ refusal.map(_ + ". The current key stays active.").toVector ++
-                    Vector(storedText(approval), "", "Press Enter.")
+                    Vector(entry.approval.fold(noApproval)(storedText), "", "Press Enter.")
                 )
               )
               confirm()
@@ -822,5 +819,4 @@ object KeyScreen:
                 )
               )
               confirm()
-              val name = Option.when(known.isEmpty)(askName("Name this key", "Name: ", None))
-              store(key, address, name)
+              store(key, address, known.toRight(askName("Name this key", "Name: ", None)))

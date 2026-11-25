@@ -29,6 +29,16 @@ class KeyScreenSpec extends TempDirectorySuite:
       s"as a named API key called $approval. Until then this key cannot trade, and the role " +
       "check must pass."
 
+  private val noApproval = "This key has no approval name. Make a new key to trade."
+
+  // Each fixture draws approval names from a SecureRandom seeded before its first use, so the
+  // first name it writes is known.
+  private def approvalRandom(): SecureRandom =
+    val random = SecureRandom.getInstance("SHA1PRNG")
+    random.setSeed(20261125L)
+    random
+  private val firstApproval = AgentKey.newApprovalName(approvalRandom())
+
   private def fakeKey(seed: Array[Byte], pass: Array[Byte], length: Int): Array[Byte] =
     val digest = MessageDigest.getInstance("SHA-256")
     digest.update("fake-derive".getBytes(US_ASCII))
@@ -124,6 +134,7 @@ class KeyScreenSpec extends TempDirectorySuite:
     val state: Path = home.resolve("state")
     val present = scala.collection.mutable.Set.empty[String]
     val random = new Seeds(seeds)
+    val approvals = approvalRandom()
     val bytes = new ByteArrayOutputStream()
     val screen = new PrintStream(bytes, true, "UTF-8")
     var copyExit = 0
@@ -205,14 +216,20 @@ class KeyScreenSpec extends TempDirectorySuite:
       security,
       env,
       recorded,
-      (path, on, address) => writeActive(path, on, address)
+      (path, on, address) => writeActive(path, on, address),
+      approvals
     )
 
     def run(input: Array[Byte]): Option[String] =
       KeyScreen.run(context, new ByteArrayInputStream(input), screen)
 
-    def name(address: String, name: String, on: String = network): Unit =
-      KeyNames.create(names, KeyEntry(address, name, on, stamp - 1))
+    def name(
+        address: String,
+        name: String,
+        on: String = network,
+        approval: Option[String] = None
+    ): Unit =
+      KeyNames.create(names, KeyEntry(address, name, on, stamp - 1, approval))
     def activate(address: String): Unit = ActiveKey.select(active, network, address)
     def namesText: String = if Files.exists(names) then Files.readString(names) else ""
     def activeText: String = if Files.exists(active) then Files.readString(active) else ""
@@ -259,6 +276,15 @@ class KeyScreenSpec extends TempDirectorySuite:
 
   // The new key flow
 
+  test("the system context draws approval names from a platform SecureRandom") {
+    val home = tempDirectory("desk-keyscreen-system")
+    val context = KeyScreen.system("testnet", "desk-test", home, home.resolve("state"))
+    // The type is checked when this compiles, the instance when it runs.
+    val drawn: SecureRandom = context.approvalRandom
+    assertEquals(drawn.getClass, classOf[SecureRandom])
+    assertEquals(drawn.getAlgorithm, new SecureRandom().getAlgorithm)
+  }
+
   test("the seed text of the fixed seed is the pinned fixture text") {
     assertEquals(
       textOne,
@@ -270,9 +296,11 @@ class KeyScreenSpec extends TempDirectorySuite:
     val f = new Fixture()
     val address = addressOf(seedOne, phrase)
     assertEquals(f.run(newKey()), Some(address))
+    assert(firstApproval.matches("[a-z0-9]{8,16}"), firstApproval)
     assertEquals(
       f.namesText,
-      s"""{"kind":"create","address":"$address","name":"Main","network":"testnet","time":$stamp}""" + "\n"
+      s"""{"kind":"create","address":"$address","name":"Main","network":"testnet",""" +
+        s""""approval":"$firstApproval","time":$stamp}""" + "\n"
     )
     assertEquals(f.activeText, s"""{"testnet":"$address"}""" + "\n")
     assertEquals(f.helperCalls.size, 1)
@@ -283,8 +311,9 @@ class KeyScreenSpec extends TempDirectorySuite:
     )
     assertEquals(new String(stdin, US_ASCII), hex(keyOf(seedOne, phrase)) + "\n")
     assert(f.output.contains(address))
-    assert(f.output.contains(AgentKey.approvalName(address)))
-    assert(f.output.contains(storedText(AgentKey.approvalName(address))))
+    assert(f.output.contains(storedText(firstApproval)))
+    assert(frames(f.output).last.contains(s"    $address  testnet  $firstApproval"))
+    assert(!f.output.contains(noApproval))
     assertNoSecrets(f.output)
   }
 
@@ -313,16 +342,15 @@ class KeyScreenSpec extends TempDirectorySuite:
     assertEquals(occurrences(f.output, deriving), 2)
   }
 
-  test(
-    "the address and the approval name are shown before the drill and the screen clears for it"
-  ) {
+  test("the address is shown before the drill with no approval name and the screen clears for it") {
     val f = new Fixture()
     f.run(newKey())
     val address = addressOf(seedOne, phrase)
     val shown = frames(f.output)
     val first = shown.indexWhere(_.exists(_.contains("Address: " + address)))
     assert(first >= 0, "the address was never shown")
-    assert(shown(first).exists(_.contains("Approval name: " + AgentKey.approvalName(address))))
+    assert(!shown(first).exists(_.contains("Approval name")), "a name was shown before it exists")
+    assert(!shown(first).exists(_.contains(firstApproval)), "a name was shown before it exists")
     val drill = shown.filter(_.headOption.contains("Drill"))
     assert(drill.nonEmpty)
     drill.foreach(frame => assert(!frame.exists(_.contains(address)), "the drill kept the address"))
@@ -894,7 +922,7 @@ class KeyScreenSpec extends TempDirectorySuite:
     f.helperMode = "exists"
     val address = addressOf(seedOne, phrase)
     assertEquals(f.run(newKey()), Some(address))
-    assert(f.output.contains(storedText(AgentKey.approvalName(address))))
+    assert(f.output.contains(storedText(firstApproval)))
     assertEquals(f.nameLines.size, 1)
     assertEquals(f.activeText, s"""{"testnet":"$address"}""" + "\n")
   }
@@ -906,8 +934,10 @@ class KeyScreenSpec extends TempDirectorySuite:
     assertEquals(f.run(newKey()), None)
     assert(lines(f.output).exists(_.contains("key store helper failed")))
     assert(!f.output.contains("Stored. Approval at the exchange"))
+    assert(!f.output.contains(noApproval))
     assertEquals(f.nameLines.size, 1)
     assert(f.nameLines.head.contains(address))
+    assert(f.nameLines.head.contains(s""""approval":"$firstApproval""""))
     assertEquals(f.activeText, "")
     assert(lines(f.output).exists(l => l.contains("Main") && l.contains("not in Keychain")))
     assertNoSecrets(f.output)
@@ -924,7 +954,7 @@ class KeyScreenSpec extends TempDirectorySuite:
     try assertEquals(f.run(newKey()), Some(old))
     finally journal.close()
     assert(lines(f.output).exists(_.contains("Another Desk is using the current key")))
-    assert(f.output.contains(storedText(AgentKey.approvalName(address))))
+    assert(f.output.contains(storedText(firstApproval)))
     assertEquals(f.activeText, s"""{"testnet":"$old"}""" + "\n")
     assertEquals(f.nameLines.size, 2)
   }
@@ -1000,7 +1030,7 @@ class KeyScreenSpec extends TempDirectorySuite:
   test("a restore of a key that is already named stores it with no second record") {
     val f = new Fixture()
     val address = addressOf(seedOne, phrase)
-    f.name(address, "Old")
+    f.name(address, "Old", approval = Some("oldname42"))
     val before = f.namesText
     val flow = script("s", paste(textOne), phrase, enter, phrase, enter, enter, enter, "q")
     assertEquals(f.run(flow), Some(address))
@@ -1008,8 +1038,27 @@ class KeyScreenSpec extends TempDirectorySuite:
     assertEquals(f.helperCalls.size, 1)
     assertEquals(new String(f.helperCalls.head._2, US_ASCII), hex(keyOf(seedOne, phrase)) + "\n")
     assertEquals(f.activeText, s"""{"testnet":"$address"}""" + "\n")
-    assert(f.output.contains(storedText(AgentKey.approvalName(address))))
+    assert(f.output.contains(storedText("oldname42")))
+    assert(!f.output.contains(firstApproval), "a known key was given a new approval name")
     assertEquals(f.kinds, Vector("clear"))
+    assertNoSecrets(f.output)
+  }
+
+  test("a restore of a named key with no approval name says a new key is needed to trade") {
+    val f = new Fixture()
+    val address = addressOf(seedOne, phrase)
+    f.name(address, "Old")
+    val before = f.namesText
+    val flow = script("s", paste(textOne), phrase, enter, phrase, enter, enter, enter, "q")
+    assertEquals(f.run(flow), Some(address))
+    assertEquals(f.namesText, before)
+    assertEquals(f.helperCalls.size, 1)
+    val stored = frames(f.output).filter(_.headOption.contains("Key stored"))
+    assertEquals(stored.size, 1)
+    assertEquals(stored.head.count(_ == noApproval), 1)
+    assert(!f.output.contains("named API key called"))
+    assert(!f.output.contains("Stored. Approval at the exchange"))
+    assert(!f.output.contains(firstApproval), "a known key was given a new approval name")
     assertNoSecrets(f.output)
   }
 
@@ -1020,6 +1069,8 @@ class KeyScreenSpec extends TempDirectorySuite:
     assertEquals(f.run(flow), Some(address))
     assertEquals(f.nameLines.size, 1)
     assert(f.nameLines.head.contains(""""name":"Back""""))
+    assert(f.nameLines.head.contains(s""""approval":"$firstApproval""""))
+    assert(f.output.contains(storedText(firstApproval)))
     assertEquals(f.derivations.size, 1)
     assertEquals(f.kinds, Vector.empty[String])
   }
@@ -1055,7 +1106,7 @@ class KeyScreenSpec extends TempDirectorySuite:
   private def two(f: Fixture): (String, String) =
     val a = "0x" + "a" * 40
     val b = "0x" + "b" * 40
-    f.name(a, "Main")
+    f.name(a, "Main", approval = Some("q7w3e9r1t5"))
     f.name(b, "Spare")
     f.present += a
     f.present += b
@@ -1069,9 +1120,9 @@ class KeyScreenSpec extends TempDirectorySuite:
     f.run(script("q"))
     val shown = frames(f.output).last
     assert(shown.contains("> Main  active"))
-    assert(shown.contains(s"    $a  testnet  ${AgentKey.approvalName(a)}"))
+    assert(shown.contains(s"    $a  testnet  q7w3e9r1t5"))
     assert(shown.contains("  Spare  not in Keychain"))
-    assert(shown.contains(s"    $b  testnet  ${AgentKey.approvalName(b)}"))
+    assert(shown.contains(s"    $b  testnet  no approval name"))
   }
 
   test("an empty list says so and offers new and restore") {

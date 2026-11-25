@@ -175,6 +175,7 @@ object SettingsWiring:
       size = size,
       approveConfig = approve,
       activeKey = activeKey,
+      keyNames = () => KeyNames.load(KeyNames.path(home)),
       prop = () => controller.panel.mode == "PROP",
       resetProp = resetProp
     )

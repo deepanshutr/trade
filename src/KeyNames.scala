@@ -9,7 +9,13 @@ import java.util.concurrent.TimeUnit
 import scala.util.Try
 import scala.util.control.NonFatal
 
-final case class KeyEntry(address: String, name: String, network: String, created: Long)
+final case class KeyEntry(
+    address: String,
+    name: String,
+    network: String,
+    created: Long,
+    approval: Option[String] = None
+)
 
 // Names for the trading keys, kept in one append only file. Desk never rewrites or repairs it.
 object KeyNames:
@@ -33,15 +39,20 @@ object KeyNames:
     name.nonEmpty && name.length <= 32 && name.forall(c => c >= ' ' && c <= '~') &&
       name.head != ' ' && name.last != ' '
 
+  private def validApproval(approval: String): Boolean = approval.matches("[a-z0-9]{8,16}")
+
+  // The approval field is left out of a create line when the key has no approval name.
   private def render(record: Record): String = record match
     case Record.Create(e) =>
       ujson.write(
-        ujson.Obj(
-          "kind" -> "create",
-          "address" -> e.address,
-          "name" -> e.name,
-          "network" -> e.network,
-          "time" -> e.created.toDouble
+        ujson.Obj.from(
+          Vector[(String, ujson.Value)](
+            "kind" -> ujson.Str("create"),
+            "address" -> ujson.Str(e.address),
+            "name" -> ujson.Str(e.name),
+            "network" -> ujson.Str(e.network)
+          ) ++ e.approval.map(a => "approval" -> ujson.Str(a)) :+
+            ("time" -> ujson.Num(e.created.toDouble))
         )
       )
     case Record.Rename(address, name, time) =>
@@ -57,7 +68,7 @@ object KeyNames:
   private def valid(record: Record): Boolean = record match
     case Record.Create(e) =>
       validAddress(e.address) && validNetwork(e.network) && validName(e.name) &&
-      validTime(e.created)
+      validTime(e.created) && e.approval.forall(validApproval)
     case Record.Rename(address, name, time) =>
       validAddress(address) && validName(name) && validTime(time)
 
@@ -70,7 +81,15 @@ object KeyNames:
       require(time == Math.floor(time) && time >= 0 && time <= maximumTime.toDouble)
       o("kind").str match
         case "create" =>
-          Record.Create(KeyEntry(o("address").str, o("name").str, o("network").str, time.toLong))
+          Record.Create(
+            KeyEntry(
+              o("address").str,
+              o("name").str,
+              o("network").str,
+              time.toLong,
+              o.get("approval").map(_.str)
+            )
+          )
         case "rename" => Record.Rename(o("address").str, o("name").str, time.toLong)
     }.toOption.filter(r => valid(r) && render(r) == line)
 

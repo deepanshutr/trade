@@ -228,7 +228,10 @@ object AgentKey:
         found
       finally wipe(input)
 
-  def approvalName(address: String): String =
-    if address == null || !address.matches("0x[0-9a-fA-F]{40}") then
-      throw new IllegalArgumentException("Unsupported address")
-    "desk-" + address.substring(2, 12).toLowerCase(java.util.Locale.ROOT)
+  private val nameCharacters = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+  // The name the owner approves the key under at the exchange, where approval names are public.
+  // It is random, 8 to 16 lowercase letters and digits, with no link to the key or to Desk.
+  def newApprovalName(random: SecureRandom): String =
+    val length = 8 + random.nextInt(9)
+    String.valueOf(Array.fill(length)(nameCharacters(random.nextInt(nameCharacters.length))))
