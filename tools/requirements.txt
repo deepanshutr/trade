@@ -1,0 +1,4 @@
+# The key helper's libraries. tools/install-mac.sh installs them into ~/.local/lib/desk-venv.
+cryptography==50.0.2
+pycryptodome==4.4.0
+eth-account==0.14.0

@@ -626,15 +626,25 @@ starts still wins.
 
 ### macOS
 
-The launcher uses Homebrew's Java, `/opt/homebrew/opt/openjdk/bin/java`, unless
-`DESK_JAVA_HOME` names another. The install changes no shell file.
+`tools/install-mac.sh` installs Desk with one command, as the README shows. It needs
+Homebrew. It runs `brew install openjdk@21 scala-cli python`, makes the Python
+environment `~/.local/lib/desk-venv` with the libraries pinned in
+`tools/requirements.txt`, then runs `make install` with that environment first on PATH
+and `DESK_JAVA_HOME` set to Homebrew's Java 21. Unless `~/.local/bin` is already on
+PATH, it adds two lines at the end of `~/.zshrc` once: a comment that names Desk, and a
+line that puts `~/.local/bin` at the end of PATH. A rerun is the upgrade. Any failed
+step stops it there. Its checks run with stand-ins:
+`python3 -m unittest test.test_install_mac`.
+
+`make install` on its own uses Homebrew's Java, `/opt/homebrew/opt/openjdk/bin/java`,
+unless `DESK_JAVA_HOME` names another, and changes no shell file.
 
 ### Linux
 
 `DESK_JAVA_HOME` is required on every build, test and install target. Without it make
 stops before Scala CLI runs or anything is written. For the install command, put first
 on PATH the `bin` folder of the Python environment that holds the key helper's
-libraries, so the launcher records that Python:
+libraries, pinned in `tools/requirements.txt`, so the launcher records that Python:
 
 ```sh
 PATH="/absolute/path/to/venv/bin:$PATH" make install DESK_JAVA_HOME=/absolute/path/to/jdk-21
